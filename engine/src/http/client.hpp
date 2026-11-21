@@ -2,27 +2,32 @@
 // OpenSSL inside client.cpp and lets tests replace the network with a fake.
 //
 // What the engine can do to the outside world is limited here, in code
-// (D-042, D-061, D-088). The engine changes a Google Business Profile with
-// three requests, each on the one address shape of the v4 API
+// (D-042, D-061, D-088, D-099). The engine changes a Google Business Profile
+// with four requests, each on the one address shape of the v4 API
 // (mybusiness.googleapis.com) that Google has for it:
 //
 //   PUT     .../accounts/{a}/locations/{l}/reviews/{r}/reply   a reply to a review
 //   POST    .../accounts/{a}/locations/{l}/localPosts          a new local post
 //   DELETE  .../accounts/{a}/locations/{l}/localPosts/{p}      that local post, and nothing else
+//   PATCH   .../accounts/{a}/locations/{l}/localPosts/{p}?updateMask=<fields>
+//                                                              an edit of that local post, in the fields named
 //
 // What the client enforces, before a name is resolved: a PUT goes nowhere
-// but to a reply, and a DELETE nowhere but to a local post, on any host. A
-// POST to the v4 host is refused unless it is the create above or the
-// read-only batchGetReviews. A POST to any other host is not limited here:
-// those are the engine's ordinary calls (OAuth tokens, Pub/Sub, Gmail, Cloud
-// Storage, the models), and that the engine sends no other POST to a Google
-// service is a rule for the code that calls this client (CLAUDE.md). PATCH
-// does not exist here and is not to be added.
+// but to a reply, a DELETE nowhere but to a local post, and a PATCH nowhere
+// but to a local post with its mask, on any host. A POST to the v4 host is
+// refused unless it is the create above or the read-only batchGetReviews. A
+// POST to any other host is not limited here: those are the engine's
+// ordinary calls (OAuth tokens, Pub/Sub, Gmail, Cloud Storage, the models),
+// and that the engine sends no other POST to a Google service is a rule for
+// the code that calls this client (CLAUDE.md).
 //
 // An address that changes something is taken only as the engine itself
 // writes it: the ids are letters, digits, '-' and '_', and the address must
 // equal the one built from its own parts, so what is checked is what is
-// sent. No request names its host with other characters than letters,
+// sent. Only the PATCH has a query, and it is one parameter: `updateMask=`
+// and one or more of six field names (summary, callToAction, event, offer,
+// media, languageCode), each once, joined by commas, with nothing encoded.
+// No request names its host with other characters than letters,
 // digits, '.' and '-', carries a header that would change its method or its
 // host, or holds a line break in a header; a DELETE carries no body.
 //
@@ -54,7 +59,7 @@
 
 namespace poni::http {
 
-enum class ClientMethod { get, post, put, del };
+enum class ClientMethod { get, post, put, del, patch };
 
 // True for the only address a PUT may go to:
 // https://mybusiness.googleapis.com/v4/accounts/{a}/locations/{l}/reviews/{r}/reply
@@ -68,6 +73,15 @@ bool is_local_post_collection_url(const boost::urls::url& url);
 // https://mybusiness.googleapis.com/v4/accounts/{a}/locations/{l}/localPosts/{p}
 bool is_local_post_url(const boost::urls::url& url);
 
+// True for the only address a PATCH may go to, one local post with the
+// fields an edit changes (D-099):
+// https://mybusiness.googleapis.com/v4/accounts/{a}/locations/{l}/localPosts/{p}?updateMask=<names>
+// where <names> is one or more of summary, callToAction, event, offer, media
+// and languageCode, each at most once, joined by commas. It is the one
+// address with a query that changes something, and the query is that one
+// parameter, written exactly so.
+bool is_local_post_update_url(const boost::urls::url& url);
+
 // True for GBP's read that travels as a POST:
 // https://mybusiness.googleapis.com/v4/accounts/{a}/locations:batchGetReviews
 bool is_batch_get_reviews_url(const boost::urls::url& url);
@@ -79,7 +93,7 @@ bool is_gbp_host(const boost::urls::url& url);
 
 // An id as Google's are, of accounts, locations, reviews and local posts:
 // letters, digits, '-' and '_' (ASCII, whatever the locale), at most 128 of
-// them. The ids the three write addresses take.
+// them. The ids the four write addresses take.
 bool is_plain_id(std::string_view id);
 
 // True when the address names one of Apple's two push hosts in any case,

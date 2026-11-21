@@ -46,10 +46,11 @@ namespace {
 constexpr std::size_t kMaxResponseBytes = 16 * 1024 * 1024;
 
 bhttp::request<bhttp::string_body> build(ClientRequest& request, const std::string& host) {
-    const auto verb = request.method == ClientMethod::post  ? bhttp::verb::post
-                      : request.method == ClientMethod::put ? bhttp::verb::put
-                      : request.method == ClientMethod::del ? bhttp::verb::delete_
-                                                            : bhttp::verb::get;
+    const auto verb = request.method == ClientMethod::post    ? bhttp::verb::post
+                      : request.method == ClientMethod::put   ? bhttp::verb::put
+                      : request.method == ClientMethod::del   ? bhttp::verb::delete_
+                      : request.method == ClientMethod::patch ? bhttp::verb::patch
+                                                              : bhttp::verb::get;
     std::string target(request.url.encoded_target());
     if (target.empty()) target = "/";
     bhttp::request<bhttp::string_body> out{verb, target, 11};
@@ -142,10 +143,12 @@ namespace {
 // Whether `url` is https://mybusiness.googleapis.com/<shape> and nothing
 // else. An empty entry of `shape` stands for an id. The address must equal
 // the one built here from the same parts, character for character: then
-// there is no port, user, query or fragment, nothing is percent-encoded, and
-// what was checked is what is sent.
+// there is no port, user or fragment, nothing is percent-encoded, and what
+// was checked is what is sent. `query`: the query the address must end in,
+// as the caller built it from parts it has checked; without one the address
+// has no query at all.
 template <std::size_t N>
-bool has_gbp_shape(const boost::urls::url& url, const std::array<std::string_view, N>& shape) {
+bool has_gbp_shape(const boost::urls::url& url, const std::array<std::string_view, N>& shape, std::string_view query = {}) {
     if (url.scheme_id() != boost::urls::scheme::https || url.host() != kGbpHost) return false;
     const auto segments = url.segments();
     if (segments.size() != shape.size()) return false;
@@ -156,7 +159,38 @@ bool has_gbp_shape(const boost::urls::url& url, const std::array<std::string_vie
         if (expected.empty() ? !is_plain_id(segment) : segment != expected) return false;
         built.segments().push_back(segment);
     }
-    return built.buffer() == url.buffer();
+    std::string written(built.buffer());
+    if (!query.empty()) written.append("?").append(query);
+    return written == url.buffer();
+}
+
+// The fields of a local post an edit may name (D-099), by Google's names:
+// domain::kLocalPostEditFields, held here a second time on purpose, so that
+// widening one list without the other fails a test.
+constexpr std::array<std::string_view, 6> kUpdateMaskFields{"summary", "callToAction", "event", "offer", "media", "languageCode"};
+
+// "updateMask=a,b" built again from the names in `query`, if that is all it
+// is: one parameter, one or more of the six names, each once. Nothing otherwise.
+std::optional<std::string> checked_update_mask(std::string_view query) {
+    constexpr std::string_view key = "updateMask=";
+    if (!query.starts_with(key)) return std::nullopt;
+    std::string built(key);
+    std::array<bool, kUpdateMaskFields.size()> seen{};
+    std::string_view rest = query.substr(key.size());
+    for (bool first = true;; first = false) {
+        const auto comma = rest.find(',');
+        const auto name = rest.substr(0, comma);
+        const auto known = std::ranges::find(kUpdateMaskFields, name);
+        if (known == kUpdateMaskFields.end()) return std::nullopt;  // also an empty name: no mask, or a stray comma
+        auto& taken = seen[static_cast<std::size_t>(known - kUpdateMaskFields.begin())];
+        if (taken) return std::nullopt;
+        taken = true;
+        if (!first) built.push_back(',');
+        built.append(*known);
+        if (comma == std::string_view::npos) break;
+        rest.remove_prefix(comma + 1);
+    }
+    return built;
 }
 
 // A host name of letters, digits, '.' and '-', or an IP address. Anything
@@ -187,6 +221,15 @@ bool is_local_post_collection_url(const boost::urls::url& url) {
 bool is_local_post_url(const boost::urls::url& url) {
     static constexpr std::array<std::string_view, 7> shape{"v4", "accounts", "", "locations", "", "localPosts", ""};
     return has_gbp_shape(url, shape);
+}
+
+bool is_local_post_update_url(const boost::urls::url& url) {
+    static constexpr std::array<std::string_view, 7> shape{"v4", "accounts", "", "locations", "", "localPosts", ""};
+    if (!url.has_query()) return false;
+    // The query as it is written, not decoded: an encoded comma or name is not one of the six.
+    const auto query = url.encoded_query();
+    const auto mask = checked_update_mask(std::string_view(query.data(), query.size()));
+    return mask && has_gbp_shape(url, shape, *mask);
 }
 
 bool is_batch_get_reviews_url(const boost::urls::url& url) {
@@ -235,6 +278,11 @@ std::optional<std::string_view> why_refused(ClientMethod method, const boost::ur
             return std::nullopt;
         case ClientMethod::del:
             if (!is_local_post_url(url)) return "the outbound client only sends DELETE for a local post";
+            return std::nullopt;
+        case ClientMethod::patch:
+            if (!is_local_post_update_url(url)) {
+                return "the outbound client only sends PATCH for a local post, with the fields the edit changes";
+            }
             return std::nullopt;
         case ClientMethod::post:
             // The host however it is written; the two allowed addresses only as Google writes them.
@@ -308,7 +356,7 @@ asio::awaitable<ClientResponse> NetClient::send(ClientRequest request) {
     if (request.url.scheme_id() != boost::urls::scheme::https && request.url.scheme_id() != boost::urls::scheme::http) {
         throw std::invalid_argument("outbound requests need an http or https URL");
     }
-    // What may change something at Google is three address shapes wide (client.hpp).
+    // What may change something at Google is four address shapes wide (client.hpp).
     if (const auto refusal = why_refused(request)) throw std::invalid_argument(std::string(*refusal));
     if (google_mock_ && is_google_address(request.url)) {
         auto mocked = google_mock_address(*google_mock_, request.url);
