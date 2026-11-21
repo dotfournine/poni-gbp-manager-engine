@@ -70,10 +70,8 @@ inline constexpr std::array<std::string_view, 8> kLocalPostStatuses{"draft",   "
 // "alert" only on a post made at Google: the engine writes domain::kPostTopicTypes.
 inline constexpr std::array<std::string_view, 4> kLocalPostTopicTypes{"standard", "event", "offer", "alert"};
 
-// The values of local_posts.google_state.
-inline constexpr std::array<std::string_view, 5> kLocalPostGoogleStates{"processing", "scheduled", "live", "recurring", "rejected"};
-// What the list's google_state filter takes: those, and `none` for a post without one (D-098).
-// `none` is a word of the filter, never a state.
+// What the list's google_state filter takes: the values the CHECK on local_posts.google_state
+// allows, and `none` for a post without one (D-098). `none` is a word of the filter, never a state.
 inline constexpr std::string_view kNoGoogleState = "none";
 inline constexpr std::array<std::string_view, 6> kLocalPostGoogleStateFilter{"processing", "scheduled", "live",
                                                                              "recurring",  "rejected",  kNoGoogleState};

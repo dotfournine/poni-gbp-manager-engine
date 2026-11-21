@@ -299,23 +299,9 @@ model::LocalPostList list_local_posts(pqxx::transaction_base& tx, const LocalPos
         if (!values.empty()) where.add(std::format("{} IN (SELECT jsonb_array_elements_text({}::jsonb))", column, where.bind(db::json_list(values))));
     };
     any_of("p.status", filter.statuses);
-    // A post is listed when it has one of the states asked for, or has none where `none` is asked for.
-    std::vector<std::string> states;
-    bool stateless = false;
-    for (const auto& state : filter.google_states) {
-        if (state == kNoGoogleState) {
-            stateless = true;
-        } else {
-            states.push_back(state);
-        }
-    }
-    if (stateless && states.empty()) {
-        where.add("p.google_state IS NULL");
-    } else if (stateless) {
-        where.add(std::format("(p.google_state IS NULL OR p.google_state IN (SELECT jsonb_array_elements_text({}::jsonb)))",
-                              where.bind(db::json_list(states))));
-    } else {
-        any_of("p.google_state", states);
+    // A post without a state is `none` here; the column's CHECK holds no such value, so nothing else is.
+    if (!filter.google_states.empty()) {
+        any_of(std::format("coalesce(p.google_state, {})", where.bind(std::string(kNoGoogleState))), filter.google_states);
     }
     // One key, in either direction; the id breaks ties, so that paging is stable both ways.
     const std::string_view direction = filter.descending ? "DESC" : "ASC";
@@ -372,12 +358,15 @@ Result<void> delete_local_post(pqxx::transaction_base& tx, audit::Writer& audit,
         return conflict("local_post_not_open",
                         "Only a draft or a rejected post can be deleted. A post that is at Google, or may be, is removed there instead.");
     }
-    const auto gone = tx.exec("DELETE FROM local_posts WHERE id = $1 RETURNING status_reason, created_by", pqxx::params{id}).one_row();
+    const auto gone =
+        tx.exec("DELETE FROM local_posts WHERE id = $1 RETURNING status_reason, created_by, copied_from_id", pqxx::params{id}).one_row();
     audit.record("local_post.delete", "local_post", id,
                  {.before = {{"location_id", state->location_id},
                              {"status", state->status},
                              {"status_reason", boost::json::value_from(gone[0].as<OptString>())},
                              {"created_by_user_id", boost::json::value_from(gone[1].as<std::optional<std::int64_t>>())},
+                             // Which post a deleted copy was a correction of (D-098).
+                             {"copied_from_id", boost::json::value_from(gone[2].as<std::optional<std::int64_t>>())},
                              {"content", state->content}}});
     return {};
 }

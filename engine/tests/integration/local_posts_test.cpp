@@ -881,6 +881,7 @@ TEST_F(LocalPosts, ADraftOrARejectedPostIsDeletedAndTheAuditLogKeepsWhatItSaid) 
     EXPECT_EQ(before.at("created_by_user_id").as_int64(), user_);
     EXPECT_EQ(before.at("content").at("summary").as_string(), "Never sent.");
     EXPECT_EQ(before.at("content").at("media_id").as_int64(), media);
+    EXPECT_TRUE(before.at("copied_from_id").is_null()) << "a draft written new was copied from nothing";
     EXPECT_EQ(del(std::format("/api/local-posts/{}", a_draft)).status, 404u) << "deleting again finds nothing";
 
     const auto rejected = in_status("rejected", "Decided against.");
@@ -1049,10 +1050,16 @@ TEST_F(LocalPosts, ACopyNamesItsSourceAndTheSourceListsItsCopiesNewestFirst) {
     ASSERT_EQ(post(std::format("/api/local-posts/{}/reject", first_id), "").status, 200u);
     EXPECT_EQ(copies(source), (Copies{{second_id, "draft"}, {first_id, "rejected"}}));
     EXPECT_EQ(status_of(source), "draft");
+    EXPECT_EQ(read(std::format("/api/local-posts/{}", first_id)).at("copied_from_id").as_int64(), source)
+        << "a copy keeps its link whatever becomes of it";
 
     // A copy that is deleted leaves its source's list.
     ASSERT_EQ(del(std::format("/api/local-posts/{}", second_id)).status, 204u);
     EXPECT_EQ(copies(source), (Copies{{first_id, "rejected"}}));
+    const auto deleted = read(std::format("/api/audit-log?object_type=local_post&object_id={}", second_id)).at("items").as_array();
+    ASSERT_FALSE(deleted.empty());
+    EXPECT_EQ(deleted[0].at("action").as_string(), "local_post.delete");
+    EXPECT_EQ(deleted[0].at("before").at("copied_from_id").as_int64(), source) << "the log keeps what a deleted copy corrected";
     ASSERT_EQ(del(std::format("/api/local-posts/{}", first_id)).status, 204u);
     EXPECT_TRUE(copies(source).empty());
 

@@ -1051,8 +1051,8 @@ struct LocalPost {
     std::vector<LocalPostMediaItem> media;
     // The checks on the content as of its last change; empty for a post made at Google.
     std::vector<domain::CheckResult> checks;
-    // The post this draft was copied from, and the posts copied from this one, newest first. Not
-    // content: nothing approves, sends or removes by them (D-098).
+    // The post this post was copied from (kept whatever becomes of the copy), and the posts copied
+    // from this one, newest first. Not content: nothing approves, sends or removes by them (D-098).
     std::optional<std::int64_t> copied_from_id;
     std::vector<LocalPostCopy> copies;
 
