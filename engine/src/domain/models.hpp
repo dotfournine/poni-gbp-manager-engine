@@ -692,6 +692,16 @@ BOOST_DESCRIBE_STRUCT(NotificationRule, (),
 
 using NotificationRuleList = Paged<NotificationRule>;
 
+// A phone that gets pushes (D-097): the app session that registered it.
+struct Device {
+    std::int64_t id = 0;
+    std::string environment;  // the engine's APNs environment
+    std::string app_version;
+    std::string created_at;
+    std::string last_seen_at;  // the session's last request
+};
+BOOST_DESCRIBE_STRUCT(Device, (), (id, environment, app_version, created_at, last_seen_at))
+
 // One message to one recipient, as the delivery log shows it.
 struct NotificationDelivery {
     std::int64_t id = 0;

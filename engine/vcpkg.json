@@ -16,6 +16,7 @@
       "name": "libpqxx",
       "default-features": false
     },
+    "nghttp2",
     "openssl"
   ]
 }

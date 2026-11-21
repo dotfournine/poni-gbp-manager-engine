@@ -35,6 +35,9 @@ public:
         clock_.advance(1500ms);
         co_return co_await inner_.send(std::move(request));
     }
+    boost::asio::awaitable<std::vector<http::ClientResponse>> send_h2(std::vector<http::ClientRequest> requests) override {
+        co_return co_await inner_.send_h2(std::move(requests));
+    }
 
 private:
     test::FakeHttp& inner_;

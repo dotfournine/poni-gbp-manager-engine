@@ -18,6 +18,7 @@
 #include "connectors/google/auth.hpp"
 #include "connectors/identity/provider.hpp"
 #include "connectors/llm/net_client.hpp"
+#include "connectors/notify/apns.hpp"
 #include "connectors/notify/gmail.hpp"
 #include "connectors/pubsub/subscriber.hpp"
 #include "connectors/storage/store.hpp"
@@ -142,6 +143,8 @@ void configure_limits(core::RateLimiter& limiter) {
         {pubsub::kPubsubApi, {.per_minute = 120, .burst = 10}},
         {storage::kStorageApi, {.per_minute = 120, .burst = 10}},
         {notify::kGmailApi, {.per_minute = 60, .burst = 5}},
+        // One slot per connection to Apple's push service, which carries one delivery's pushes.
+        {notify::kApnsApi, {.per_minute = 120, .burst = 10}},
         {llm::kLlmApi, {.per_minute = 120, .burst = 10}},
     };
     for (const auto& [api, limit] : limits) limiter.configure(std::string(api), limit);
@@ -197,6 +200,15 @@ int run(const core::Config& config) {
         clock, google::refresh_fetch(http_client, limiter, http::stored_credentials(database, box, http::kConnectGmail)));
     notify::GmailChannel email_channel({http_client, gmail_tokens, limiter}, {.address = config.email_from, .name = config.email_from_name});
 
+    // Push to the phone app (D-097), with the APNs settings only.
+    std::optional<notify::ApnsSender> apns;
+    if (config.apns) {
+        apns.emplace(http_client, limiter, clock, *config.apns);
+        log::info("push is on", {{"environment", std::string(core::name(config.apns->environment))}});
+    } else {
+        log::info("push is off: no PONI_APNS_* settings");
+    }
+
     // The engine's own identity, for Pub/Sub and the public bucket: the VM's
     // service account in production, or gcloud's credentials. Asked only once
     // either is used.
@@ -249,8 +261,9 @@ int run(const core::Config& config) {
     jobs::LocalPosts local_posts(database, clock, local_post_reader, local_post_writer, queue,
                                  {.media_base = public_store ? public_store->base_url() : std::string{}});
     jobs::GoLiveTester go_live_tester(database, clock, llm_client);
-    jobs::Notifier notifier(database, clock, {.public_url = config.public_url});
+    jobs::Notifier notifier(database, clock, {.public_url = config.public_url, .lifetimes = http::session_lifetimes(config)});
     notifier.add_channel(email_channel);
+    if (apns) notifier.set_push(*apns);
     jobs::Reporter reporter(database, clock, performance_reader, llm_client, public_store.get());
     // Ideas and texts for local posts, when a person asks (D-088 point 11). Nothing schedules it.
     jobs::PostAdvisor post_advisor(database, clock, llm_client, performance_reader);
@@ -306,7 +319,8 @@ int run(const core::Config& config) {
                           .job_workers = static_cast<int>(std::max(config.job_workers, 1u)),
                           .email_sender = config.email_from,
                           .connect_configured = connect.configured(),
-                          .google_mock = config.google_mock()},
+                          .google_mock = config.google_mock(),
+                          .push_environment = config.apns ? std::optional(config.apns->environment) : std::nullopt},
                          pipeline, reporter, public_store.get(), post_advisor);
 
     std::optional<http::Server> server;

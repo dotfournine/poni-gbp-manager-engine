@@ -1,8 +1,12 @@
 #include "core/crypto.hpp"
 
+#include <openssl/bn.h>
+#include <openssl/core_names.h>
 #include <openssl/crypto.h>
+#include <openssl/ec.h>
 #include <openssl/evp.h>
 #include <openssl/rand.h>
+#include <openssl/x509.h>
 
 #include <array>
 #include <memory>
@@ -169,6 +173,50 @@ std::expected<std::string, std::string> SecretBox::open(std::string_view sealed,
         EVP_DecryptFinal_ex(ctx.get(), bytes(plaintext) + len, &len) == 1;
     if (!ok) return std::unexpected("the stored value can't be decrypted: wrong key, or the value was changed");
     return plaintext;
+}
+
+std::expected<Es256Key, std::string> Es256Key::from_p8(std::string_view text) {
+    std::string body(text);
+    for (const std::string_view armour : {"-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----"}) {
+        if (const auto at = body.find(armour); at != std::string::npos) body.erase(at, armour.size());
+    }
+    std::erase_if(body, [](char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; });
+    const auto der = base64_decode(body);
+    if (!der || der->empty()) return std::unexpected("the key must be the base64 a .p8 file holds");
+    const auto* p = bytes(*der);
+    std::shared_ptr<evp_pkey_st> key(d2i_AutoPrivateKey(nullptr, &p, static_cast<long>(der->size())), EVP_PKEY_free);
+    if (!key || p != bytes(*der) + der->size()) return std::unexpected("the key is not a PKCS#8 private key");
+    std::array<char, 64> group{};
+    std::size_t group_length = 0;
+    if (!EVP_PKEY_is_a(key.get(), "EC") ||
+        EVP_PKEY_get_utf8_string_param(key.get(), OSSL_PKEY_PARAM_GROUP_NAME, group.data(), group.size(), &group_length) != 1 ||
+        std::string_view(group.data(), group_length) != "prime256v1") {
+        return std::unexpected("the key is not an ECDSA P-256 key, as an APNs key is");
+    }
+    return Es256Key(std::move(key));
+}
+
+std::string Es256Key::sign(std::string_view data) const {
+    std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)> ctx(EVP_MD_CTX_new(), EVP_MD_CTX_free);
+    std::size_t length = 0;
+    if (!ctx || EVP_DigestSignInit(ctx.get(), nullptr, EVP_sha256(), nullptr, key_.get()) != 1 ||
+        EVP_DigestSign(ctx.get(), nullptr, &length, bytes(data), data.size()) != 1) {
+        throw std::runtime_error("ES256: cannot sign");
+    }
+    std::string der(length, '\0');
+    if (EVP_DigestSign(ctx.get(), bytes(der), &length, bytes(data), data.size()) != 1) throw std::runtime_error("ES256: cannot sign");
+    // OpenSSL writes the signature as DER; a JWS holds r and s side by side.
+    const auto* p = bytes(der);
+    std::unique_ptr<ECDSA_SIG, decltype(&ECDSA_SIG_free)> sig(d2i_ECDSA_SIG(nullptr, &p, static_cast<long>(length)), ECDSA_SIG_free);
+    if (!sig) throw std::runtime_error("ES256: cannot read the signature");
+    const BIGNUM* r = nullptr;
+    const BIGNUM* s = nullptr;
+    ECDSA_SIG_get0(sig.get(), &r, &s);
+    std::string out(64, '\0');
+    if (BN_bn2binpad(r, bytes(out), 32) != 32 || BN_bn2binpad(s, bytes(out) + 32, 32) != 32) {
+        throw std::runtime_error("ES256: the signature is too long");
+    }
+    return out;
 }
 
 }  // namespace poni::core

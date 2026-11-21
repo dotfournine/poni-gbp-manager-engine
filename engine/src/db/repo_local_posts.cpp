@@ -96,7 +96,8 @@ void notify(pqxx::transaction_base& tx, std::int64_t id, std::string key, std::s
           .subject = std::move(subject),
           .body = std::format("{}\n\nLocation: {}\nThe post: {}", body, row[1].as<std::string>(),
                               summary.empty() ? std::string("(no text)") : text::truncate(summary, 300)),
-          .link_path = std::format("/#/posts/{}", id)},
+          .link_path = std::format("/#/posts/{}", id),
+          .local_post_id = id},
          now);
 }
 

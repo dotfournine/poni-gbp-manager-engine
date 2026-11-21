@@ -2,9 +2,13 @@
 
 #include "core/text.hpp"
 #include "core/version.hpp"
+#include "domain/push.hpp"
+#include "http/h2.hpp"
 
+#include <boost/asio/buffer.hpp>
 #include <boost/asio/ip/tcp.hpp>
 #include <boost/asio/redirect_error.hpp>
+#include <boost/asio/write.hpp>
 #include <boost/asio/ssl/host_name_verification.hpp>
 #include <boost/asio/this_coro.hpp>
 #include <boost/asio/use_awaitable.hpp>
@@ -15,6 +19,7 @@
 #include <boost/beast/http/string_body.hpp>
 #include <boost/beast/http/write.hpp>
 #include <boost/beast/ssl/ssl_stream.hpp>
+#include <boost/system/errc.hpp>
 #include <boost/url/encode.hpp>
 #include <boost/url/rfc/unreserved_chars.hpp>
 
@@ -117,6 +122,7 @@ std::string form_encode(std::string_view value) { return boost::urls::encode(val
 namespace {
 
 constexpr std::string_view kGbpHost = "mybusiness.googleapis.com";
+constexpr std::array<std::string_view, 2> kApnsHosts{"api.push.apple.com", "api.sandbox.push.apple.com"};
 
 // ASCII, whatever the locale.
 bool is_letter_or_digit(unsigned char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'); }
@@ -194,8 +200,34 @@ bool is_gbp_host(const boost::urls::url& url) {
     return host == kGbpHost;
 }
 
+bool is_apns_host(const boost::urls::url& url) {
+    std::string host = text::ascii_lower(url.host());
+    while (host.ends_with('.')) host.pop_back();
+    return std::ranges::contains(kApnsHosts, std::string_view(host));
+}
+
+bool is_apns_device_url(const boost::urls::url& url) {
+    if (url.scheme_id() != boost::urls::scheme::https || !std::ranges::contains(kApnsHosts, std::string_view(url.host()))) return false;
+    const auto segments = url.segments();
+    if (segments.size() != 3) return false;
+    auto it = segments.begin();
+    if (*it++ != "3" || *it++ != "device") return false;
+    const std::string token = *it;
+    if (!domain::is_device_token(token)) return false;
+    // Built again from its parts, so no port, user, query, fragment or encoding slips through.
+    boost::urls::url built;
+    built.set_scheme_id(boost::urls::scheme::https);
+    built.set_host_name(url.host());
+    built.segments() = {"3", "device", token};
+    return built.buffer() == url.buffer();
+}
+
 std::optional<std::string_view> why_refused(ClientMethod method, const boost::urls::url& url) {
     if (!is_plain_host(url)) return "the outbound client only sends to a host named with letters, digits, '.' and '-'";
+    // The host however it is written; the one allowed address only as the engine writes it.
+    if (is_apns_host(url) && (method != ClientMethod::post || !is_apns_device_url(url))) {
+        return "the outbound client only sends Apple's push service a POST of a notification to one device";
+    }
     switch (method) {
         case ClientMethod::get: return std::nullopt;
         case ClientMethod::put:
@@ -231,6 +263,46 @@ std::optional<std::string_view> why_refused(const ClientRequest& request) {
     return std::nullopt;
 }
 
+namespace {
+
+using TlsStream = beast::ssl_stream<beast::tcp_stream>;
+
+[[noreturn]] void tls_error(const char* what) {
+    throw boost::system::system_error(boost::system::error_code(static_cast<int>(::ERR_get_error()), asio::error::get_ssl_category()),
+                                      what);
+}
+
+// A TLS connection to `host`, its certificate checked against that name.
+// `alpn`: the protocols to offer, in ALPN's wire form; empty offers none.
+asio::awaitable<TlsStream> connect_tls(ssl::context& tls, const std::string& host, const std::string& port, std::chrono::seconds timeout,
+                                       std::string_view alpn = {}) {
+    const auto ex = co_await asio::this_coro::executor;
+    tcp::resolver resolver(ex);
+    const auto endpoints = co_await resolver.async_resolve(host, port, asio::use_awaitable);
+    TlsStream stream(ex, tls);
+    if (!SSL_set_tlsext_host_name(stream.native_handle(), host.c_str())) tls_error("SNI");
+    if (!alpn.empty() && SSL_set_alpn_protos(stream.native_handle(), reinterpret_cast<const unsigned char*>(alpn.data()),
+                                             static_cast<unsigned>(alpn.size())) != 0) {
+        tls_error("ALPN");
+    }
+    stream.set_verify_callback(ssl::host_name_verification(host));
+    auto& tcp_layer = beast::get_lowest_layer(stream);
+    tcp_layer.expires_after(timeout);
+    co_await tcp_layer.async_connect(endpoints, asio::use_awaitable);
+    tcp_layer.expires_after(timeout);
+    co_await stream.async_handshake(ssl::stream_base::client, asio::use_awaitable);
+    co_return stream;
+}
+
+// Best-effort close_notify; servers often just drop the connection.
+asio::awaitable<void> close_tls(TlsStream& stream) {
+    boost::system::error_code ignored;
+    beast::get_lowest_layer(stream).expires_after(3s);
+    co_await stream.async_shutdown(asio::redirect_error(asio::use_awaitable, ignored));
+}
+
+}  // namespace
+
 asio::awaitable<ClientResponse> NetClient::send(ClientRequest request) {
     const auto ex = co_await asio::this_coro::executor;
     if (request.url.scheme_id() != boost::urls::scheme::https && request.url.scheme_id() != boost::urls::scheme::http) {
@@ -250,10 +322,9 @@ asio::awaitable<ClientResponse> NetClient::send(ClientRequest request) {
     const auto timeout = request.timeout;
     auto message = build(request, host);
 
-    tcp::resolver resolver(ex);
-    const auto endpoints = co_await resolver.async_resolve(host, port, asio::use_awaitable);
-
     if (!https) {
+        tcp::resolver resolver(ex);
+        const auto endpoints = co_await resolver.async_resolve(host, port, asio::use_awaitable);
         beast::tcp_stream stream(ex);
         stream.expires_after(timeout);
         co_await stream.async_connect(endpoints, asio::use_awaitable);
@@ -263,26 +334,71 @@ asio::awaitable<ClientResponse> NetClient::send(ClientRequest request) {
         co_return response;
     }
 
-    beast::ssl_stream<beast::tcp_stream> stream(ex, tls_);
-    if (!SSL_set_tlsext_host_name(stream.native_handle(), host.c_str())) {  // SNI
-        throw boost::system::system_error(
-            boost::system::error_code(static_cast<int>(::ERR_get_error()), asio::error::get_ssl_category()), "SNI");
+    auto stream = co_await connect_tls(tls_, host, port, timeout);
+    auto response = co_await exchange(stream, beast::get_lowest_layer(stream), message, timeout);
+    co_await close_tls(stream);
+    co_return response;
+}
+
+asio::awaitable<std::vector<ClientResponse>> NetClient::send_h2(std::vector<ClientRequest> requests) {
+    if (requests.empty()) co_return std::vector<ClientResponse>{};
+    for (const auto& request : requests) {
+        if (const auto refusal = why_refused(request)) throw std::invalid_argument(std::string(*refusal));
+        // Apple's push service is the one server the engine speaks HTTP/2 to (D-097).
+        if (!is_apns_device_url(request.url)) throw std::invalid_argument("the outbound client speaks HTTP/2 only to Apple's push service");
+        if (request.url.host() != requests.front().url.host()) throw std::invalid_argument("the requests of one HTTP/2 connection go to one host");
     }
-    stream.set_verify_callback(ssl::host_name_verification(host));
+    const std::string host = requests.front().url.host();
+    const auto timeout = requests.front().timeout;
+    std::vector<H2Request> framed;
+    for (auto& request : requests) {
+        H2Request out{.authority = host, .path = std::string(request.url.encoded_path()), .headers = {}, .body = std::move(request.body)};
+        // HTTP/2 names are lower case; the request's own headers after the client's.
+        out.headers.emplace_back("user-agent", std::format("poni-gbp-engine/{}", core::kVersion));
+        out.headers.emplace_back("accept", "application/json");
+        for (auto& [name, value] : request.headers) out.headers.emplace_back(text::ascii_lower(name), std::move(value));
+        if (!request.content_type.empty()) out.headers.emplace_back("content-type", request.content_type);
+        framed.push_back(std::move(out));
+    }
+    H2Exchange exchange(std::move(framed), 64 * 1024);
+
+    // HTTP/2 is agreed in the handshake (ALPN), for this connection only.
+    static constexpr std::string_view kH2{"\x02h2", 3};
+    auto stream = co_await connect_tls(tls_, host, "443", timeout, kH2);
+    const unsigned char* agreed = nullptr;
+    unsigned agreed_length = 0;
+    SSL_get0_alpn_selected(stream.native_handle(), &agreed, &agreed_length);
+    if (std::string_view(reinterpret_cast<const char*>(agreed), agreed_length) != "h2") {
+        throw boost::system::system_error(boost::system::errc::make_error_code(boost::system::errc::protocol_not_supported),
+                                          "the server does not speak HTTP/2");
+    }
 
     auto& tcp_layer = beast::get_lowest_layer(stream);
-    tcp_layer.expires_after(timeout);
-    co_await tcp_layer.async_connect(endpoints, asio::use_awaitable);
-    tcp_layer.expires_after(timeout);
-    co_await stream.async_handshake(ssl::stream_base::client, asio::use_awaitable);
+    std::array<char, 16 * 1024> buffer{};
+    for (;;) {
+        if (const auto out = exchange.take_output(); !out.empty()) {
+            tcp_layer.expires_after(timeout);
+            co_await asio::async_write(stream, asio::buffer(out), asio::use_awaitable);
+        }
+        if (exchange.done()) break;
+        tcp_layer.expires_after(timeout);
+        const auto n = co_await stream.async_read_some(asio::buffer(buffer), asio::use_awaitable);
+        exchange.feed(std::string_view(buffer.data(), n));
+    }
+    auto answers = exchange.take_responses();
 
-    auto response = co_await exchange(stream, tcp_layer, message, timeout);
-
-    // Best-effort close_notify; servers often just drop the connection.
+    // Goodbye, best effort: every answer is in.
+    exchange.finish();
+    const auto goodbye = exchange.take_output();
     boost::system::error_code ignored;
     tcp_layer.expires_after(3s);
-    co_await stream.async_shutdown(asio::redirect_error(asio::use_awaitable, ignored));
-    co_return response;
+    co_await asio::async_write(stream, asio::buffer(goodbye), asio::redirect_error(asio::use_awaitable, ignored));
+    co_await close_tls(stream);
+
+    std::vector<ClientResponse> out;
+    out.reserve(answers.size());
+    for (auto& answer : answers) out.push_back(ClientResponse{answer.status, std::move(answer.body)});
+    co_return out;
 }
 
 }  // namespace poni::http

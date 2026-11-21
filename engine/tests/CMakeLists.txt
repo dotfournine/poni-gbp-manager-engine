@@ -8,11 +8,13 @@ add_executable(poni_unit_tests
   unit/config_test.cpp
   unit/connectors_test.cpp
   unit/core_test.cpp
+  unit/h2_test.cpp
   unit/http_client_test.cpp
   unit/llm_client_test.cpp
   unit/log_test.cpp
   unit/post_help_test.cpp
   unit/posting_schedule_test.cpp
+  unit/push_test.cpp
   unit/report_test.cpp
   unit/review_domain_test.cpp
   unit/router_test.cpp
@@ -26,7 +28,8 @@ add_executable(poni_unit_tests
 )
 target_include_directories(poni_unit_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(poni_unit_tests PRIVATE PONI_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
-target_link_libraries(poni_unit_tests PRIVATE poni_engine GTest::gtest GTest::gmock GTest::gtest_main)
+# nghttp2 for the HTTP/2 server the push tests talk to in memory.
+target_link_libraries(poni_unit_tests PRIVATE poni_engine nghttp2::nghttp2 GTest::gtest GTest::gmock GTest::gtest_main)
 gtest_discover_tests(poni_unit_tests PROPERTIES LABELS unit)
 
 # Where the knowledge base's files are: the tests read the same files the seed does (D-078 point 9).
@@ -64,9 +67,11 @@ add_executable(poni_integration_tests
   integration/local_posts_sync_test.cpp
   integration/local_posts_test.cpp
   integration/migrations_test.cpp
+  integration/devices_api_test.cpp
   integration/notifications_test.cpp
   integration/post_help_test.cpp
   integration/posting_test.cpp
+  integration/push_test.cpp
   integration/reports_test.cpp
   integration/sql_test.cpp
   integration/sync_test.cpp

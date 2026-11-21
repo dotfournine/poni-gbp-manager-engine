@@ -5,6 +5,7 @@
 #include <boost/url/parse.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <charconv>
 #include <format>
@@ -236,6 +237,44 @@ void read_llm_providers(Settings& s, Config& c) {
     }
 }
 
+// Ten capital letters and digits, as Apple's key and team ids are.
+bool is_apple_id(std::string_view id) {
+    return id.size() == 10 && std::ranges::all_of(id, [](char c) { return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9'); });
+}
+
+// A bundle id goes into a header of every push: letters, digits, '.' and '-'.
+bool is_bundle_id(std::string_view id) {
+    return !id.empty() && id.size() <= 155 && id.front() != '.' && id.back() != '.' && !id.contains("..") &&
+           std::ranges::all_of(id, [](char c) {
+               return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' || c == '-';
+           });
+}
+
+void read_apns(Settings& s, Config& c) {
+    constexpr std::array<std::string_view, 5> keys{"PONI_APNS_ENVIRONMENT", "PONI_APNS_KEY", "PONI_APNS_KEY_ID", "PONI_APNS_TEAM_ID",
+                                                   "PONI_APNS_BUNDLE_ID"};
+    std::array<std::optional<std::string>, 5> values;
+    for (std::size_t i = 0; i < keys.size(); ++i) values[i] = s.get(keys[i]);
+    if (std::ranges::none_of(values, [](const auto& v) { return v.has_value(); })) return;
+    for (std::size_t i = 0; i < keys.size(); ++i) {
+        if (!values[i]) return s.fail(std::format("{} is missing: the APNs settings are all set or none", keys[i]));
+    }
+    const auto& environment = *values[0];
+    if (environment != "production" && environment != "sandbox") {
+        return s.fail(std::format("PONI_APNS_ENVIRONMENT: '{}' is not production or sandbox", environment));
+    }
+    auto key = Es256Key::from_p8(*values[1]);
+    if (!key) return s.fail("PONI_APNS_KEY: " + key.error());
+    if (!is_apple_id(*values[2])) return s.fail("PONI_APNS_KEY_ID must be the key's ten letters and digits");
+    if (!is_apple_id(*values[3])) return s.fail("PONI_APNS_TEAM_ID must be the team's ten letters and digits");
+    if (!is_bundle_id(*values[4])) return s.fail(std::format("PONI_APNS_BUNDLE_ID: '{}' is not a bundle id", *values[4]));
+    c.apns = ApnsSettings{.environment = environment == "production" ? ApnsEnvironment::production : ApnsEnvironment::sandbox,
+                          .key = std::move(*key),
+                          .key_id = *values[2],
+                          .team_id = *values[3],
+                          .bundle_id = *values[4]};
+}
+
 // What may not be combined: against the mock, nothing may reach a real Google service (D-087).
 void check_combinations(Settings& s, const Config& c) {
     if (s.failed()) return;
@@ -252,6 +291,10 @@ void check_combinations(Settings& s, const Config& c) {
         if (!c.public_bucket.empty() && !c.public_bucket.contains('/')) {
             return s.fail("PONI_PUBLIC_BUCKET must be a path with PONI_GOOGLE_MOCK_URL: against the mock, buckets are local folders");
         }
+        if (c.apns && c.apns->environment == ApnsEnvironment::production) {
+            return s.fail("PONI_APNS_ENVIRONMENT must be sandbox with PONI_GOOGLE_MOCK_URL: made-up alerts go to builds run from "
+                          "Xcode, never to the phones staff use");
+        }
     }
     if (c.email_from.find('@') == std::string::npos || c.email_from.find_first_of(" <>\r\n") != std::string::npos) {
         s.fail(std::format("PONI_EMAIL_FROM: '{}' is not an email address", c.email_from));
@@ -259,6 +302,10 @@ void check_combinations(Settings& s, const Config& c) {
 }
 
 }  // namespace
+
+std::string_view name(ApnsEnvironment environment) {
+    return environment == ApnsEnvironment::production ? "production" : "sandbox";
+}
 
 std::optional<LlmProtocol> parse_llm_protocol(std::string_view name) {
     if (name == "openai") return LlmProtocol::openai;
@@ -391,6 +438,7 @@ std::expected<Config, std::string> load_config(const Environment& env, const std
     s.text("PONI_EMAIL_FROM_NAME", c.email_from_name);
     s.text("PONI_PUBLIC_BUCKET", c.public_bucket);
     s.parsed("PONI_GOOGLE_MOCK_URL", c.google_mock_url, parse_mock_url);
+    read_apns(s, c);
     check_combinations(s, c);
 
     // A typo in the file is named before anything else: it may be why another setting looks wrong.

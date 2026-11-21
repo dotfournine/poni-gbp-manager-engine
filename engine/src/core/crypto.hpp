@@ -4,9 +4,12 @@
 
 #include <cstddef>
 #include <expected>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+
+struct evp_pkey_st;  // OpenSSL's EVP_PKEY, kept out of this header
 
 namespace poni::core {
 
@@ -52,6 +55,22 @@ private:
     explicit SecretBox(std::string key);
     std::string key_;
     std::string key_id_;
+};
+
+// An ECDSA P-256 private key that signs JWTs with ES256 (RFC 7518 3.4): the
+// APNs auth key (D-097). Copies share the key.
+class Es256Key {
+public:
+    // `text` is the key as a .p8 file holds it: base64 of PKCS#8 DER, with or
+    // without the BEGIN and END lines; spaces and line breaks are ignored.
+    static std::expected<Es256Key, std::string> from_p8(std::string_view text);
+
+    // The signature of `data` as a JWS carries it: r and s, 32 bytes each.
+    std::string sign(std::string_view data) const;
+
+private:
+    explicit Es256Key(std::shared_ptr<evp_pkey_st> key) : key_(std::move(key)) {}
+    std::shared_ptr<evp_pkey_st> key_;
 };
 
 }  // namespace poni::core

@@ -2660,7 +2660,9 @@ paths:
         rule without a client applies to every client and to events that
         belong to none (system problems). A rule for `client_report` holds
         the addresses a client's reports are sent to and must name the
-        client (D-085).
+        client (D-085). A `push` rule (D-097) is for `escalation` or
+        `system_problem` only; its recipients are staff, and each is
+        delivered to that person's devices with the phone app.
       tags: [notifications]
       responses:
         "200":
@@ -2772,7 +2774,9 @@ paths:
         Every notification the engine tried to deliver, newest first, one
         row per recipient. `not_sent` means the engine did not try: sending
         is switched off, the sender isn't signed in, or no rule names a
-        recipient for the event.
+        recipient for the event. A `push` row is one person: it is sent to
+        each of their devices, and `status_reason` says how many it reached;
+        it is `not_sent` when the person has no device.
       tags: [notifications]
       parameters:
         - name: event_type
@@ -2796,6 +2800,62 @@ paths:
           $ref: "#/components/responses/InvalidRequest"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+
+  /api/devices:
+    post:
+      operationId: registerDevice
+      summary: Register this device for push
+      description: |
+        Registers the phone app's APNs token for the session that sends it
+        (D-097): a device belongs to its app session, so signing out, a
+        session that ends and a user who is disabled stop its pushes. One
+        device per session: registering again replaces the token. A token
+        another session had moves to this one, since a shared device
+        changes hands. A registration that changes nothing writes nothing.
+        Only the app's bearer token registers a device. An engine sends to
+        one APNs environment; a token of the other is refused with a 400.
+      tags: [notifications]
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceRegistration"
+      responses:
+        "201":
+          description: Registered.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Device"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/devices/{id}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    delete:
+      operationId: unregisterDevice
+      summary: Stop push to this device
+      description: Removes a device of the signed-in user; another user's device is a 404.
+      tags: [notifications]
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "204":
+          description: Removed.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /api/notifications/test:
     post:
@@ -3113,8 +3173,10 @@ components:
             $ref: "#/components/schemas/Error"
     RuleConflict:
       description: |
-        The client named doesn't exist (`client_not_found`), or a rule for
-        this event type and client already exists (`rule_exists`).
+        The client named doesn't exist (`client_not_found`), a rule for
+        this event type, channel and client already exists (`rule_exists`),
+        or a push rule was asked of an engine without the APNs settings
+        (`push_not_configured`).
       content:
         application/json:
           schema:
@@ -5423,10 +5485,10 @@ components:
           type: [string, "null"]
         channel:
           type: string
-          enum: [email]
+          enum: [email, push]
         recipients:
           type: array
-          description: Email addresses.
+          description: Email addresses. For `push`, the staff whose devices are told.
           items:
             type: string
         enabled:
@@ -5457,6 +5519,14 @@ components:
         event_type:
           type: string
           enum: [escalation, approval_needed, system_problem, client_report]
+        channel:
+          type: string
+          enum: [email, push]
+          default: email
+          description: >-
+            `push` only for `escalation` and `system_problem`, and only on an
+            engine that has the APNs settings (otherwise a 409,
+            `push_not_configured`).
         client_id:
           type: [integer, "null"]
           format: int64
@@ -5482,6 +5552,41 @@ components:
             type: string
         enabled:
           type: boolean
+    DeviceRegistration:
+      type: object
+      additionalProperties: false
+      required: [apns_token, environment, app_version]
+      properties:
+        apns_token:
+          type: string
+          description: The device token from APNs, in hex.
+        environment:
+          type: string
+          enum: [production, sandbox]
+          description: TestFlight and App Store builds use `production`; builds run from Xcode use `sandbox`.
+        app_version:
+          type: string
+          description: For example "1.0 (12)".
+    Device:
+      type: object
+      additionalProperties: false
+      required: [id, environment, app_version, created_at, last_seen_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        environment:
+          type: string
+          enum: [production, sandbox]
+        app_version:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+          description: The last request of the session the device belongs to.
     NotificationDelivery:
       type: object
       description: One message to one recipient.
