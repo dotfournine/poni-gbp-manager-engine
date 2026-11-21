@@ -341,9 +341,11 @@ Result<model::LocalPost> create_local_post(pqxx::transaction_base& tx, audit::Wr
 }
 
 Result<model::LocalPost> copy_local_post(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, std::string_view media_base) {
+    // The copy names its source by a foreign key: the lock makes a delete of the source wait for the
+    // copy (and then clear the link) or, if the delete came first, makes the copy find nothing (a 404).
     const auto source = db::row_as<CopySource>(tx,
                                                "SELECT location_id, content, google_media->0->>'format' AS media_at_google "
-                                               "FROM local_posts WHERE id = $1",
+                                               "FROM local_posts WHERE id = $1 FOR KEY SHARE",
                                                pqxx::params{id});
     if (!source) return not_found("local post");
     auto fitted = domain::fit_for_draft(read_content(source->content), audit.now(), source->media_at_google);
