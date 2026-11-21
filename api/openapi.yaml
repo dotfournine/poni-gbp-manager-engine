@@ -191,6 +191,18 @@ paths:
         `client=ios` and the S256 challenge of a PKCE verifier it keeps
         (RFC 7636). The sign-in then ends at `gbpmanager://auth` with a
         one-time code for `POST /api/auth/app-token`.
+
+        Every request counts against the attempt limit of its address (20
+        in 10 minutes, then 15 minutes locked), whatever it asks for, and
+        the limit is checked before anything else. Over it, the dashboard's
+        start answers 429; the app's (`client=ios`) is sent back to the app
+        with `gbpmanager://auth?error=too_many_attempts`, because the browser
+        sheet would show the JSON as it is. A start with a `client` there is
+        not is answered as the dashboard's.
+
+        A 400 stays JSON, for the app too: `client=ios` without a
+        well-formed `code_challenge` is a fault in the app, which no person
+        meets in a released app.
       tags: [session]
       security: []
       parameters:
@@ -213,7 +225,9 @@ paths:
           description: >-
             Redirect to Google. When Google sign-in is not set up: to the
             sign-in page with `error=not_configured`, or for the app to
-            `gbpmanager://auth?error=not_configured`.
+            `gbpmanager://auth?error=not_configured`. For the app over the
+            attempt limit: to `gbpmanager://auth?error=too_many_attempts`,
+            with no attempt started and the attempt's cookie cleared.
           headers:
             Location:
               schema:
@@ -222,6 +236,9 @@ paths:
           $ref: "#/components/responses/InvalidRequest"
         "429":
           $ref: "#/components/responses/TooManyAttempts"
+          description: >-
+            The dashboard's start over the attempt limit
+            (`too_many_attempts`). The app's start is redirected instead.
 
   /api/auth/google/callback:
     get:
@@ -241,10 +258,22 @@ paths:
 
         A sign-in the phone app started (`client=ios`) sets no cookie. It
         ends at `gbpmanager://auth?code=<one-time code>`, or at
-        `gbpmanager://auth?error=<code>` with the same codes. One case
-        cannot reach the app: when the browser sheet lost the cookie of the
-        attempt, the engine does not know whose attempt it was, and
-        `expired` goes to the dashboard's sign-in page.
+        `gbpmanager://auth?error=<code>` with the same codes and one of the
+        app's only:
+
+        - `too_many_attempts`: too many sign-in attempts from this address; wait at most a quarter of an hour and start again
+
+        Every request counts against the attempt limit of its address, the
+        same limit as the start's, whatever its cookie says, and the limit
+        is checked before anything else. Over it, the dashboard's callback,
+        and one without the attempt's cookie, answer 429; the app's is sent
+        back to the app with `too_many_attempts`, and nothing is written.
+
+        One case cannot reach the app: when the browser sheet lost the
+        cookie of the attempt, the engine does not know whose attempt it
+        was, and `expired` goes to the dashboard's sign-in page (or the 429
+        over the limit). Whose attempt it was is in that cookie and nowhere
+        else, and nothing of a redirect's target is taken from the request.
       tags: [session]
       security: []
       parameters:
@@ -264,13 +293,18 @@ paths:
         "302":
           description: >-
             Redirect to the dashboard, signed in or with an error code; for
-            the app, to `gbpmanager://auth` with a code or an error code.
+            the app, to `gbpmanager://auth` with a code or an error code,
+            `too_many_attempts` over the attempt limit included.
           headers:
             Location:
               schema:
                 type: string
         "429":
           $ref: "#/components/responses/TooManyAttempts"
+          description: >-
+            Over the attempt limit (`too_many_attempts`): the dashboard's
+            callback, or one without the attempt's cookie. The app's callback
+            is redirected instead.
 
   /api/connections/{account}/start:
     parameters:
@@ -378,6 +412,9 @@ paths:
         Every refusal is the same 400: an unknown, used or expired code, a
         wrong verifier (or one that is not of RFC 7636's form), or a user who
         was disabled in the meantime. The app starts the sign-in again.
+
+        The exchange has an attempt limit of its own, and its 429 stays: it
+        is a call the app makes itself, not a page the person sees.
       tags: [session]
       security: []
       requestBody:

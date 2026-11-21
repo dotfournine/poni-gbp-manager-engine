@@ -212,7 +212,8 @@ std::string AuthService::session_cookie(std::string_view token, std::chrono::sec
 }
 
 Response AuthService::login_error(std::string_view code, SessionKind kind) const {
-    // The dashboard's sign-in page shows a message for the code; the app gets the same codes.
+    // The dashboard's sign-in page shows a message for the code; the app gets the same codes, and
+    // too_many_attempts, which the dashboard gets as a 429.
     auto response = Response::redirect(kind == SessionKind::app ? std::format("{}?error={}", kAppAddress, code)
                                                                 : std::format("{}/#/login?error={}", config_.public_url, code));
     response.headers.emplace_back("Set-Cookie", flow_.cookie("", 0s));
@@ -291,9 +292,13 @@ asio::awaitable<Response> AuthService::session(const Request& request) {
 }
 
 asio::awaitable<Response> AuthService::google_start(const Request& request) {
-    if (const auto wait = throttle_.attempt(request.remote_ip)) co_return too_many_attempts(*wait);
+    // Every request is counted, whatever it says, before anything else is
+    // decided; whose it is only decides how a refusal is answered.
+    const auto wait = throttle_.attempt(request.remote_ip);
     const QueryParams query(request.query);
     const auto kind = client_kind(query);
+    // The app's sheet shows a page as it is: the app is sent its own code instead of the 429's JSON.
+    if (wait) co_return kind == SessionKind::app ? login_error("too_many_attempts", SessionKind::app) : too_many_attempts(*wait);
     if (!kind) co_return unknown_client();
     // The app's own PKCE challenge, for the exchange of its one-time code. It is no secret.
     std::string app_code_challenge;
@@ -320,13 +325,15 @@ asio::awaitable<Response> AuthService::google_start(const Request& request) {
 
 asio::awaitable<Response> AuthService::google_callback(const Request& request) {
     const auto& ip = request.remote_ip;
-    if (const auto wait = throttle_.attempt(ip)) co_return too_many_attempts(*wait);
+    // Counted first, as at the start, whatever the cookie says.
+    const auto wait = throttle_.attempt(ip);
     // Whose attempt it is, the dashboard's or the app's, is in the attempt's
     // cookie and nowhere else. Without the cookie it is nobody's, and the
     // answer goes to the dashboard. Every check below is the same for both.
     const auto secret = flow_.secret(request);
     const auto challenge = secret ? BrowserFlow::note(*secret) : std::nullopt;
     const auto kind = challenge ? SessionKind::app : SessionKind::browser;
+    if (wait) co_return kind == SessionKind::app ? login_error("too_many_attempts", kind) : too_many_attempts(*wait);
     if (!provider_) co_return login_error("not_configured", kind);
 
     if (!secret) co_return login_error("expired", kind);
