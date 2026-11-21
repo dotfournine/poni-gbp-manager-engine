@@ -299,7 +299,7 @@ model::LocalPostList list_local_posts(pqxx::transaction_base& tx, const LocalPos
         if (!values.empty()) where.add(std::format("{} IN (SELECT jsonb_array_elements_text({}::jsonb))", column, where.bind(db::json_list(values))));
     };
     any_of("p.status", filter.statuses);
-    // Google's states, and `none` for a post without one: the two kinds are either.
+    // A post is listed when it has one of the states asked for, or has none where `none` is asked for.
     std::vector<std::string> states;
     bool stateless = false;
     for (const auto& state : filter.google_states) {
