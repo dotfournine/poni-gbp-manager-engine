@@ -635,7 +635,8 @@ TEST_F(AppSignIn, OverTheAttemptLimitTheAppIsSentBackWithItsOwnCode) {
 }
 
 TEST_F(AppSignIn, EveryRequestToTheStartAndTheCallbackCountsWhateverItSays) {
-    // Twenty requests of every kind the two routes answer, none of which reaches Google's answer.
+    // Twenty requests of every kind the two routes answer (a 400, an error back to the app or the
+    // dashboard, a redirect to Google), and none of them signs in.
     const auto flow = pair_of(set_cookie(get(app_start()), "poni_signin"));
     for (int i = 0; i < 3; ++i) EXPECT_EQ(get("/api/auth/google/start?client=web").status, 400u);
     for (int i = 0; i < 3; ++i) EXPECT_EQ(get("/api/auth/google/start?client=ios").status, 400u);
