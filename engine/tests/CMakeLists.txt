@@ -63,6 +63,7 @@ add_executable(poni_integration_tests
   integration/google_target_test.cpp
   integration/health_test.cpp
   integration/jobs_test.cpp
+  integration/local_posts_edit_test.cpp
   integration/local_posts_publish_test.cpp
   integration/local_posts_remove_test.cpp
   integration/local_posts_sync_test.cpp
