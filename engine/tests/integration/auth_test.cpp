@@ -243,12 +243,22 @@ TEST_F(Auth, ADisabledUserIsLockedOutAtOnce) {
 }
 
 TEST_F(Auth, TooManySignInAttemptsFromOneAddressAreRefused) {
-    for (int i = 0; i < 20; ++i) EXPECT_EQ(get("/api/auth/google/start").status, 302u);
+    provider_.identities["the-code"] = staff();
+    for (int i = 0; i < 19; ++i) EXPECT_EQ(get("/api/auth/google/start").status, 302u);
+    const auto flow = pair_of(set_cookie(get("/api/auth/google/start"), "poni_signin"));
+    const auto state = provider_.last_request->state;
     const auto refused = get("/api/auth/google/start");
     EXPECT_EQ(refused.status, 429u);
     EXPECT_EQ(error_code(refused), "too_many_attempts");
     EXPECT_EQ(header(refused, "Retry-After"), "900");
     EXPECT_EQ(get("/api/auth/google/callback?code=x&state=y").status, 429u);
+    // The dashboard's own attempt is refused as JSON too; only the app's is sent back to the app (app_sign_in_test.cpp).
+    const auto callback = get("/api/auth/google/callback?code=the-code&state=" + state, {.cookie = flow});
+    EXPECT_EQ(callback.status, 429u);
+    EXPECT_EQ(error_code(callback), "too_many_attempts");
+    EXPECT_EQ(header(callback, "Retry-After"), "900");
+    EXPECT_TRUE(set_cookie(callback, "poni_session").empty());
+    EXPECT_EQ(count("sessions"), 0);
 
     clock_.advance(15min + 1s);
     EXPECT_EQ(get("/api/auth/google/start").status, 302u);

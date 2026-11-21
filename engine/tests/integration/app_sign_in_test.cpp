@@ -568,7 +568,7 @@ TEST_F(AppSignIn, TheExchangeHasAnAttemptLimitOfItsOwn) {
     // And the other way round: an address locked out of the start can still exchange.
     const auto late = app_code(app_sign_in_response(staff()));
     for (int i = 0; i < 18; ++i) EXPECT_EQ(get("/api/auth/google/start").status, 302u);
-    EXPECT_EQ(get(app_start()).status, 429u);
+    EXPECT_EQ(header(get(app_start()), "Location"), "gbpmanager://auth?error=too_many_attempts");
     EXPECT_EQ(get(kCallback + "?code=x&state=y").status, 429u);
     EXPECT_EQ(exchange(late).status, 200u);
 }
@@ -576,8 +576,95 @@ TEST_F(AppSignIn, TheExchangeHasAnAttemptLimitOfItsOwn) {
 TEST_F(AppSignIn, AnAppSignInCostsTwoOfTheSharedLimitAsTheDashboardsDoes) {
     // Ten sign-ins from one address, each a start, a callback and an exchange: 20 of the shared limit.
     for (int i = 0; i < 10; ++i) EXPECT_FALSE(app_sign_in().empty()) << "sign-in " << i + 1;
-    EXPECT_EQ(get(app_start()).status, 429u) << "the eleventh";
+    EXPECT_EQ(header(get(app_start()), "Location"), "gbpmanager://auth?error=too_many_attempts") << "the eleventh";
     EXPECT_EQ(count("sessions"), 10);
+}
+
+TEST_F(AppSignIn, OverTheAttemptLimitTheAppIsSentBackWithItsOwnCode) {
+    provider_.identities["the-code"] = staff();
+    // An attempt of the dashboard's and one of the app's, both as far as Google, and the limit reached with them.
+    const auto web_flow = pair_of(set_cookie(get("/api/auth/google/start"), "poni_signin"));
+    const auto web_state = provider_.last_request->state;
+    for (int i = 0; i < 18; ++i) EXPECT_EQ(get("/api/auth/google/start").status, 302u);
+    const auto app_flow = pair_of(set_cookie(get(app_start()), "poni_signin"));
+    const auto app_state = provider_.last_request->state;  // the fake provider takes the code of its last request
+
+    // The app's start: back to the app, and no attempt begins.
+    const auto start = get(app_start());
+    EXPECT_EQ(start.status, 302u);
+    EXPECT_EQ(header(start, "Location"), "gbpmanager://auth?error=too_many_attempts");
+    EXPECT_EQ(set_cookie(start, "poni_signin"), "poni_signin=; Path=/api/auth; Max-Age=0; HttpOnly; SameSite=Lax")
+        << "the attempt's cookie is only cleared, as by every other redirect to the app";
+    EXPECT_TRUE(set_cookie(start, "poni_session").empty());
+    EXPECT_EQ(provider_.last_request->state, app_state) << "nobody was sent to Google";
+    // The limit is decided before the challenge is looked at; the start's 400 is for a start under the limit.
+    EXPECT_EQ(header(get("/api/auth/google/start?client=ios"), "Location"), "gbpmanager://auth?error=too_many_attempts");
+
+    // The dashboard's start, and one of a client there is not, keep the 429.
+    const auto dashboard = get("/api/auth/google/start");
+    EXPECT_EQ(dashboard.status, 429u);
+    EXPECT_EQ(error_code(dashboard), "too_many_attempts");
+    EXPECT_EQ(header(dashboard, "Retry-After"), "900");
+    EXPECT_EQ(get("/api/auth/google/start?client=web").status, 429u);
+    EXPECT_EQ(provider_.last_request->state, app_state);
+
+    // The app's callback, with its cookie, a good state and a code Google would accept: back to the app, and nothing is written.
+    const auto callback = get(kCallback + "?code=the-code&state=" + app_state, {.cookie = app_flow});
+    EXPECT_EQ(callback.status, 302u);
+    EXPECT_EQ(header(callback, "Location"), "gbpmanager://auth?error=too_many_attempts");
+    EXPECT_THAT(set_cookie(callback, "poni_signin"), HasSubstr("Max-Age=0"));
+    EXPECT_TRUE(set_cookie(callback, "poni_session").empty());
+    EXPECT_TRUE(provider_.redeemed_verifier.empty()) << "the code was not redeemed";
+
+    // The dashboard's callback, and one without a cookie (nobody's attempt), keep the 429.
+    const auto web = get(kCallback + "?code=the-code&state=" + web_state, {.cookie = web_flow});
+    EXPECT_EQ(web.status, 429u);
+    EXPECT_EQ(error_code(web), "too_many_attempts");
+    EXPECT_EQ(header(web, "Retry-After"), "900");
+    EXPECT_EQ(get(kCallback + "?code=the-code&state=" + app_state).status, 429u);
+    EXPECT_TRUE(provider_.redeemed_verifier.empty());
+
+    EXPECT_EQ(count("sessions"), 0);
+    EXPECT_EQ(count("users"), 0);
+    EXPECT_EQ(count("app_sign_in_codes"), 0);
+    EXPECT_EQ(count("audit_log"), 0);
+
+    clock_.advance(15min + 1s);
+    EXPECT_FALSE(app_code(get(kCallback + "?code=the-code&state=" + app_state, {.cookie = app_flow})).empty())
+        << "after the lockout the same attempt goes through";
+}
+
+TEST_F(AppSignIn, EveryRequestToTheStartAndTheCallbackCountsWhateverItSays) {
+    // Twenty requests of every kind the two routes answer, none of which reaches Google's answer.
+    const auto flow = pair_of(set_cookie(get(app_start()), "poni_signin"));
+    for (int i = 0; i < 3; ++i) EXPECT_EQ(get("/api/auth/google/start?client=web").status, 400u);
+    for (int i = 0; i < 3; ++i) EXPECT_EQ(get("/api/auth/google/start?client=ios").status, 400u);
+    for (int i = 0; i < 3; ++i) EXPECT_EQ(header(get(kCallback + "?code=x&state=wrong", {.cookie = flow}), "Location"), "gbpmanager://auth?error=failed");
+    for (int i = 0; i < 3; ++i) {
+        EXPECT_EQ(header(get(kCallback + "?code=x&state=y", {.cookie = flow.substr(0, flow.find('.') + 1) + "not-a-challenge"}), "Location"),
+                  "gbpmanager://auth?error=failed");
+    }
+    for (int i = 0; i < 3; ++i) EXPECT_EQ(header(get(kCallback + "?code=x&state=y"), "Location"), "http://localhost:5173/#/login?error=expired");
+    for (int i = 0; i < 3; ++i) EXPECT_THAT(header(get(app_start()), "Location"), testing::StartsWith("https://idp.example/authorize"));
+    EXPECT_EQ(header(get(kCallback + "?error=access_denied", {.cookie = flow}), "Location"), "gbpmanager://auth?error=cancelled");
+
+    // The twenty-first is refused, and it counted too: the lockout began with it. Had it not
+    // counted, ten minutes later the window would have begun again and the start gone through.
+    EXPECT_EQ(header(get(app_start()), "Location"), "gbpmanager://auth?error=too_many_attempts");
+    clock_.advance(10min);
+    const auto later = get("/api/auth/google/start");
+    EXPECT_EQ(later.status, 429u);
+    EXPECT_EQ(header(later, "Retry-After"), "300") << "locked since the app's refused start";
+
+    // The same for the callback: the app's refused callback is the one the lockout begins with.
+    clock_.advance(5min + 1s);
+    const auto again = pair_of(set_cookie(get(app_start()), "poni_signin"));
+    for (int i = 0; i < 19; ++i) EXPECT_EQ(get("/api/auth/google/start").status, 302u);
+    EXPECT_EQ(header(get(kCallback + "?code=x&state=y", {.cookie = again}), "Location"), "gbpmanager://auth?error=too_many_attempts");
+    clock_.advance(10min);
+    EXPECT_EQ(header(get(kCallback + "?code=x&state=y", {.cookie = again}), "Location"), "gbpmanager://auth?error=too_many_attempts")
+        << "locked since the app's refused callback";
+    EXPECT_EQ(header(get("/api/auth/google/start"), "Retry-After"), "300");
 }
 
 TEST_F(AppSignIn, TheExchangeReadsItsBodyAsTheSpecSays) {
