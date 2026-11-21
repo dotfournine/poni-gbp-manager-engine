@@ -48,6 +48,13 @@ std::string local_post_select(std::string_view base) {
     const auto by = [](std::string_view column) { return std::format("(SELECT u.email FROM users u WHERE u.id = p.{0}) AS {0}", column); };
     // media: what Google shows once it has the post; before that, the uploaded file.
     // copies: the posts copied from this one, newest first (D-098).
+    // edit: the open edit of a post that is at Google, as model::LocalPostEdit (D-099).
+    const auto edit = std::format(
+        "(SELECT jsonb_build_object('content', e.content, 'checks', e.checks, 'status', e.status, 'status_reason', e.status_reason, "
+        "'written_by', (SELECT u.email FROM users u WHERE u.id = e.written_by), 'written_at', {}, "
+        "'decided_by', (SELECT u.email FROM users u WHERE u.id = e.decided_by), 'decided_at', {}) "
+        "FROM local_post_edits e WHERE e.local_post_id = p.id) AS edit",
+        iso("e.written_at"), iso("e.decided_at"));
     return std::format(R"sql(
         SELECT p.id, p.location_id, l.title AS location_title, l.client_id, c.name AS client_name, p.origin, p.status,
                p.status_reason, p.google_state, p.google_name, p.search_url,
@@ -62,6 +69,7 @@ std::string local_post_select(std::string_view base) {
                p.checks, p.copied_from_id,
                coalesce((SELECT jsonb_agg(jsonb_build_object('id', k.id, 'status', k.status) ORDER BY k.created_at DESC, k.id DESC)
                            FROM local_posts k WHERE k.copied_from_id = p.id), '[]'::jsonb) AS copies,
+               {14},
                {1}, {2}, {3}, {4}, {5}, {6}, {7}, {8}, {9}, {10}, {11}, {12}, {13}
           FROM local_posts p
           JOIN locations l ON l.id = p.location_id
@@ -69,7 +77,7 @@ std::string local_post_select(std::string_view base) {
           LEFT JOIN local_post_media m ON m.id = p.media_id)sql",
                        base, by("created_by"), by("edited_by"), at("edited_at"), by("decided_by"), at("decided_at"), at("sent_at"),
                        by("removal_requested_by"), at("removal_requested_at"), at("removed_at"), at("google_created_at"),
-                       at("synced_at"), at("created_at"), at("updated_at"));
+                       at("synced_at"), at("created_at"), at("updated_at"), edit);
 }
 
 // ---- writing ---------------------------------------------------------------------------
@@ -142,9 +150,18 @@ MediaState media_state(pqxx::transaction_base& tx, std::int64_t media_id, core::
 
 domain::CheckReport checks_for(pqxx::transaction_base& tx, const domain::LocalPostContent& content, core::TimePoint now,
                                std::string_view media_base) {
-    domain::LocalPostCheckContext context{.now = now, .media_problem = std::nullopt};
+    domain::LocalPostCheckContext context{.now = now, .media_problem = std::nullopt, .edit_at_google = false};
     if (content.media_id) context.media_problem = media_state(tx, *content.media_id, now, media_base).problem;
     return domain::run_local_post_checks(content, context);
+}
+
+// The checks of an edit of a post that is at Google (D-099). `post` is the post's content. An upload
+// is looked at only when it is not the post's own: that one is at Google already and is not sent.
+domain::CheckReport edit_checks_for(pqxx::transaction_base& tx, const domain::LocalPostContent& post, const domain::LocalPostContent& edit,
+                                    core::TimePoint now, std::string_view media_base) {
+    domain::LocalPostCheckContext context{.now = now, .media_problem = std::nullopt, .edit_at_google = true};
+    if (edit.media_id && edit.media_id != post.media_id) context.media_problem = media_state(tx, *edit.media_id, now, media_base).problem;
+    return domain::run_local_post_checks(edit, context);
 }
 
 // What an action needs to know about a post, with its row locked.
@@ -159,15 +176,48 @@ struct PostState {
     std::string origin;
     // The decision is no older than the caller allows (true when it does not ask).
     bool approval_fresh = true;
+    // A person asked for the post to be deleted at Google, and the request stands.
+    bool removal_requested = false;
 };
-BOOST_DESCRIBE_STRUCT(PostState, (), (status, location_id, decided_by, content, approved_content, google_name, origin, approval_fresh))
+BOOST_DESCRIBE_STRUCT(PostState, (),
+                      (status, location_id, decided_by, content, approved_content, google_name, origin, approval_fresh, removal_requested))
 
 std::optional<PostState> lock_post(pqxx::transaction_base& tx, std::int64_t id, std::optional<core::TimePoint> decided_since = std::nullopt) {
     return db::row_as<PostState>(tx,
                                  "SELECT status, location_id, decided_by, content, approved_content, google_name, origin, "
-                                 "$2::timestamptz IS NULL OR (decided_at IS NOT NULL AND decided_at >= $2::timestamptz) AS approval_fresh "
+                                 "$2::timestamptz IS NULL OR (decided_at IS NOT NULL AND decided_at >= $2::timestamptz) AS approval_fresh, "
+                                 "removal_requested_at IS NOT NULL AS removal_requested "
                                  "FROM local_posts WHERE id = $1 FOR UPDATE",
                                  pqxx::params{id, decided_since ? OptString(to_timestamptz(*decided_since)) : OptString{}});
+}
+
+// A post's open edit (D-099), with its row locked. Every caller has locked the post's row first.
+struct EditState {
+    std::string status;
+    // Both as the row holds them; approved_content is null where nothing was approved.
+    boost::json::value content;
+    boost::json::value approved_content;
+    OptString status_reason;
+    std::int64_t written_by = 0;
+    std::optional<std::int64_t> decided_by;
+    // The number of the claim it is being sent under, or was last.
+    std::optional<std::int64_t> claim;
+    // For the claim, which gives the time: the approval is no older than approval_valid_for, and the edit
+    // has been `sending` for kLocalPostStaleSendingAfter or longer.
+    bool approval_fresh = true;
+    bool sending_stale = false;
+};
+BOOST_DESCRIBE_STRUCT(EditState, (),
+                      (status, content, approved_content, status_reason, written_by, decided_by, claim, approval_fresh, sending_stale))
+
+std::optional<EditState> lock_edit(pqxx::transaction_base& tx, std::int64_t post_id, std::optional<core::TimePoint> claimed_at = std::nullopt) {
+    const auto before = [&](std::chrono::seconds age) { return claimed_at ? OptString(to_timestamptz(*claimed_at - age)) : OptString{}; };
+    return db::row_as<EditState>(tx,
+                                 "SELECT status, content, approved_content, status_reason, written_by, decided_by, claim, "
+                                 "$2::timestamptz IS NULL OR (decided_at IS NOT NULL AND decided_at >= $2::timestamptz) AS approval_fresh, "
+                                 "coalesce(status = 'sending' AND send_started_at <= $3::timestamptz, false) AS sending_stale "
+                                 "FROM local_post_edits WHERE local_post_id = $1 FOR UPDATE",
+                                 pqxx::params{post_id, before(approval_valid_for), before(kLocalPostStaleSendingAfter)});
 }
 
 // A post and the request to remove it, with its row locked.
@@ -376,7 +426,7 @@ Result<model::LocalPost> edit_local_post(pqxx::transaction_base& tx, audit::Writ
     const auto state = lock_post(tx, id);
     if (!state) return not_found("local post");
     if (state->status != "draft") {
-        return conflict("local_post_not_open", "Only a draft can be edited. A post that is at Google is removed and written again.");
+        return conflict("local_post_not_open", "Only a draft can be edited here. A post that is at Google gets an edit of its own.");
     }
     const auto normalized = domain::normalize_local_post(content);
     if (!normalized) return invalid(normalized.error());
@@ -604,6 +654,453 @@ std::vector<std::int64_t> release_orphaned_local_post_approvals(pqxx::transactio
     return released;
 }
 
+// ---- an edit of a post that is at Google (D-099) ------------------------------------------------
+
+namespace {
+
+// Why the post cannot have an edit as it stands, if it cannot: an edit is for a post Google has and
+// that nobody asked to remove. (Whether its location is synced, and whether its content is something
+// a draft can hold, are asked separately.)
+OptString edit_refusal(const PostState& post) {
+    if (post.status == "removed") return "The post is no longer at Google.";
+    if (post.status != "sent" || !post.google_name) return "Only a post that is at Google has an edit. A draft is edited itself.";
+    if (post.removal_requested) return "A person asked for this post to be removed at Google.";
+    return std::nullopt;
+}
+
+// The post changed as the API shows it: its edit did.
+void touch_post(pqxx::transaction_base& tx, std::int64_t id, core::TimePoint now) {
+    tx.exec("UPDATE local_posts SET updated_at = $2::timestamptz WHERE id = $1", pqxx::params{id, to_timestamptz(now)}).no_rows();
+}
+
+// An edit returns to the drafts with the reason: nothing goes out later by itself.
+void edit_back_to_draft(pqxx::transaction_base& tx, std::int64_t id, const std::string& reason, core::TimePoint now) {
+    tx.exec("UPDATE local_post_edits SET status = 'draft', status_reason = $2 WHERE local_post_id = $1", pqxx::params{id, reason}).no_rows();
+    touch_post(tx, id, now);
+}
+
+// An approval of an edit that is not carried out: nothing was sent, the edit is a draft again with the
+// reason, and the audit log keeps it. `advice` is what the person can do next, for the post's page only.
+void cancel_edit(pqxx::transaction_base& tx, std::int64_t id, std::string_view why, core::TimePoint now, std::string_view advice = {}) {
+    edit_back_to_draft(tx, id, std::format("{}{}", why, advice), now);
+    system_audit(tx, "local_post.edit_cancelled", id, {{"reason", why}}, now);
+}
+
+// The edit's one request went out, or may have, and nothing says what became of it. It is not sent
+// again: the edit is a draft again and says so, and staff are told. The post's row is not touched:
+// what Google has is read, not guessed.
+void edit_outcome_unknown(pqxx::transaction_base& tx, std::int64_t id, const PostState& post, const EditState& edit, const std::string& error,
+                          core::TimePoint now) {
+    edit_back_to_draft(tx, id,
+                       std::format("Google did not confirm the edit ({}), so the post may or may not have changed. The edit is not sent again by "
+                                   "itself. \"Refresh from Google\" shows what the post says now; approving the edit again is safe.",
+                                   error),
+                       now);
+    system_audit(tx, "local_post.edit_outcome_unknown", id,
+                 {{"location_id", post.location_id},
+                  {"error", error},
+                  {"edit", edit.content},
+                  {"approved_by_user_id", boost::json::value_from(edit.decided_by)}},
+                 now);
+    notify(tx, id, std::format("local_post:{}:edit_unknown:{}", id, to_timestamptz(now)), "An edit of a post may or may not have reached Google",
+           std::format("An approved edit of a post was sent to Google, and Google did not confirm it ({}). It is not sent again. The post may or "
+                       "may not have changed: refresh the location's posts to see what it says now. The edit is a draft again, and approving it "
+                       "again is safe.",
+                       error),
+           now);
+}
+
+// The edit of the post if it is the one claim `claim` is sending, with the post: what a run's bookkeeping may settle.
+struct ClaimedEdit {
+    PostState post;
+    EditState edit;
+};
+std::optional<ClaimedEdit> lock_claimed_edit(pqxx::transaction_base& tx, std::int64_t id, std::int64_t claim) {
+    auto post = lock_post(tx, id);
+    if (!post) return std::nullopt;
+    auto edit = lock_edit(tx, id);
+    if (!edit || edit->status != "sending" || edit->claim != claim) return std::nullopt;
+    return ClaimedEdit{std::move(*post), std::move(*edit)};
+}
+
+// Which upload the post carries is the engine's to know (apply_local_post keeps it): after an edit
+// that changed the media, it is the edit's.
+void set_post_upload(pqxx::transaction_base& tx, std::int64_t id, const std::optional<std::int64_t>& media_id) {
+    tx.exec("UPDATE local_posts SET content = jsonb_set(content, '{media_id}', $2::jsonb) WHERE id = $1 AND status <> 'removed'",
+            pqxx::params{id, json_text(media_id)})
+        .no_rows();
+}
+
+// The edit is at Google: its row goes, and the post names its author and the moment.
+void finish_edit(pqxx::transaction_base& tx, std::int64_t id, const EditState& edit, core::TimePoint now) {
+    tx.exec("DELETE FROM local_post_edits WHERE local_post_id = $1", pqxx::params{id}).no_rows();
+    tx.exec("UPDATE local_posts SET edited_by = $2, edited_at = $3::timestamptz, updated_at = $3::timestamptz WHERE id = $1",
+            pqxx::params{id, edit.written_by, to_timestamptz(now)})
+        .no_rows();
+}
+
+boost::json::value content_of_post(pqxx::transaction_base& tx, std::int64_t id) {
+    return boost::json::parse(tx.query_value<std::string>("SELECT content::text FROM local_posts WHERE id = $1", pqxx::params{id}));
+}
+
+}  // namespace
+
+Result<model::LocalPost> write_local_post_edit(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id,
+                                               const domain::LocalPostContent& content, std::string_view media_base) {
+    const auto post = lock_post(tx, id);
+    if (!post) return not_found("local post");
+    if (const auto why = edit_refusal(*post)) return conflict("local_post_not_editable", *why);
+    const auto location = sending_state(tx, post->location_id);
+    if (!location || !location->synced) return conflict("location_not_synced", std::string(kNotSynced));
+    const auto open = lock_edit(tx, id);
+    if (open && open->status != "draft") {
+        return conflict("local_post_edit_not_open",
+                        "The post's edit was approved and is on its way to Google. It can be replaced once it has been applied or has come back.");
+    }
+    const auto normalized = domain::normalize_local_post(content);
+    if (!normalized) return invalid(normalized.error());
+    const auto current = read_content(post->content);
+    const auto mask = domain::local_post_edit_mask(current, *normalized);
+    if (!mask) {
+        if (mask.error().kind == domain::EditObstacle::Kind::fixed_part) return invalid(mask.error().message);
+        return conflict("local_post_not_editable", mask.error().message);
+    }
+    // The post's own upload is on its row; another one must be a file that was uploaded.
+    if (normalized->media_id && normalized->media_id != current.media_id &&
+        !media_state(tx, *normalized->media_id, audit.now(), media_base).exists) {
+        return invalid("\"media_id\" names no uploaded file.");
+    }
+    if (open && read_content(open->content) == *normalized) {
+        audit.nothing_changed();
+        return *get_local_post(tx, id, media_base);
+    }
+    const auto report = edit_checks_for(tx, current, *normalized, audit.now(), media_base);
+    // What was approved before, if anything, was other content: the approval does not outlive the change.
+    tx.exec("INSERT INTO local_post_edits (local_post_id, status, content, checks, written_by, written_at) "
+            "VALUES ($1, 'draft', $2::jsonb, $3::jsonb, $4, $5::timestamptz) "
+            "ON CONFLICT (local_post_id) DO UPDATE SET status = 'draft', status_reason = NULL, content = EXCLUDED.content, "
+            "checks = EXCLUDED.checks, written_by = EXCLUDED.written_by, written_at = EXCLUDED.written_at, decided_by = NULL, "
+            "decided_at = NULL, approved_content = NULL, send_started_at = NULL, claim = NULL",
+            pqxx::params{id, json_text(*normalized), json_text(report.results), audit.user_id(), to_timestamptz(audit.now())})
+        .no_rows();
+    touch_post(tx, id, audit.now());
+    audit.record("local_post.edit_write", "local_post", id,
+                 {.before = open ? boost::json::value(boost::json::object{{"edit", open->content}, {"written_by_user_id", open->written_by}})
+                                 : boost::json::value(nullptr),
+                  .after = {{"location_id", post->location_id},
+                            {"edit", boost::json::value_from(*normalized)},
+                            {"fields", boost::json::value_from(*mask)},
+                            {"failed_checks", boost::json::value_from(report.failed())}}});
+    return *get_local_post(tx, id, media_base);
+}
+
+Result<void> discard_local_post_edit(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id) {
+    const auto post = lock_post(tx, id);
+    if (!post) return not_found("local post");
+    const auto edit = lock_edit(tx, id);
+    if (!edit) return conflict("local_post_edit_not_open", "The post has no edit.");
+    if (edit->status != "draft") {
+        return conflict("local_post_edit_not_open", "The post's edit was approved and is on its way to Google. It cannot be discarded now.");
+    }
+    tx.exec("DELETE FROM local_post_edits WHERE local_post_id = $1", pqxx::params{id}).no_rows();
+    touch_post(tx, id, audit.now());
+    audit.record("local_post.edit_discard", "local_post", id,
+                 {.before = {{"location_id", post->location_id},
+                             {"edit", edit->content},
+                             {"status_reason", boost::json::value_from(edit->status_reason)},
+                             {"written_by_user_id", edit->written_by}}});
+    return {};
+}
+
+Result<model::LocalPost> approve_local_post_edit(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id,
+                                                 const domain::LocalPostContent& content, std::string_view media_base) {
+    const auto post = lock_post(tx, id);
+    if (!post) return not_found("local post");
+    const auto edit = lock_edit(tx, id);
+    if (!edit) return conflict("local_post_edit_not_open", "The post has no edit to approve.");
+    if (edit->status != "draft") return conflict("local_post_edit_not_open", "The post's edit is no longer a draft waiting for approval.");
+    const auto read = domain::normalize_local_post(content);
+    if (!read) return invalid(read.error());
+    // The approval is for the content the person read: every field of it.
+    const auto stored = read_content(edit->content);
+    if (*read != stored) return conflict("local_post_changed", "The edit changed after it was shown. Read it again before approving.");
+    if (const auto why = edit_refusal(*post)) return conflict("local_post_not_editable", *why);
+
+    // Against the post as the engine holds it now: the sync may have brought a change made at Google.
+    const auto current = read_content(post->content);
+    const auto mask = domain::local_post_edit_mask(current, stored);
+    if (!mask) {
+        if (mask.error().kind == domain::EditObstacle::Kind::fixed_part) {
+            return conflict("local_post_changed", std::format("The post changed at Google after the edit was written: its \"{}\" is no longer what "
+                                                              "the edit says. Write the edit again from the post as it is now.",
+                                                              mask.error().member));
+        }
+        return conflict("local_post_not_editable", mask.error().message);
+    }
+    if (mask->empty()) {
+        return conflict("local_post_edit_unchanged", "The edit says what the post already says, so there is nothing to send. Discard it.");
+    }
+    const auto now = audit.now();
+    // Run now, not read from the row: time has passed since the edit was checked.
+    const auto report = edit_checks_for(tx, current, stored, now, media_base);
+    if (!report.passed()) {
+        return conflict("checks_failed", std::format("The edit fails a check ({}). Change it first.", report.failed_names()));
+    }
+    const auto location = sending_state(tx, post->location_id);
+    if (!location) return not_found("local post");
+    if (const auto off = switch_obstacle(*location)) return conflict("posting_disabled", *off);
+    if (!location->synced) return conflict("location_not_synced", std::string(kNotSynced));
+
+    tx.exec("UPDATE local_post_edits SET status = 'approved', status_reason = NULL, checks = $2::jsonb, decided_by = $3, "
+            "decided_at = $4::timestamptz, approved_content = $5::jsonb WHERE local_post_id = $1",
+            pqxx::params{id, json_text(report.results), audit.user_id(), to_timestamptz(now), json_text(stored)})
+        .no_rows();
+    touch_post(tx, id, now);
+    // One job per approval: an edit that came back to the drafts and is approved again gets a new one.
+    const auto stamp = std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count();
+    jobs::sql::enqueue(tx,
+                       {.kind = std::string(kEditLocalPostKind),
+                        .payload = boost::json::object{{"local_post_id", id}},
+                        .run_at = std::nullopt,
+                        .idempotency_key = std::format("{}@{}", id, stamp),
+                        .max_attempts = kEditLocalPostAttempts},
+                       now);
+    audit.record("local_post.edit_approve", "local_post", id,
+                 {.after = {{"location_id", post->location_id}, {"edit", boost::json::value_from(stored)}, {"fields", boost::json::value_from(*mask)}}});
+    return *get_local_post(tx, id, media_base);
+}
+
+LocalPostEditClaim claim_local_post_edit(pqxx::transaction_base& tx, std::int64_t id, core::TimePoint now, std::string_view media_base) {
+    using Outcome = LocalPostEditClaim::Outcome;
+    const auto refused = [](std::string detail) { return LocalPostEditClaim{.outcome = Outcome::not_approved, .claim = 0, .name = {}, .detail = std::move(detail)}; };
+    const auto post = lock_post(tx, id);
+    if (!post) return refused("no such post");
+    const auto edit = lock_edit(tx, id, now);
+    if (!edit) return refused("the post has no edit");
+    if (edit->status == "sending") {
+        // Claimed already, and nothing is sent from here. A claim of a moment ago is another run of the job
+        // at work: its own bookkeeping settles it. An older one was left by an engine that stopped between
+        // the claim and the bookkeeping (or whose bookkeeping failed): whether its request went out is not
+        // known, and the edit goes back to the person saying so.
+        if (!edit->sending_stale) return refused("the edit is being sent by another run");
+        edit_outcome_unknown(tx, id, *post, *edit, "the engine stopped while the edit was being sent", now);
+        return {.outcome = Outcome::interrupted, .claim = 0, .name = {}, .detail = "the edit was left as being sent"};
+    }
+    if (edit->status != "approved") return refused("the edit is a " + edit->status);
+    // An approval is carried out promptly or not at all, as for a first send.
+    if (!edit->approval_fresh) {
+        cancel_edit(tx, id,
+                    std::format("The approval was not carried out within {} minutes, so nothing was sent. Approve again.",
+                                approval_valid_for.count() / 60),
+                    now);
+        return refused("the approval is too old");
+    }
+    // A person's approval of exactly this content, or nothing goes out: the two values as the row holds them.
+    if (!edit->decided_by || edit->approved_content.is_null() || edit->approved_content != edit->content) {
+        cancel_edit(tx, id, "The edit's content is not the content that was approved. Read it again and approve it.", now);
+        return refused("the content is not the approved content");
+    }
+    // The post is still one that can have an edit. A removal that was asked for meanwhile wins.
+    if (const auto why = edit_refusal(*post)) {
+        cancel_edit(tx, id, *why, now, " The edit was not sent.");
+        return refused(*why);
+    }
+    const auto location = sending_state(tx, post->location_id);
+    // The kill switches, read in the transaction that claims the edit.
+    if (!location || switch_obstacle(*location)) {
+        const std::string off = location ? *switch_obstacle(*location) : std::string("The location no longer exists.");
+        cancel_edit(tx, id, off, now, " The approval was not carried out; approve again when posting is on.");
+        return refused(off);
+    }
+    if (!location->synced) {
+        cancel_edit(tx, id, kNotSynced, now, " Nothing was sent.");
+        return refused(std::string(kNotSynced));
+    }
+    // The post is edited as a post of its own location, under that location's ids as they are now, or not at all.
+    const auto name = gbp::parse_local_post_name(*post->google_name);
+    if (!name || name->location_id != location->gbp_location_id) {
+        cancel_edit(tx, id, "The post's name at Google is not one of its location's, so the edit was not sent.", now);
+        return refused("the post's name at Google is not one of its location's");
+    }
+    // As things are now: time has passed since the approval.
+    const auto content = read_content(edit->content);
+    const auto report = edit_checks_for(tx, read_content(post->content), content, now, media_base);
+    if (!report.passed()) {
+        const auto why = std::format("The edit no longer passes a check ({}). Nothing was sent; change it and approve again.", report.failed_names());
+        tx.exec("UPDATE local_post_edits SET checks = $2::jsonb WHERE local_post_id = $1", pqxx::params{id, json_text(report.results)}).no_rows();
+        cancel_edit(tx, id, why, now);
+        return refused(why);
+    }
+
+    const auto claim = tx.query_value<std::int64_t>(
+        "UPDATE local_post_edits SET status = 'sending', status_reason = NULL, send_started_at = $2::timestamptz, "
+        "claim = nextval('local_post_edit_claims') WHERE local_post_id = $1 RETURNING claim",
+        pqxx::params{id, to_timestamptz(now)});
+    touch_post(tx, id, now);
+    system_audit(tx, "local_post.edit_started", id, {{"location_id", post->location_id}, {"approved_by_user_id", *edit->decided_by}}, now);
+    return {.outcome = Outcome::claimed,
+            .claim = claim,
+            .name = {.account_id = location->gbp_account_id, .location_id = location->gbp_location_id, .post_id = name->post_id},
+            .detail = {}};
+}
+
+LocalPostEditRequest prepare_local_post_edit(pqxx::transaction_base& tx, std::int64_t id, std::int64_t claim, const gbp::LocalPost& read,
+                                             core::TimePoint now, std::string_view media_base) {
+    using Outcome = LocalPostEditRequest::Outcome;
+    const auto settled = [](std::string detail) {
+        return LocalPostEditRequest{.outcome = Outcome::settled, .mask = {}, .body = {}, .content = {}, .detail = std::move(detail)};
+    };
+    const auto claimed = lock_claimed_edit(tx, id, claim);
+    if (!claimed) return settled("the edit is no longer this run's to send");
+    const auto& [post, edit] = *claimed;
+    // Asked again where the request is about to start: a removal that was requested since the claim wins,
+    // and a post that was marked removed is not written to.
+    if (const auto why = edit_refusal(post)) {
+        cancel_edit(tx, id, *why, now, " The edit was not sent.");
+        return settled(*why);
+    }
+    // What was read is this post: the one of its location with its id (the account in a stored name may be an old one).
+    const auto held = gbp::parse_local_post_name(*post.google_name);
+    const auto got = gbp::parse_local_post_name(read.name);
+    if (!held || !got || got->location_id != held->location_id || got->post_id != held->post_id) {
+        cancel_edit(tx, id, "Google answered with another post than the one asked for, so the edit was not sent.", now);
+        return settled("the post that was read is not this post");
+    }
+    // The post as Google has it now, on its row: what the sync would store, by the same code. From here
+    // the row says what the edit is compared with.
+    apply_local_post(tx, post.location_id, read, now);
+    const auto current = read_content(content_of_post(tx, id));
+    const auto content = read_content(edit.content);
+    const auto mask = domain::local_post_edit_mask(current, content);
+    if (!mask) {
+        const auto why = mask.error().kind == domain::EditObstacle::Kind::fixed_part
+                             ? std::format("The post changed at Google after the edit was written: its \"{}\" is no longer what the edit says. "
+                                           "Nothing was sent; write the edit again from the post as it is now.",
+                                           mask.error().member)
+                             : std::format("{} Nothing was sent.", mask.error().message);
+        cancel_edit(tx, id, why, now);
+        return settled(why);
+    }
+    if (mask->empty()) {
+        // Google has this content already (an earlier request that was never confirmed arrived after all,
+        // or someone made the same change there). Nothing is sent, and the edit is done.
+        finish_edit(tx, id, edit, now);
+        audit::record(tx, engine_actor(),
+                      {.action = "local_post.edit_applied",
+                       .object_type = "local_post",
+                       .object_id = std::to_string(id),
+                       .before = nullptr,
+                       .after = boost::json::object{{"location_id", post.location_id},
+                                                    {"content", boost::json::value_from(current)},
+                                                    {"fields", boost::json::array{}},
+                                                    {"sent", false},
+                                                    {"written_by_user_id", edit.written_by},
+                                                    {"approved_by_user_id", boost::json::value_from(edit.decided_by)}}},
+                      now);
+        return settled("Google has this content already");
+    }
+    std::optional<gbp::MediaSource> media;
+    if (content.media_id && std::ranges::contains(*mask, std::string_view("media"))) {
+        const auto file = media_state(tx, *content.media_id, now, media_base);
+        media = gbp::MediaSource{.format = file.format, .url = file.url};
+    }
+    return {.outcome = Outcome::send, .mask = *mask, .body = gbp::update_body(read, content, *mask, media), .content = content, .detail = {}};
+}
+
+void local_post_edit_accepted(pqxx::transaction_base& tx, std::int64_t id, std::int64_t claim, const domain::LocalPostContent& sent,
+                              const std::vector<std::string_view>& mask, const gbp::LocalPost& updated, core::TimePoint now) {
+    const auto post = lock_post(tx, id);
+    if (!post) return;
+    const auto edit = lock_edit(tx, id);
+    const bool ours = edit && edit->status == "sending" && edit->claim == claim;
+    // Another run took this edit for one whose outcome is unknown and gave it back, before Google's
+    // answer came. The answer settles it, if the edit is still what was sent.
+    const bool given_back = edit && edit->status == "draft" && read_content(edit->content) == sent;
+    const auto before = content_of_post(tx, id);
+    // Google's answer is the post now, whatever became of the edit: content, state and times, as the sync stores them.
+    apply_local_post(tx, post->location_id, updated, now);
+    if (std::ranges::contains(mask, std::string_view("media"))) set_post_upload(tx, id, sent.media_id);
+    if (ours || given_back) finish_edit(tx, id, *edit, now);
+    audit::record(tx, engine_actor(),
+                  {.action = "local_post.edit_applied",
+                   .object_type = "local_post",
+                   .object_id = std::to_string(id),
+                   .before = boost::json::object{{"content", before}},
+                   .after = boost::json::object{{"location_id", post->location_id},
+                                                {"content", content_of_post(tx, id)},
+                                                {"approved_content", boost::json::value_from(sent)},
+                                                {"fields", boost::json::value_from(mask)},
+                                                {"sent", true},
+                                                {"google_state", boost::json::value_from(gbp::to_google_state(updated))},
+                                                {"written_by_user_id", ours || given_back ? boost::json::value(edit->written_by) : boost::json::value(nullptr)},
+                                                {"approved_by_user_id", ours || given_back ? boost::json::value_from(edit->decided_by) : boost::json::value(nullptr)}}},
+                  now);
+}
+
+void local_post_edit_not_made(pqxx::transaction_base& tx, std::int64_t id, std::int64_t claim, LocalPostEditFailure failure,
+                              const std::string& error, bool retry, core::TimePoint now) {
+    const auto claimed = lock_claimed_edit(tx, id, claim);
+    if (!claimed) return;
+    const std::string_view action = failure == LocalPostEditFailure::refused ? "local_post.edit_refused" : "local_post.edit_not_sent";
+    if (retry) {
+        // Nothing changed at Google, so the job's next attempt may claim it again.
+        tx.exec("UPDATE local_post_edits SET status = 'approved' WHERE local_post_id = $1", pqxx::params{id}).no_rows();
+        touch_post(tx, id, now);
+    } else {
+        std::string reason;
+        switch (failure) {
+            case LocalPostEditFailure::refused: reason = std::format("Google refused the edit ({}). The post is as it was.", error); break;
+            case LocalPostEditFailure::unreadable:
+                reason = std::format("The post could not be read from Google before the edit ({}), so nothing was sent. The post is as it was.", error);
+                break;
+            case LocalPostEditFailure::gone:
+                reason = std::format("Google does not find the post ({}): it may no longer be there. The edit was not sent; \"Refresh from "
+                                     "Google\" shows what is there.",
+                                     error);
+                break;
+        }
+        edit_back_to_draft(tx, id, reason, now);
+        notify(tx, id, std::format("local_post:{}:edit_not_made:{}", id, to_timestamptz(now)), "A post could not be edited",
+               std::format("An approved edit of a post was not made. {} The edit is a draft again.", reason), now);
+    }
+    system_audit(tx, std::string(action), id, {{"location_id", claimed->post.location_id}, {"error", error}, {"will_retry", retry}}, now);
+}
+
+void local_post_edit_unknown(pqxx::transaction_base& tx, std::int64_t id, std::int64_t claim, const std::string& error, core::TimePoint now) {
+    const auto claimed = lock_claimed_edit(tx, id, claim);
+    if (!claimed) return;
+    edit_outcome_unknown(tx, id, claimed->post, claimed->edit, error, now);
+}
+
+std::vector<std::int64_t> release_orphaned_local_post_edits(pqxx::transaction_base& tx, core::TimePoint approved_before, core::TimePoint now) {
+    std::vector<std::int64_t> released;
+    // The post's row first, as everywhere; its edit is locked below. An approved edit waits for its job
+    // as an approved post does; one that is `sending` is looked at by its age alone, as the sync looks at
+    // a post that is: a request takes seconds, whatever the queue says about its job.
+    for (const auto& row : tx.exec(std::format("SELECT p.id FROM local_posts p JOIN local_post_edits e ON e.local_post_id = p.id "
+                                               "WHERE (e.status = 'approved' AND e.decided_at <= $1::timestamptz AND NOT {}) "
+                                               "   OR (e.status = 'sending' AND e.send_started_at <= $3::timestamptz) "
+                                               "ORDER BY p.id FOR UPDATE OF p",
+                                               has_live_job("$2")),
+                                   pqxx::params{to_timestamptz(approved_before), std::string(kEditLocalPostKind),
+                                                to_timestamptz(now - kLocalPostStaleSendingAfter)})) {
+        const auto id = row[0].as<std::int64_t>();
+        const auto post = lock_post(tx, id);
+        const auto edit = lock_edit(tx, id, now);
+        if (!post || !edit) continue;
+        if (edit->status == "approved") {
+            cancel_edit(tx, id, "The job that sends the edit did not finish, so nothing was sent. Approve again to retry.", now);
+        } else if (edit->sending_stale) {
+            // Claimed, and never settled: whether the request went out is not known.
+            edit_outcome_unknown(tx, id, *post, *edit, "the engine stopped while the edit was being sent", now);
+        } else {
+            continue;
+        }
+        released.push_back(id);
+    }
+    return released;
+}
+
 // ---- media -------------------------------------------------------------------------------------
 
 model::LocalPostMedia create_local_post_media(pqxx::transaction_base& tx, audit::Writer& audit,
@@ -662,6 +1159,14 @@ Result<model::LocalPost> request_local_post_removal(pqxx::transaction_base& tx, 
     }
 
     const auto now = audit.now();
+    // An edit never stands in the way of a removal (D-099). A draft edit goes with the request, and the
+    // entry below keeps what it said. An approved one is stopped when its job claims it; one that is
+    // being sent cannot be called back, and its own bookkeeping settles it before the delete or after.
+    boost::json::value discarded_edit = nullptr;
+    if (const auto edit = lock_edit(tx, id); edit && edit->status == "draft") {
+        tx.exec("DELETE FROM local_post_edits WHERE local_post_id = $1", pqxx::params{id}).no_rows();
+        discarded_edit = boost::json::object{{"content", edit->content}, {"written_by_user_id", edit->written_by}};
+    }
     tx.exec("UPDATE local_posts SET removal_requested_by = $2, removal_requested_at = $3::timestamptz, updated_at = $3::timestamptz WHERE id = $1",
             pqxx::params{id, audit.user_id(), to_timestamptz(now)})
         .no_rows();
@@ -681,7 +1186,8 @@ Result<model::LocalPost> request_local_post_removal(pqxx::transaction_base& tx, 
                             {"origin", post.origin},
                             {"google_state", post.google_state ? boost::json::value(*post.google_state) : boost::json::value(nullptr)},
                             {"content", boost::json::value_from(post.content())},
-                            {"media", boost::json::value_from(post.media)}}});
+                            {"media", boost::json::value_from(post.media)},
+                            {"discarded_edit", discarded_edit}}});
     return post;
 }
 

@@ -11,6 +11,13 @@
 // A draft or a rejected post, which Google never had, may also be deleted
 // from the table (delete_local_post, D-094); nothing that was sent is.
 // What Google does with a post it has is in google_state, not in status.
+//
+// A post that is at Google is changed there by an edit (D-099): a row of
+// local_post_edits beside the post, at most one, which moves
+//                             draft -> approved -> sending
+// and from each of the last two back to draft with a reason. The post's own
+// row is untouched until Google has accepted the edit; then it takes
+// Google's answer and the edit's row goes.
 #pragma once
 
 #include "connectors/gbp/local_posts.hpp"
@@ -42,9 +49,12 @@ inline constexpr std::string_view kPublishLocalPostKind = "local_posts.publish";
 inline constexpr int kPublishLocalPostAttempts = 4;
 inline constexpr std::string_view kRemoveLocalPostKind = "local_posts.remove";
 inline constexpr int kRemoveLocalPostAttempts = 5;
+inline constexpr std::string_view kEditLocalPostKind = "local_posts.edit";
+// Only an edit that was not sent, or that Google refused before doing anything (a rate limit, a token), is tried again.
+inline constexpr int kEditLocalPostAttempts = 4;
 
-// An approval is carried out within this time or not at all, and so is a
-// request to remove a post: a job that runs late, after an outage or a
+// An approval is carried out within this time or not at all (of a draft and
+// of an edit alike), and so is a request to remove a post: a job that runs late, after an outage or a
 // restored backup, sends nothing and deletes nothing. A job's own attempts,
 // with their waits, take a few minutes.
 inline constexpr std::chrono::seconds approval_valid_for = std::chrono::minutes(30);
@@ -59,7 +69,8 @@ inline constexpr std::chrono::seconds kLocalPostAdoptTolerance{120};
 // send's. The messages to staff say "15 minutes".
 inline constexpr std::chrono::seconds kLocalPostFailAfter = std::chrono::minutes(15);
 // A post still `sending` after this long was left by an engine that stopped
-// between the claim and the bookkeeping: its outcome is unknown.
+// between the claim and the bookkeeping: its outcome is unknown. The same
+// holds for an edit of a post (D-099).
 inline constexpr std::chrono::seconds kLocalPostStaleSendingAfter = std::chrono::minutes(5);
 // How many posts that a list lacks are asked for one by one in a run.
 inline constexpr int kLocalPostsMaxMissing = 20;
@@ -178,6 +189,123 @@ void local_post_send_unknown(pqxx::transaction_base& tx, std::int64_t id, const 
 std::vector<std::int64_t> release_orphaned_local_post_approvals(pqxx::transaction_base& tx, core::TimePoint approved_before,
                                                                 core::TimePoint now);
 
+// ---- an edit of a post that is at Google (D-099) ------------------------------------------
+
+// Writes the post's open edit, or replaces it while it is a draft: `content`
+// is the whole content the post is to have. Nothing goes to Google. A post
+// can have an edit while it is `sent`, has a name at Google, has no removal
+// requested and belongs to a synced location, and only if its content is
+// something a draft can hold. The content is normalized; a kind, a time to
+// publish at or a repeat other than the post's is refused (invalid, naming
+// the member). Its checks are stored with it, a failed one included.
+Result<model::LocalPost> write_local_post_edit(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id,
+                                               const domain::LocalPostContent& content, std::string_view media_base);
+
+// Discards the post's edit while it is a draft, whatever has become of the
+// post. The audit entry keeps what it said.
+Result<void> discard_local_post_edit(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id);
+
+// Approves the post's draft edit whose stored content is `content`, the
+// content the person read, and enqueues the job that sends it. The only
+// function that enqueues local_posts.edit. Refuses unless the content equals
+// what is stored, the post can still have an edit, the edit changes
+// something an edit may change, every check passes as things are now, both
+// posting switches are on and the location is synced.
+Result<model::LocalPost> approve_local_post_edit(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id,
+                                                 const domain::LocalPostContent& content, std::string_view media_base);
+
+struct LocalPostEditClaim {
+    enum class Outcome {
+        claimed,  // the caller now owns this edit's one request to Google
+        // Nothing is sent. There is no approval to carry out, or it could not be carried out (it is too
+        // old, the content changed, a posting switch is off, the post no longer qualifies, a check fails
+        // now) and the edit is a draft again with the reason.
+        not_approved,
+        // The edit had been `sending` for kLocalPostStaleSendingAfter or longer: an earlier run claimed it
+        // and its outcome was never written down. Nothing is sent; the edit has been given back as one
+        // Google did not confirm. (One claimed a moment ago is another run at work: `not_approved`.)
+        interrupted,
+    };
+    Outcome outcome = Outcome::not_approved;
+    // The number of this claim, which the bookkeeping names: never used twice.
+    std::int64_t claim = 0;
+    // The post, under its location's ids at Google as they are now.
+    gbp::LocalPostName name;
+    // Why not, for the log.
+    std::string detail;
+};
+
+// The first step of carrying an approved edit out, in one transaction: locks
+// the post and its edit, checks that a person approved exactly the content
+// the edit holds now and no longer ago than `approval_valid_for`, that the
+// post still is one that can have an edit (sent, named, no removal
+// requested, its name one of its location's), reads both posting switches
+// and the location, runs the checks again, and then marks the edit `sending`
+// under a new claim number. Anything else than `claimed` has been dealt with
+// and the caller must not send.
+LocalPostEditClaim claim_local_post_edit(pqxx::transaction_base& tx, std::int64_t id, core::TimePoint now, std::string_view media_base);
+
+struct LocalPostEditRequest {
+    enum class Outcome {
+        send,     // the caller sends one update with `mask` and `body`
+        settled,  // nothing is sent: the edit was dealt with here (`detail` says how)
+    };
+    Outcome outcome = Outcome::settled;
+    // The fields in which the edit differs from the post as Google has it now, by Google's names.
+    std::vector<std::string_view> mask;
+    // Those fields as the edit says them, in Google's spelling.
+    boost::json::object body;
+    // The content that is being sent: the approved edit.
+    domain::LocalPostContent content;
+    std::string detail;
+};
+
+// The second step, with the post as Google returned it a moment ago: stores
+// that read on the post's row (as the sync would), then works out what the
+// edit of claim `claim` changes against it. Nothing to change: Google has
+// this content already, and the edit is done without a request. The post no
+// longer fits the edit (its kind, time or repeat changed, a removal was
+// requested meanwhile, it holds what a draft cannot hold): the edit is a
+// draft again with the reason. Otherwise the mask and the body to send.
+LocalPostEditRequest prepare_local_post_edit(pqxx::transaction_base& tx, std::int64_t id, std::int64_t claim, const gbp::LocalPost& read,
+                                             core::TimePoint now, std::string_view media_base);
+
+// Google accepted the update: the post's row takes Google's answer (through
+// apply_local_post), its edited_by and edited_at name the edit's author and
+// this moment, the edit's row goes, and the audit entry keeps the content
+// before and after and who approved. `sent` and `mask` are what was sent. An
+// answer that arrives after another run gave the edit back still says what
+// the post is now, and is stored.
+void local_post_edit_accepted(pqxx::transaction_base& tx, std::int64_t id, std::int64_t claim, const domain::LocalPostContent& sent,
+                              const std::vector<std::string_view>& mask, const gbp::LocalPost& updated, core::TimePoint now);
+
+// Why an edit was not made, when that is certain: the post is as it was.
+enum class LocalPostEditFailure {
+    refused,     // Google answered the update and refused it
+    unreadable,  // the post could not be read from Google first, so nothing was sent
+    gone,        // Google does not find the post, so nothing was sent
+};
+
+// The edit was not made, for certain. With `retry` it is `approved` again
+// for the job's next attempt; otherwise it returns to `draft` with the
+// reason and staff are notified.
+void local_post_edit_not_made(pqxx::transaction_base& tx, std::int64_t id, std::int64_t claim, LocalPostEditFailure failure,
+                              const std::string& error, bool retry, core::TimePoint now);
+
+// The update may or may not have arrived. It is never sent again for this
+// approval: the edit returns to `draft` saying that Google did not confirm
+// it, staff are notified, and the post's row is left for the next read of
+// the location to bring what Google has.
+void local_post_edit_unknown(pqxx::transaction_base& tx, std::int64_t id, std::int64_t claim, const std::string& error, core::TimePoint now);
+
+// Edits on their way that nothing will carry out. One approved at or before
+// `approved_before` that no queued or running job will send (a job that died
+// for good) returns to `draft`, nothing having been sent. One that has been
+// `sending` for kLocalPostStaleSendingAfter (an engine that stopped between
+// the claim and the bookkeeping) returns to `draft` as an edit Google did
+// not confirm, and staff are notified. Returns their posts' ids.
+std::vector<std::int64_t> release_orphaned_local_post_edits(pqxx::transaction_base& tx, core::TimePoint approved_before, core::TimePoint now);
+
 // ---- media (D-088 point 9) -------------------------------------------------------------------
 
 struct NewLocalPostMedia {
@@ -204,7 +332,10 @@ model::LocalPostMedia create_local_post_media(pqxx::transaction_base& tx, audit:
 // while posting is switched off: deleting is the only way to stop a
 // scheduled post or to take one down. The audit entry keeps a copy of the
 // post's content and of what it showed. Asking again while a removal is
-// under way, or for a post that is removed, changes nothing.
+// under way, or for a post that is removed, changes nothing. An edit never
+// stands in its way (D-099): a draft edit of the post is discarded with the
+// request, its content kept in the same audit entry, and an approved one is
+// stopped when its job claims it.
 Result<model::LocalPost> request_local_post_removal(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id,
                                                     std::string_view media_base);
 
