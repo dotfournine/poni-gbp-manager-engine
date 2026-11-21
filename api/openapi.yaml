@@ -2187,24 +2187,34 @@ paths:
       operationId: writeLocalPostEdit
       summary: Write an edit of a post that is at Google
       description: |
-        Proposes a change to a post Google has (D-099): the body is the
-        whole content the post is to have. Nothing goes to Google: the edit
-        is kept beside the post as `LocalPost.edit`, a `draft`, until a
-        person approves it (`POST /api/local-posts/{id}/edit/approve`). The
-        post keeps its id, its `google_name`, its history and, until Google
-        has accepted the edit, its content.
+        Proposes a change to a post Google has (D-099). The body has two
+        members, each a whole `LocalPostContent`: `content`, what the post
+        should say, and `based_on`, the post's content exactly as the client
+        last got it from the engine, which is what the person was looking at
+        when they wrote `content`. Nothing goes to Google: the edit is kept
+        beside the post as `LocalPost.edit`, a `draft`, until a person
+        approves it (`POST /api/local-posts/{id}/edit/approve`). The post
+        keeps its id, its `google_name`, its history and, until Google has
+        accepted the edit, its content.
+
+        `based_on` must be the post's content as the engine holds it now. If
+        the post has changed since the client read it (the engine reads
+        Google every hour, and people change posts in Google's own
+        interface), the answer is 409 `local_post_changed` and nothing is
+        stored: load the post again and write the edit from what it says
+        now.
+
+        An edit changes the fields in which `content` differs from
+        `based_on`, and it never writes any other field at Google:
+        `LocalPost.edit.fields` lists them. Whatever else `content` carries
+        is the post's own, sent along because the content travels whole,
+        and is not kept as the edit's.
 
         A post has at most one open edit. Sending this again replaces the
         edit while it is a `draft`, whoever wrote it, also with the content
-        it already has: the edit then names the person who sent it last and
-        is written against the post as it is at that moment. An edit that is
-        `approved` or `sending` is refused with `local_post_edit_not_open`.
-
-        An edit changes the fields in which its content differs from the
-        post's at the moment it was written, and it never writes any other
-        field at Google, whatever the rest of its content says:
-        `LocalPost.edit.fields` lists them. The rest of the content is the
-        post's own, sent along because the content travels whole.
+        it already has: the edit then names the person who sent it last. An
+        edit that is `approved` or `sending` is refused with
+        `local_post_edit_not_open`.
 
         A post can have an edit when it is `sent`, has a `google_name`, has
         no removal requested and belongs to a location that is linked to an
@@ -2240,7 +2250,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/LocalPostContent"
+              $ref: "#/components/schemas/LocalPostEditRequest"
       responses:
         "200":
           description: The post, with the edit as `edit`.
@@ -2290,8 +2300,12 @@ paths:
       description: |
         The only way a post that is at Google is changed there (D-099). The
         body carries the edit's content as the person read it
-        (`LocalPost.edit.content`); it must equal the stored edit, so nobody
-        approves a change they haven't seen. The edit becomes `approved` and
+        (`LocalPost.edit.content`: the post as it would say with the edit
+        applied). It must equal what the engine would serve now, so nobody
+        approves a change they haven't seen: not an edit that was replaced
+        since, and not a post that changed at Google since in a field the
+        edit leaves alone. Either is a 409 `local_post_changed`; load the
+        post again. The edit becomes `approved` and
         a job sends it at once: it reads the post from Google, and sends one
         request that names the fields the edit changes (`edit.fields`) and
         Google does not have yet, and no other field. Refused while a
@@ -2303,9 +2317,16 @@ paths:
         edit was written stops it, here with `local_post_changed` and in the
         job by returning the edit to `draft` with a reason that names the
         field: the edit would write over a change its author never saw.
-        Nothing is sent. Sending the edit again (`PUT`), also unchanged,
-        writes it against the post as it is now; it can then be approved.
-        A field the edit does not change stays as Google has it.
+        Nothing is sent. To go on, load the post and save the edit again:
+        `PUT` the served `edit.content` as `content`, with the post's
+        content as it is now as `based_on`. The edit then changes the same
+        fields as before, against a post the person has seen, and can be
+        approved. A field the edit does not change stays as Google has it.
+
+        The job also sends nothing if the post changed at Google after the
+        approval so that it would no longer say what was approved: the edit
+        is a `draft` again with that reason, and is approved again from what
+        the engine then serves.
 
         When Google accepts, the post takes what Google answered,
         `edited_by` and `edited_at` name the edit's author and the moment,
@@ -3459,10 +3480,11 @@ components:
         post has no edit that is a `draft` (none at all, or one that is
         `approved` or `sending`). `local_post_edit_unchanged`: the edit says
         what the post already says, so there is nothing to send.
-        `local_post_changed`, for an approval of an edit: the content sent
-        is not the stored edit; or the post changed at Google since the edit
-        was written, in a field the edit changes or in its kind, time or
-        repeat (the message names it).
+        `local_post_changed`, for an edit: writing it, `based_on` is not
+        the post's content now; approving it, the content sent is not what
+        the engine serves as the edit's content now, or a field the edit
+        changes was changed at Google since the edit was written (the
+        message names it).
       content:
         application/json:
           schema:
@@ -7139,6 +7161,23 @@ components:
         `status_reason`. `approved`: a person approved the content and the
         job has not started. `sending`: the request is being sent. An edit
         Google accepted is no longer there: the post has its content.
+    LocalPostEditRequest:
+      type: object
+      description: |
+        An edit of a post that is at Google, as a client writes it.
+        `content`: the whole content the post should have. `based_on`: the
+        post's content exactly as the client last got it from the engine
+        (the content members of `LocalPost`), which is what the person was
+        looking at. The edit changes the fields in which `content` differs
+        from `based_on`. Refused with `local_post_changed` when `based_on`
+        is not the post's content now.
+      additionalProperties: false
+      required: [content, based_on]
+      properties:
+        content:
+          $ref: "#/components/schemas/LocalPostContent"
+        based_on:
+          $ref: "#/components/schemas/LocalPostContent"
     LocalPostEditField:
       type: string
       enum: [summary, call_to_action, event, offer, media, language_code]
@@ -7148,10 +7187,13 @@ components:
     LocalPostEdit:
       type: object
       description: |
-        The open edit of a post that is at Google (D-099): the content the
-        post is to have, proposed by a person and not at Google until a
-        person approved it and Google accepted it. Send `content` as it is
-        to approve it.
+        The open edit of a post that is at Google (D-099): a change
+        proposed by a person and not at Google until a person approved it
+        and Google accepted it. `content` is the post as it would say with
+        the edit applied now: the post's content as the engine holds it at
+        this moment, with the edit's `fields` laid over it. A field the
+        edit does not change always shows what the post has now, however
+        long the edit has been open. Send `content` as it is to approve it.
       additionalProperties: false
       required: [content, fields, media, checks, status, status_reason, written_by, written_at, decided_by, decided_at]
       properties:
@@ -7161,9 +7203,9 @@ components:
           type: array
           description: |
             What the edit changes, and all it ever writes at Google: the
-            parts in which `content` differs from the post as it was when
-            the edit was written. Empty: the edit changes nothing and can't
-            be approved.
+            parts in which the content its author sent differed from the
+            post they were looking at. Empty: the edit changes nothing and
+            can't be approved.
           items:
             $ref: "#/components/schemas/LocalPostEditField"
         media:

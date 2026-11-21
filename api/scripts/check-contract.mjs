@@ -258,34 +258,64 @@ try {
     fail("GET /api/local-posts", "no local posts to check; was the seed applied?");
   }
   check("GET /api/local-posts/0", "/api/local-posts/{id}", "GET", await call("GET", "/api/local-posts/0"));
-  // A draft, start to finish, on the first location. Nothing is sent: the approval is refused while posting is off.
-  if (location) {
+  // An approval that is to be refused, and only while posting is off: the switch is read a moment before,
+  // every time, and anything but the expected refusal is a failure. The check never sends anything to Google.
+  const refusedApproval = async (name, specPath, url, body, code) => {
+    const switches = await call("GET", "/api/system/settings");
+    if (switches.json?.posting_enabled !== false) return console.log(`skip  ${name}: the posting switch is on in this database, and the check never sends a post to Google or changes one there`);
+    const approval = await call("POST", url, { body });
+    check(name, specPath, "POST", approval);
+    if (approval.status !== 409 || approval.json?.error?.code !== code) fail(name, `expected the refusal ${code}, got ${approval.status} ${approval.json?.error?.code ?? ""}: the check must never send a post to Google or change one there`);
+  };
+  // A draft, start to finish. Only ever on the location contract-seed.sql adds, under an account that does
+  // not exist: never on a real location, whatever database this runs against. Nothing is sent: each
+  // approval is tried only right after reading that posting is off. The draft is deleted on every way out.
+  const allLocations = await call("GET", "/api/locations?per_page=100");
+  const seededLocation = (allLocations.json?.items ?? []).find((item) => item.gbp_location_id === "contract-location-1" && item.gbp_account_id === "contract-account-1");
+  if (!seededLocation) {
+    if (requireData) fail("POST /api/locations/{id}/local-posts", "the seeded location is missing; was the seed applied?");
+    else console.log("skip  a draft of a local post: this database has no seeded location, and the check writes a draft on no other");
+  } else {
     const content = { topic_type: "standard", summary: "Written by check-contract.mjs.", language_code: "en", call_to_action: null, event: null, offer: null, media_id: null, scheduled_time: null };
-    const draft = await call("POST", `/api/locations/${location.id}/local-posts`, { body: content });
-    check(`POST /api/locations/${location.id}/local-posts`, "/api/locations/{id}/local-posts", "POST", draft);
-    check("POST /api/locations/{id}/local-posts (not a post)", "/api/locations/{id}/local-posts", "POST", await call("POST", `/api/locations/${location.id}/local-posts`, { body: { ...content, topic_type: "alert" } }));
+    const draft = await call("POST", `/api/locations/${seededLocation.id}/local-posts`, { body: content });
+    check(`POST /api/locations/${seededLocation.id}/local-posts`, "/api/locations/{id}/local-posts", "POST", draft);
+    check("POST /api/locations/{id}/local-posts (not a post)", "/api/locations/{id}/local-posts", "POST", await call("POST", `/api/locations/${seededLocation.id}/local-posts`, { body: { ...content, topic_type: "alert" } }));
     if (draft.status === 201) {
       const path = `/api/local-posts/${draft.json.id}`;
-      const edited = { ...content, summary: "Written by check-contract.mjs, then edited.", call_to_action: { action_type: "call", url: null } };
-      check(`PUT ${path}`, "/api/local-posts/{id}", "PUT", await call("PUT", path, { body: edited }));
-      check(`POST ${path}/approve (content changed)`, "/api/local-posts/{id}/approve", "POST", await call("POST", `${path}/approve`, { body: content }));
-      const approval = await call("POST", `${path}/approve`, { body: edited });
-      check(`POST ${path}/approve (posting is off)`, "/api/local-posts/{id}/approve", "POST", approval);
-      if (approval.status !== 409) fail(`POST ${path}/approve`, `expected a refusal while posting is off, got ${approval.status}: the check must never send a post`);
-      check(`POST ${path}/reject`, "/api/local-posts/{id}/reject", "POST", await call("POST", `${path}/reject`, { body: { reason: "Only a check." } }));
-      check(`POST ${path}/reject (again)`, "/api/local-posts/{id}/reject", "POST", await call("POST", `${path}/reject`));
-      check(`PUT ${path} (rejected)`, "/api/local-posts/{id}", "PUT", await call("PUT", path, { body: edited }));
-      // Only the refusal: the check never asks for a post at Google to be deleted.
-      check(`POST ${path}/remove (not at Google)`, "/api/local-posts/{id}/remove", "POST", await call("POST", `${path}/remove`));
-      // A copy of the rejected draft is a new draft (D-094); both are then deleted, which touches nothing at Google.
-      const copy = await call("POST", `${path}/copy`);
-      check(`POST ${path}/copy`, "/api/local-posts/{id}/copy", "POST", copy);
-      if (copy.status === 201) {
-        // The source now lists its copy (D-098).
-        check(`GET ${path} (copied)`, "/api/local-posts/{id}", "GET", await call("GET", path));
-        check(`DELETE /api/local-posts/${copy.json.id} (the copy)`, "/api/local-posts/{id}", "DELETE", await call("DELETE", `/api/local-posts/${copy.json.id}`));
+      let copyPath;
+      try {
+        const edited = { ...content, summary: "Written by check-contract.mjs, then edited.", call_to_action: { action_type: "call", url: null } };
+        const saved = await call("PUT", path, { body: edited });
+        check(`PUT ${path}`, "/api/local-posts/{id}", "PUT", saved);
+        if (saved.status === 200) {
+          // The first content is not the stored content any more; the stored one meets the switch.
+          await refusedApproval(`POST ${path}/approve (content changed)`, "/api/local-posts/{id}/approve", `${path}/approve`, content, "local_post_changed");
+          await refusedApproval(`POST ${path}/approve (posting is off)`, "/api/local-posts/{id}/approve", `${path}/approve`, edited, "posting_disabled");
+        } else {
+          fail(`PUT ${path}`, `expected 200, got ${saved.status}: no approval is tried`);
+        }
+        check(`POST ${path}/reject`, "/api/local-posts/{id}/reject", "POST", await call("POST", `${path}/reject`, { body: { reason: "Only a check." } }));
+        check(`POST ${path}/reject (again)`, "/api/local-posts/{id}/reject", "POST", await call("POST", `${path}/reject`));
+        check(`PUT ${path} (rejected)`, "/api/local-posts/{id}", "PUT", await call("PUT", path, { body: edited }));
+        // Only the refusal: the check never asks for a post at Google to be deleted.
+        check(`POST ${path}/remove (not at Google)`, "/api/local-posts/{id}/remove", "POST", await call("POST", `${path}/remove`));
+        // A copy of the rejected draft is a new draft (D-094); both are then deleted, which touches nothing at Google.
+        const copy = await call("POST", `${path}/copy`);
+        check(`POST ${path}/copy`, "/api/local-posts/{id}/copy", "POST", copy);
+        if (copy.status === 201) {
+          copyPath = `/api/local-posts/${copy.json.id}`;
+          // The source now lists its copy (D-098).
+          check(`GET ${path} (copied)`, "/api/local-posts/{id}", "GET", await call("GET", path));
+        }
+      } finally {
+        // Whatever happened above, no draft of the check's stays behind. (A draft that is not yet rejected is
+        // rejected first; one that was approved against every guard cannot be deleted, and that is reported.)
+        await call("POST", `${path}/reject`, { body: { reason: "Only a check." } });
+        if (copyPath) check(`DELETE ${copyPath} (the copy)`, "/api/local-posts/{id}", "DELETE", await call("DELETE", copyPath));
+        const deleted = await call("DELETE", path);
+        check(`DELETE ${path} (rejected)`, "/api/local-posts/{id}", "DELETE", deleted);
+        if (deleted.status !== 204) fail(`DELETE ${path}`, `the check left its draft behind: ${deleted.status} ${deleted.text.slice(0, 200)}`);
       }
-      check(`DELETE ${path} (rejected)`, "/api/local-posts/{id}", "DELETE", await call("DELETE", path));
       check(`DELETE ${path} (again)`, "/api/local-posts/{id}", "DELETE", await call("DELETE", path));
     }
   }
@@ -310,15 +340,8 @@ try {
   } else {
     const path = `/api/local-posts/${seededPost.id}/edit`;
     const content = Object.fromEntries(["topic_type", "summary", "language_code", "call_to_action", "event", "offer", "media_id", "scheduled_time"].map((name) => [name, seededPost[name]]));
-    // An approval that is to be refused, and only while posting is off: read a moment before, every time.
-    const refusedApproval = async (name, body, code) => {
-      const switches = await call("GET", "/api/system/settings");
-      if (switches.json?.posting_enabled !== false) return console.log(`skip  ${name}: the posting switch is on in this database, and the check never changes a post at Google`);
-      const approval = await call("POST", `${path}/approve`, { body });
-      check(name, "/api/local-posts/{id}/edit/approve", "POST", approval);
-      if (approval.status !== 409 || approval.json?.error?.code !== code) fail(name, `expected the refusal ${code}, got ${approval.status} ${approval.json?.error?.code ?? ""}: the check must never change a post at Google`);
-    };
-    const written = await call("PUT", path, { body: { ...content, summary: "Edited by check-contract.mjs." } });
+    // An edit says what the post should say and what the person was looking at: the post's content as just read.
+    const written = await call("PUT", path, { body: { content: { ...content, summary: "Edited by check-contract.mjs." }, based_on: content } });
     try {
       check(`PUT ${path}`, "/api/local-posts/{id}/edit", "PUT", written);
       // Against the Google mock the answer is the 409 `local_posts_unavailable`, and there is no edit to go on with.
@@ -328,15 +351,19 @@ try {
         check(`GET /api/local-posts/${seededPost.id} (with an edit)`, "/api/local-posts/{id}", "GET", await call("GET", `/api/local-posts/${seededPost.id}`));
         check("GET /api/local-posts (one with an edit)", "/api/local-posts", "GET", await call("GET", "/api/local-posts?per_page=100"));
         // An edit does not change when Google publishes a post: a 400 that names the member.
-        const moved = await call("PUT", path, { body: { ...content, scheduled_time: content.scheduled_time === null ? "2031-01-01T00:00:00Z" : null } });
+        const moved = await call("PUT", path, { body: { content: { ...content, scheduled_time: content.scheduled_time === null ? "2031-01-01T00:00:00Z" : null }, based_on: content } });
         check(`PUT ${path} (another time)`, "/api/local-posts/{id}/edit", "PUT", moved);
         if (moved.status !== 400 || !moved.json?.error?.message?.includes("scheduled_time")) fail(`PUT ${path} (another time)`, `expected a 400 that names scheduled_time, got ${moved.status}: ${moved.text.slice(0, 200)}`);
-        const replaced = await call("PUT", path, { body: { ...content, summary: "Edited by check-contract.mjs, then replaced." } });
+        // Written from a post that is not the post as it is now: refused, and nothing is stored.
+        const stale = await call("PUT", path, { body: { content: { ...content, summary: "Edited by check-contract.mjs, from a stale page." }, based_on: { ...content, summary: "What the post said once." } } });
+        check(`PUT ${path} (the post changed since)`, "/api/local-posts/{id}/edit", "PUT", stale);
+        if (stale.status !== 409 || stale.json?.error?.code !== "local_post_changed") fail(`PUT ${path} (the post changed since)`, `expected the refusal local_post_changed, got ${stale.status}: ${stale.text.slice(0, 200)}`);
+        const replaced = await call("PUT", path, { body: { content: { ...content, summary: "Edited by check-contract.mjs, then replaced." }, based_on: content } });
         check(`PUT ${path} (replaced)`, "/api/local-posts/{id}/edit", "PUT", replaced);
         if (replaced.status === 200) {
           // The content of the edit that was replaced is not the stored edit any more; the stored one meets the switch.
-          await refusedApproval(`POST ${path}/approve (content changed)`, written.json.edit.content, "local_post_changed");
-          await refusedApproval(`POST ${path}/approve (posting is off)`, replaced.json.edit.content, "posting_disabled");
+          await refusedApproval(`POST ${path}/approve (content changed)`, "/api/local-posts/{id}/edit/approve", `${path}/approve`, written.json.edit.content, "local_post_changed");
+          await refusedApproval(`POST ${path}/approve (posting is off)`, "/api/local-posts/{id}/edit/approve", `${path}/approve`, replaced.json.edit.content, "posting_disabled");
         } else {
           fail(`PUT ${path} (replaced)`, `expected 200, got ${replaced.status}: no approval is tried`);
         }
@@ -353,7 +380,8 @@ try {
       check(`GET /api/local-posts/${seededPost.id} (the edit discarded)`, "/api/local-posts/{id}", "GET", await call("GET", `/api/local-posts/${seededPost.id}`));
     }
   }
-  check("PUT /api/local-posts/0/edit", "/api/local-posts/{id}/edit", "PUT", await call("PUT", "/api/local-posts/0/edit", { body: { topic_type: "standard", summary: "Only a check.", language_code: "en", call_to_action: null, event: null, offer: null, media_id: null, scheduled_time: null } }));
+  const onlyACheck = { topic_type: "standard", summary: "Only a check.", language_code: "en", call_to_action: null, event: null, offer: null, media_id: null, scheduled_time: null };
+  check("PUT /api/local-posts/0/edit", "/api/local-posts/{id}/edit", "PUT", await call("PUT", "/api/local-posts/0/edit", { body: { content: onlyACheck, based_on: onlyACheck } }));
   check("DELETE /api/local-posts/0/edit", "/api/local-posts/{id}/edit", "DELETE", await call("DELETE", "/api/local-posts/0/edit"));
   check("POST /api/local-posts/0/edit/approve", "/api/local-posts/{id}/edit/approve", "POST", await call("POST", "/api/local-posts/0/edit/approve", { body: { topic_type: "standard", summary: "Only a check.", language_code: "en", call_to_action: null, event: null, offer: null, media_id: null, scheduled_time: null } }));
   // The help with writing a post. The highlights are counted from the database. The check never asks the
