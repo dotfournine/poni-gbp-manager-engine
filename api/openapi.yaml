@@ -50,9 +50,11 @@ info:
     when a signed-in person approves a draft (`POST
     /api/drafts/{id}/approve`), or by auto-posting where a person switched it
     on for the location. A local post reaches Google only when a signed-in
-    person approves it (`POST /api/local-posts/{id}/approve`). The engine
-    writes nothing else to a profile, and deletes one thing there: a local
-    post, when a signed-in person asks for it (`POST
+    person approves it (`POST /api/local-posts/{id}/approve`), and a post
+    that is at Google is changed there only when a signed-in person
+    approves an edit of it (`POST /api/local-posts/{id}/edit/approve`). The
+    engine writes nothing else to a profile, and deletes one thing there: a
+    local post, when a signed-in person asks for it (`POST
     /api/local-posts/{id}/remove`).
 
     **Errors** the engine produces have the `Error` shape. An unknown path is
@@ -2122,7 +2124,8 @@ paths:
         Replaces the content of a post that is still a `draft`; the body
         carries every field. The checks run again and are stored with it: a
         draft with a failed check is saved but can't be approved. A post
-        that is at Google is never edited: remove it and make a new one.
+        that is at Google is not changed by this route: it gets an edit of
+        its own, which a person approves (`PUT /api/local-posts/{id}/edit`).
       tags: [local-posts]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -2168,6 +2171,160 @@ paths:
       responses:
         "204":
           description: The draft is gone.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/LocalPostConflict"
+
+  /api/local-posts/{id}/edit:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    put:
+      operationId: writeLocalPostEdit
+      summary: Write an edit of a post that is at Google
+      description: |
+        Proposes a change to a post Google has (D-099): the body is the
+        whole content the post is to have. Nothing goes to Google: the edit
+        is kept beside the post as `LocalPost.edit`, a `draft`, until a
+        person approves it (`POST /api/local-posts/{id}/edit/approve`). The
+        post keeps its id, its `google_name`, its history and, until Google
+        has accepted the edit, its content.
+
+        A post has at most one open edit. Sending this again replaces the
+        edit while it is a `draft`, whoever wrote it, and the edit then
+        names the person who sent it last; an edit that is `approved` or
+        `sending` is refused with `local_post_edit_not_open`.
+
+        A post can have an edit when it is `sent`, has a `google_name`, has
+        no removal requested and belongs to a location that is linked to an
+        active client; a post made in Google's own interface can have one
+        too. Otherwise the answer is `local_post_not_editable` or
+        `location_not_synced`. A post that holds what a draft cannot hold
+        (an alert, a button a draft does not have, an event without its
+        dates) is refused with `local_post_not_editable` as well: an edit
+        could not say how to keep that part.
+
+        An edit changes what the post says and shows, not what kind of post
+        it is or when Google publishes it: a `topic_type`, a
+        `scheduled_time` or an `event.recurrence` other than the post's is a
+        400 that names the member. To change those, copy the post and
+        remove it.
+
+        `media_id` names an upload. The post's own (`LocalPost.media_id`)
+        keeps the photo or video as it is, another one replaces it, and
+        null takes the post's upload away. A post made at Google has no
+        upload: null leaves what it shows at Google untouched.
+
+        The content is normalized and checked as a draft's is, and the
+        checks are stored with the edit: an edit with a failed check is
+        saved but can't be approved. Two checks always pass for an edit,
+        because an edit does not send what they are about:
+        `scheduled_in_future` and `recurrence_end`. `media_usable` looks at
+        an upload only when it is not the post's own.
+      tags: [local-posts]
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LocalPostContent"
+      responses:
+        "200":
+          description: The post, with the edit as `edit`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LocalPost"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/LocalPostConflict"
+    delete:
+      operationId: discardLocalPostEdit
+      summary: Discard an edit
+      description: |
+        Discards the post's edit while it is a `draft`; the audit entry
+        keeps its content. Nothing at Google is touched and the post stays
+        as it is. An edit that is `approved` or `sending`, and a post
+        without an edit, are refused with `local_post_edit_not_open`.
+      tags: [local-posts]
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "204":
+          description: The edit is gone; the post is as it was.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/LocalPostConflict"
+
+  /api/local-posts/{id}/edit/approve:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: approveLocalPostEdit
+      summary: Approve an edit and send it to Google
+      description: |
+        The only way a post that is at Google is changed there (D-099). The
+        body carries the edit's content as the person read it
+        (`LocalPost.edit.content`); it must equal the stored edit, so nobody
+        approves a change they haven't seen. The edit becomes `approved` and
+        a job sends it at once: it reads the post from Google, and sends one
+        request that names exactly the parts in which the edit differs from
+        what Google has (the text, the button, the event, the offer, the
+        photo or video, the language). Refused while a posting switch is
+        off, while a check fails, and for an edit that changes nothing
+        (`local_post_edit_unchanged`).
+
+        When Google accepts, the post takes what Google answered,
+        `edited_by` and `edited_at` name the edit's author and the moment,
+        and `edit` is null again. `google_state` then says what Google does
+        with the changed post.
+
+        When Google refuses, the post is as it was and the edit is a
+        `draft` again with Google's message in its `status_reason`. When
+        the outcome is not known (a timeout, a 5xx), the request is not sent
+        again: the edit is a `draft` again and its `status_reason` says that
+        the post may or may not have changed. Read the post from Google
+        (`POST /api/locations/{id}/local-posts/refresh`) to see what it says
+        now; approving the edit again is safe. An approval that could not be
+        carried out (a switch turned off meanwhile, the post removed, a
+        removal requested, not within 30 minutes) leaves the edit a `draft`
+        with the reason; nothing is sent later by itself.
+      tags: [local-posts]
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LocalPostContent"
+      responses:
+        "202":
+          description: The post; its edit was approved and queued for sending.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LocalPost"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
@@ -3278,6 +3435,17 @@ components:
         `too_few_reviews`: fewer than 10 analysed reviews in the last 90
         days, so no ideas are asked for. `local_posts_unavailable`: the
         engine runs against the Google mock, which has no posts.
+
+        About an edit of a post that is at Google (D-099).
+        `local_post_not_editable`: the post can't have an edit (it is not
+        `sent`, has no name at Google, its removal was requested, or it
+        holds what a draft cannot hold). `local_post_edit_not_open`: the
+        post has no edit that is a `draft` (none at all, or one that is
+        `approved` or `sending`). `local_post_edit_unchanged`: the edit says
+        what the post already says, so there is nothing to send.
+        `local_post_changed`, for an approval of an edit: the content sent
+        is not the stored edit, or the post's kind, time or repeat at Google
+        is no longer what the edit says.
       content:
         application/json:
           schema:
@@ -5705,6 +5873,15 @@ components:
           used). The post may still be on the profile. `location_id`, `local_post_id`.
         - `Google rejected a post`: Google took a local post and now shows
           it as rejected. `location_id`, `local_post_id`.
+        - `A post could not be edited`: an approved edit of a post at Google
+          was not made, for certain: Google refused it, or the post could
+          not be read from Google first and the job is out of attempts. The
+          post is as it was and the edit is a draft again. `location_id`,
+          `local_post_id`.
+        - `An edit of a post may or may not have reached Google`: an
+          approved edit was sent and Google did not confirm it, or the
+          engine stopped while sending it. It is not sent again; the post
+          may or may not have changed. `location_id`, `local_post_id`.
 
         New problems are added to this list, and a client shows a subject
         it does not know as it is.
@@ -6932,6 +7109,52 @@ components:
           format: int64
         status:
           $ref: "#/components/schemas/LocalPostStatus"
+    LocalPostEditStatus:
+      type: string
+      enum: [draft, approved, sending]
+      description: |
+        Where an edit of a post at Google stands (D-099). `draft`: waiting
+        for a person; also an edit that came back, with the reason in its
+        `status_reason`. `approved`: a person approved the content and the
+        job has not started. `sending`: the request is being sent. An edit
+        Google accepted is no longer there: the post has its content.
+    LocalPostEdit:
+      type: object
+      description: |
+        The open edit of a post that is at Google (D-099): the content the
+        post is to have, proposed by a person and not at Google until a
+        person approved it and Google accepted it. Send `content` as it is
+        to approve it.
+      additionalProperties: false
+      required: [content, checks, status, status_reason, written_by, written_at, decided_by, decided_at]
+      properties:
+        content:
+          $ref: "#/components/schemas/LocalPostContent"
+        checks:
+          type: array
+          description: The checks on the edit's content as of its last change (see `PUT /api/local-posts/{id}/edit` for the three that differ from a draft's).
+          items:
+            $ref: "#/components/schemas/CheckResult"
+        status:
+          $ref: "#/components/schemas/LocalPostEditStatus"
+        status_reason:
+          type: [string, "null"]
+          description: |
+            Why the edit is a draft again, when it came back: Google's
+            message for an edit it refused, that Google did not confirm it,
+            or why the approval was not carried out.
+        written_by:
+          type: string
+          description: The email of the person who wrote the edit, or replaced it last.
+        written_at:
+          type: string
+          format: date-time
+        decided_by:
+          type: [string, "null"]
+          description: The email of the person who approved the edit last; null until someone has, and again after the edit was replaced.
+        decided_at:
+          type: [string, "null"]
+          format: date-time
     LocalPostOrigin:
       type: string
       enum: [system, google]
@@ -7109,6 +7332,7 @@ components:
         - checks
         - copied_from_id
         - copies
+        - edit
         - created_by
         - edited_by
         - edited_at
@@ -7207,15 +7431,27 @@ components:
             is now; empty when there are none. A copy that is deleted leaves the list.
           items:
             $ref: "#/components/schemas/LocalPostCopy"
+        edit:
+          description: |
+            The open edit of a post that is at Google (D-099), or null. While
+            there is one, nobody starts another: a second person reads this
+            one, replaces it while it is a `draft`, or waits. The content
+            members of the post itself stay what Google has.
+          oneOf:
+            - $ref: "#/components/schemas/LocalPostEdit"
+            - type: "null"
         created_by:
           type: [string, "null"]
           description: The email of the person who wrote the draft; null for a post made at Google.
         edited_by:
           type: [string, "null"]
-          description: The email of the person who last edited the draft.
+          description: |
+            The email of the person who last edited the draft or, once Google
+            has accepted an edit of the post, of the person who wrote that edit.
         edited_at:
           type: [string, "null"]
           format: date-time
+          description: When the draft was last edited or, for an edit of a post at Google, when Google accepted it.
         decided_by:
           type: [string, "null"]
           description: The email of the person who approved or rejected the draft.
