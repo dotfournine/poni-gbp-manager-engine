@@ -176,6 +176,11 @@ bool is_post_language_tag(std::string_view tag);
 // the same six (http::kLocalPostUpdateFields).
 inline constexpr std::array<std::string_view, 6> kLocalPostEditFields{"summary", "callToAction", "event",
                                                                       "offer",   "media",        "languageCode"};
+// The same six, in the same order, by the API's names: what LocalPostEdit.fields lists.
+inline constexpr std::array<std::string_view, 6> kLocalPostEditMembers{"summary", "call_to_action", "event",
+                                                                       "offer",   "media",          "language_code"};
+// The API's name of a field given by Google's ("callToAction" -> "call_to_action"); empty for a name that is none of the six.
+std::string_view edit_member(std::string_view field);
 
 // Why there is no mask for an edit.
 struct EditObstacle {
@@ -188,6 +193,10 @@ struct EditObstacle {
         // The edit differs from the post in a part an edit does not change.
         // `member` names it: "topic_type", "scheduled_time" or "event.recurrence".
         fixed_part,
+        // Only from local_post_edit_request: the post changed at Google since
+        // the edit was written, in a part the edit would write over or in one
+        // an edit does not change. `member` names it by the API's name.
+        changed_at_google,
     };
     Kind kind = Kind::not_editable;
     std::string member;
@@ -195,13 +204,13 @@ struct EditObstacle {
     std::string message;
 };
 
-// What an edit changes at Google: the fields, out of kLocalPostEditFields
-// and in that order, in which `edit` differs from the post as Google has it
-// now. `at_google` is the post's content as the engine holds it (what
-// Google returned, and in `media_id` the upload the engine knows the post
-// carries); `edit` has been through normalize_local_post. The two are
-// compared as a draft would hold them, so space around a text is no
-// difference. An empty mask: the edit says what the post already says.
+// What an edit changes: the fields, out of kLocalPostEditFields and in that
+// order, in which `edit` differs from `post`, the post's content as the
+// engine held it when the edit was written (what Google returned, and in
+// `media_id` the upload the engine knows the post carries). `edit` has been
+// through normalize_local_post. The two are compared as a draft would hold
+// them, so space around a text is no difference. An empty mask: the edit
+// says what the post says.
 //
 // "media" is named only when the two name different uploads: an edit with
 // an upload other than the post's, or with none where the post has one. A
@@ -213,7 +222,23 @@ struct EditObstacle {
 // neither has an edit of a post the engine cannot hold as a draft
 // (not_editable), so that no mask ever names a field whose content at
 // Google the engine could not write back.
-std::expected<std::vector<std::string_view>, EditObstacle> local_post_edit_mask(const LocalPostContent& at_google,
-                                                                              const LocalPostContent& edit);
+std::expected<std::vector<std::string_view>, EditObstacle> local_post_edit_mask(const LocalPostContent& post, const LocalPostContent& edit);
+
+// What an approved edit sends: the mask of the one PATCH. `base` is the
+// post's content the edit was written against, `at_google` the post as
+// Google has it now. An edit never writes a field its author did not change,
+// so only the fields of local_post_edit_mask(base, edit) are looked at, and
+// for each of them:
+//   - Google has the edit's value already: not named, there is nothing to change;
+//   - Google's value is neither the edit's nor the base's: that same field
+//     was changed at Google since the edit was written, and the edit would
+//     write over a change its author never saw. No mask (changed_at_google);
+//   - otherwise it is named.
+// A field the edit does not change is never named, whatever Google holds
+// now. An empty mask: Google has everything the edit changes. The post's
+// kind, time and repeat must still be the edit's (changed_at_google if not),
+// and the post still content a draft can hold (not_editable).
+std::expected<std::vector<std::string_view>, EditObstacle> local_post_edit_request(const LocalPostContent& base, const LocalPostContent& edit,
+                                                                                 const LocalPostContent& at_google);
 
 }  // namespace poni::domain

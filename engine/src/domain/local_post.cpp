@@ -8,6 +8,7 @@
 #include <array>
 #include <chrono>
 #include <format>
+#include <utility>
 
 namespace poni::domain {
 
@@ -274,34 +275,83 @@ std::optional<std::string> contact_detail_in(std::string_view text) {
     return std::nullopt;
 }
 
-std::expected<std::vector<std::string_view>, EditObstacle> local_post_edit_mask(const LocalPostContent& at_google,
-                                                                              const LocalPostContent& edit) {
-    using Kind = EditObstacle::Kind;
-    // The post as a draft would hold it. What a draft cannot hold has no place in an edit either.
-    const auto current = normalize_local_post(at_google);
-    if (!current) {
-        return std::unexpected(EditObstacle{
-            Kind::not_editable, {}, std::format("The post holds what a draft cannot hold, so it cannot be edited here. {}", current.error())});
-    }
-    const auto fixed = [](std::string_view member, std::string_view what) {
-        return std::unexpected(EditObstacle{
-            Kind::fixed_part, std::string(member),
-            std::format("\"{}\" is not the post's: an edit does not change {}. To change it, copy the post and remove it.", member, what)});
-    };
-    if (edit.topic_type != current->topic_type) return fixed("topic_type", "the kind of a post");
-    if (edit.scheduled_time != current->scheduled_time) return fixed("scheduled_time", "the time Google publishes a post at");
-    const auto repeat = [](const LocalPostContent& c) { return c.event ? c.event->recurrence : std::optional<LocalPostRecurrence>{}; };
-    if (repeat(edit) != repeat(*current)) return fixed("event.recurrence", "how a post repeats");
+namespace {
 
-    const std::array<bool, 6> differs{edit.summary != current->summary,
-                                      edit.call_to_action != current->call_to_action,
-                                      edit.event != current->event,
-                                      edit.offer != current->offer,
-                                      edit.media_id != current->media_id,
-                                      edit.language_code != current->language_code};
+// The post as a draft would hold it. What a draft cannot hold has no place in an edit either.
+std::expected<LocalPostContent, EditObstacle> as_a_draft_holds(const LocalPostContent& post) {
+    auto held = normalize_local_post(post);
+    if (!held) {
+        return std::unexpected(EditObstacle{EditObstacle::Kind::not_editable,
+                                            {},
+                                            std::format("The post holds what a draft cannot hold, so it cannot be edited here. {}", held.error())});
+    }
+    return std::move(*held);
+}
+
+// The part an edit does not change in which the two differ, with what it is; nothing if in none.
+std::optional<std::pair<std::string_view, std::string_view>> fixed_difference(const LocalPostContent& a, const LocalPostContent& b) {
+    if (a.topic_type != b.topic_type) return std::pair{std::string_view("topic_type"), std::string_view("the kind of a post")};
+    if (a.scheduled_time != b.scheduled_time) {
+        return std::pair{std::string_view("scheduled_time"), std::string_view("the time Google publishes a post at")};
+    }
+    const auto repeat = [](const LocalPostContent& c) { return c.event ? c.event->recurrence : std::optional<LocalPostRecurrence>{}; };
+    if (repeat(a) != repeat(b)) return std::pair{std::string_view("event.recurrence"), std::string_view("how a post repeats")};
+    return std::nullopt;
+}
+
+// Which of the six fields differ between two contents a draft can hold, in the order of kLocalPostEditFields.
+std::array<bool, 6> differing(const LocalPostContent& a, const LocalPostContent& b) {
+    return {a.summary != b.summary, a.call_to_action != b.call_to_action, a.event != b.event,
+            a.offer != b.offer,     a.media_id != b.media_id,             a.language_code != b.language_code};
+}
+
+}  // namespace
+
+std::string_view edit_member(std::string_view field) {
+    const auto found = std::ranges::find(kLocalPostEditFields, field);
+    if (found == kLocalPostEditFields.end()) return {};
+    return kLocalPostEditMembers[static_cast<std::size_t>(found - kLocalPostEditFields.begin())];
+}
+
+std::expected<std::vector<std::string_view>, EditObstacle> local_post_edit_mask(const LocalPostContent& post, const LocalPostContent& edit) {
+    const auto held = as_a_draft_holds(post);
+    if (!held) return std::unexpected(held.error());
+    if (const auto fixed = fixed_difference(edit, *held)) {
+        return std::unexpected(EditObstacle{
+            EditObstacle::Kind::fixed_part, std::string(fixed->first),
+            std::format("\"{}\" is not the post's: an edit does not change {}. To change it, copy the post and remove it.", fixed->first,
+                        fixed->second)});
+    }
+    const auto differs = differing(*held, edit);
     std::vector<std::string_view> mask;
     for (std::size_t i = 0; i < differs.size(); ++i) {
         if (differs[i]) mask.push_back(kLocalPostEditFields[i]);
+    }
+    return mask;
+}
+
+std::expected<std::vector<std::string_view>, EditObstacle> local_post_edit_request(const LocalPostContent& base, const LocalPostContent& edit,
+                                                                                 const LocalPostContent& at_google) {
+    const auto now = as_a_draft_holds(at_google);
+    if (!now) return std::unexpected(now.error());
+    const auto then = as_a_draft_holds(base);
+    if (!then) return std::unexpected(then.error());
+    const auto changed_there = [](std::string_view member, std::string_view how) {
+        return std::unexpected(EditObstacle{EditObstacle::Kind::changed_at_google, std::string(member),
+                                            std::format("The post changed at Google after the edit was written: its \"{}\" {}. Nothing is sent. "
+                                                        "Look at the post as it is now and save the edit again.",
+                                                        member, how)});
+    };
+    if (const auto fixed = fixed_difference(edit, *now)) return changed_there(fixed->first, "is no longer what the edit was written for");
+
+    const auto changes = differing(*then, edit);     // what the edit's author changed
+    const auto to_write = differing(*now, edit);     // where Google does not have the edit's value
+    const auto moved = differing(*now, *then);       // what changed at Google since the edit was written
+    std::vector<std::string_view> mask;
+    for (std::size_t i = 0; i < changes.size(); ++i) {
+        if (!changes[i] || !to_write[i]) continue;
+        if (moved[i]) return changed_there(kLocalPostEditMembers[i], "was changed there, and the edit would write over that change");
+        mask.push_back(kLocalPostEditFields[i]);
     }
     return mask;
 }

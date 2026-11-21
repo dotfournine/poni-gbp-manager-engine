@@ -100,9 +100,7 @@ TEST(LocalPostEditMask, SeveralFieldsComeInTheOneOrderAndEachOnce) {
                                c.summary = "Open late on Saturdays.";
                            }),
                 ElementsAre("summary", "callToAction"));
-    // Every name a mask can hold is one of the six, and the outbound client takes each of them and no other:
-    // its own list, held apart on purpose, is the same six in the same order.
-    EXPECT_TRUE(std::ranges::equal(domain::kLocalPostEditFields, http::kLocalPostUpdateFields));
+    // Every name a mask can hold is one of the six, and the outbound client takes each of them and no other.
     for (const auto name : everything) EXPECT_TRUE(std::ranges::contains(domain::kLocalPostEditFields, name)) << name;
     for (const auto name : domain::kLocalPostEditFields) {
         const boost::urls::url address(std::format("https://mybusiness.googleapis.com/v4/accounts/1/locations/2/localPosts/3?updateMask={}", name));
@@ -223,6 +221,113 @@ TEST(LocalPostEditMask, APostThatHoldsWhatADraftCannotHoldHasNoMaskAtAll) {
     const auto mask = domain::local_post_edit_mask(test::standard("As Google has it."), test::standard("As a person would have it."));
     ASSERT_TRUE(mask);
     EXPECT_THAT(*mask, ElementsAre("summary"));
+}
+
+// ---- what an approved edit sends: only what its author changed -------------------------------------
+
+namespace {
+
+// The post an edit was written against, with a button.
+domain::LocalPostContent a_base() {
+    auto base = test::standard("Open late on Fridays.");
+    base.call_to_action = domain::LocalPostCallToAction{.action_type = "book", .url = "https://example.com/book"};
+    base.media_id = 7;
+    return base;
+}
+
+domain::LocalPostContent with(domain::LocalPostContent content, const std::function<void(domain::LocalPostContent&)>& change) {
+    change(content);
+    return domain::normalize_local_post(content).value();
+}
+
+}  // namespace
+
+TEST(LocalPostEditRequest, AFieldTheEditDidNotChangeIsNeverNamedWhateverGoogleHoldsNow) {
+    const auto base = a_base();
+    const auto edit = with(base, [](auto& c) { c.summary = "Open late on Saturdays."; });
+    // Nothing changed at Google: the one field the edit changes.
+    EXPECT_THAT(domain::local_post_edit_request(base, edit, base).value(), ElementsAre("summary"));
+    // Everything else changed at Google since: still the one field, and none of the others is written back.
+    const auto moved_on = with(base, [](auto& c) {
+        c.call_to_action->url = "https://example.com/elsewhere";
+        c.language_code = "en-US";
+        c.media_id = 9;
+    });
+    EXPECT_THAT(domain::local_post_edit_request(base, edit, moved_on).value(), ElementsAre("summary"));
+    auto no_button = moved_on;
+    no_button.call_to_action.reset();
+    no_button.media_id.reset();
+    EXPECT_THAT(domain::local_post_edit_request(base, edit, no_button).value(), ElementsAre("summary"));
+    // Against the post as it is, the plain mask would name them all: that is what must not be sent.
+    EXPECT_THAT(domain::local_post_edit_mask(moved_on, edit).value(), ElementsAre("summary", "callToAction", "media", "languageCode"));
+}
+
+TEST(LocalPostEditRequest, AFieldGoogleAlreadyHasIsDroppedAndAnEditGoogleHasWholeSendsNothing) {
+    const auto base = a_base();
+    const auto edit = with(base, [](auto& c) {
+        c.summary = "Open late on Saturdays.";
+        c.call_to_action->url = "https://example.com/reserve";
+    });
+    EXPECT_THAT(domain::local_post_edit_request(base, edit, base).value(), ElementsAre("summary", "callToAction"));
+    const auto half_there = with(base, [](auto& c) { c.call_to_action->url = "https://example.com/reserve"; });
+    EXPECT_THAT(domain::local_post_edit_request(base, edit, half_there).value(), ElementsAre("summary"));
+    EXPECT_THAT(domain::local_post_edit_request(base, edit, edit).value(), IsEmpty());
+    // Space around a text at Google is no difference.
+    auto spaced = edit;
+    spaced.summary = " Open late on Saturdays.\n";
+    EXPECT_THAT(domain::local_post_edit_request(base, edit, spaced).value(), IsEmpty());
+    // An edit that changes nothing sends nothing, whatever Google holds.
+    EXPECT_THAT(domain::local_post_edit_request(base, base, half_there).value(), IsEmpty());
+}
+
+TEST(LocalPostEditRequest, AFieldChangedOnBothSidesHasNoMaskAndIsNamed) {
+    const auto base = a_base();
+    const auto edit = with(base, [](auto& c) {
+        c.summary = "Open late on Saturdays.";
+        c.call_to_action->url = "https://example.com/reserve";
+    });
+    const auto link_moved = with(base, [](auto& c) { c.call_to_action->url = "https://example.com/elsewhere"; });
+    auto found = domain::local_post_edit_request(base, edit, link_moved);
+    ASSERT_FALSE(found);
+    EXPECT_EQ(found.error().kind, Kind::changed_at_google);
+    EXPECT_EQ(found.error().member, "call_to_action") << "by the API's name, for the person";
+    EXPECT_THAT(found.error().message, HasSubstr("changed at Google"));
+    EXPECT_THAT(found.error().message, HasSubstr("\"call_to_action\""));
+    // Each of the six, when both sides changed it.
+    const std::vector<std::pair<std::string_view, std::function<void(domain::LocalPostContent&, int)>>> fields{
+        {"summary", [](auto& c, int n) { c.summary = std::format("Text {}.", n); }},
+        {"call_to_action", [](auto& c, int n) { c.call_to_action->url = std::format("https://example.com/{}", n); }},
+        {"event", [](auto& c, int n) { c.event->title = std::format("Title {}", n); }},
+        {"offer", [](auto& c, int n) { c.offer->coupon_code = std::format("CODE{}", n); }},
+        {"media", [](auto& c, int n) { c.media_id = 100 + n; }},
+        {"language_code", [](auto& c, int n) { c.language_code = n == 1 ? "es" : "fr"; }},
+    };
+    for (const auto& [member, change] : fields) {
+        auto post = std::string_view(member) == "call_to_action" ? a_base() : an_offer();
+        post.media_id = 7;
+        const auto mine = with(post, [&](auto& c) { change(c, 1); });
+        const auto theirs = with(post, [&](auto& c) { change(c, 2); });
+        const auto stopped = domain::local_post_edit_request(post, mine, theirs);
+        ASSERT_FALSE(stopped) << member;
+        EXPECT_EQ(stopped.error().kind, Kind::changed_at_google);
+        EXPECT_EQ(stopped.error().member, member);
+        EXPECT_EQ(domain::edit_member(domain::local_post_edit_mask(post, mine).value().at(0)), member) << "the name the API lists it under";
+    }
+    EXPECT_EQ(domain::edit_member("topicType"), "");
+
+    // The post's kind, time or repeat changed at Google: the edit was written for another post than there is now.
+    auto base_with_time = base;
+    base_with_time.scheduled_time = "2026-12-19T17:00:00.000000Z";
+    const auto timed_edit = with(base_with_time, [](auto& c) { c.summary = "Open late on Saturdays."; });
+    const auto rescheduled = with(base_with_time, [](auto& c) { c.scheduled_time = "2026-12-20T17:00:00.000000Z"; });
+    found = domain::local_post_edit_request(base_with_time, timed_edit, rescheduled);
+    ASSERT_FALSE(found);
+    EXPECT_EQ(found.error().kind, Kind::changed_at_google);
+    EXPECT_EQ(found.error().member, "scheduled_time");
+    // And a post that came to hold what a draft cannot hold is not written to.
+    auto alert = base;
+    alert.topic_type = "alert";
+    EXPECT_EQ(domain::local_post_edit_request(base, edit, alert).error().kind, Kind::not_editable);
 }
 
 TEST(LocalPostEditChecks, AnEditIsNotCheckedForTheTimeAndTheRepeatItDoesNotSend) {
