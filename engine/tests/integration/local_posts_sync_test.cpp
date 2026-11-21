@@ -199,10 +199,22 @@ TEST_F(LocalPostsSync, AListThatCannotBeReadChangesNothingAndIsShown) {
         return value<std::string>(std::format("SELECT coalesce(local_posts_sync_error, '') FROM locations WHERE id = {}", spa_));
     };
     EXPECT_THAT(error(), HasSubstr("503"));
+    // The app waits for a read it asked for by this time (the contract says so): a read that fails the same way moves it.
+    const auto error_at = [&] {
+        return value<std::string>(std::format(
+            "SELECT coalesce(to_char(local_posts_sync_error_at AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS\"Z\"'), '') FROM locations WHERE id = {}",
+            spa_));
+    };
+    EXPECT_EQ(error_at(), at(clock_.now()));
+    clock_.advance(5min);
+    EXPECT_THROW(sync(spa_), std::runtime_error);
+    EXPECT_THAT(error(), HasSubstr("503")) << "the same message as before";
+    EXPECT_EQ(error_at(), at(clock_.now())) << "and the time still says that this read ended";
 
     google_.fail_list.reset();
     sync(spa_);
     EXPECT_EQ(error(), "") << "a read that worked clears the error";
+    EXPECT_EQ(error_at(), "") << "and the time of the failure";
 
     // A location that is no longer linked is not read at all.
     exec(std::format("UPDATE locations SET client_id = NULL WHERE id = {}", buffet_));

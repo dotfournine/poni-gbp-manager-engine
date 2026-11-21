@@ -213,6 +213,11 @@ TEST_F(Reports, AReportCountsTheReviewsOfItsPeriodInTheClientsTimeZone) {
     const auto listed = read(std::format("/api/reports?client_id={}", spa_client_));
     ASSERT_EQ(listed.at("total").as_int64(), 1);
     EXPECT_EQ(listed.at("items").at(0).at("new_reviews").as_int64(), 4);
+    // The two headline figures are the ones the built report holds, read from its data, in the list and when one is read.
+    EXPECT_DOUBLE_EQ(listed.at("items").at(0).at("average_rating").to_number<double>(), 3.75);
+    EXPECT_DOUBLE_EQ(listed.at("items").at(0).at("response_rate").to_number<double>(), 0.25);
+    EXPECT_DOUBLE_EQ(report(id).at("average_rating").to_number<double>(), 3.75);
+    EXPECT_DOUBLE_EQ(report(id).at("response_rate").to_number<double>(), 0.25);
     EXPECT_EQ(listed.at("items").at(0).at("requested_by").as_string(), "staff@xvisionmediaus.com");
     EXPECT_EQ(count("audit_log WHERE action = 'report.create' AND actor = 'staff@xvisionmediaus.com'"), 1);
 }
@@ -282,12 +287,31 @@ TEST_F(Reports, AClientWithoutAnyReviewGetsAReportThatSaysSo) {
     const auto d = data(id);
     EXPECT_EQ(d.at("reviews").at("new_reviews").as_int64(), 0);
     EXPECT_TRUE(d.at("reviews").at("average_rating").is_null());
+    // A period without reviews has a count and no figures: null, not zero.
+    EXPECT_EQ(report(id).at("new_reviews").as_int64(), 0);
+    EXPECT_TRUE(report(id).at("average_rating").is_null());
+    EXPECT_TRUE(report(id).at("response_rate").is_null());
     EXPECT_TRUE(d.at("running_average").is_null());
     EXPECT_FALSE(d.at("visibility").at("available").as_bool());
     EXPECT_THAT(html(id), HasSubstr("No new reviews in this period."));
     // Nothing to summarize, so the model was not asked.
     EXPECT_EQ(llm_.calls("summary"), 0u);
     EXPECT_TRUE(report(id).at("summary").is_null());
+}
+
+TEST_F(Reports, AReportStillBuildingHasNoFigures) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely head spa", "2026-10-05T17:00:00Z");
+    const auto response = post(std::format("/api/clients/{}/reports", spa_client_), R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})");
+    ASSERT_EQ(response.status, 201u) << response.body;
+    const auto made = json(response);
+    EXPECT_EQ(made.at("status").as_string(), "building");
+    for (const auto* member : {"new_reviews", "average_rating", "response_rate", "summary"}) {
+        EXPECT_TRUE(made.at(member).is_null()) << member;
+    }
+    run_jobs();
+    EXPECT_EQ(report(made.at("id").as_int64()).at("new_reviews").as_int64(), 1);
+    EXPECT_DOUBLE_EQ(report(made.at("id").as_int64()).at("average_rating").to_number<double>(), 5.0);
+    EXPECT_DOUBLE_EQ(report(made.at("id").as_int64()).at("response_rate").to_number<double>(), 1.0);
 }
 
 TEST_F(Reports, VisibilityComesFromGoogleWhenTheReportIsBuilt) {

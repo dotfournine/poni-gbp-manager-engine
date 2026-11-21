@@ -85,7 +85,7 @@ std::optional<std::vector<std::string>> clean_recipients(const std::vector<std::
 }
 
 std::string delivery_select() {
-    return std::format("SELECT d.id, d.event_type, d.client_id, c.name AS client_name, d.location_id, d.review_id, "
+    return std::format("SELECT d.id, d.event_type, d.client_id, c.name AS client_name, d.location_id, d.review_id, d.escalation_id, "
                        "d.channel, d.recipient, d.subject, d.body, d.status, d.status_reason, d.attempts, {} AS created_at, "
                        "{} AS sent_at "
                        "FROM notification_deliveries d LEFT JOIN clients c ON c.id = d.client_id",
@@ -277,6 +277,7 @@ model::NotificationDeliveryList list_deliveries(pqxx::transaction_base& tx, cons
     db::Conditions where;
     if (!filter.event_type.empty()) where.add(std::format("d.event_type = {}", where.bind(filter.event_type)));
     if (!filter.status.empty()) where.add(std::format("d.status = {}", where.bind(filter.status)));
+    if (filter.escalation_id) where.add(std::format("d.escalation_id = {}", where.bind(*filter.escalation_id)));
     return db::page<model::NotificationDelivery>(tx, delivery_select(), where, "d.created_at DESC, d.id DESC", filter.page);
 }
 
