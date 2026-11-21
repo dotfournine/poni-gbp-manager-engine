@@ -223,16 +223,27 @@ try {
   // Locations and reviews exist only after a sync (or the CI seed).
   const locations = await call("GET", "/api/locations?per_page=1");
   const location = locations.json?.items?.[0];
+  // The location contract-seed.sql adds, under an account that does not exist. Whatever the check changes or
+  // queues about a location, it does to this one and to no other: run by hand, the database may hold real ones.
+  const allLocations = await call("GET", "/api/locations?per_page=100");
+  const seededLocation = (allLocations.json?.items ?? []).find((item) => item.gbp_location_id === "contract-location-1" && item.gbp_account_id === "contract-account-1");
   if (location) {
     const path = `/api/locations/${location.id}`;
     check(`GET ${path}`, "/api/locations/{id}", "GET", await call("GET", path));
-    check(`PATCH ${path} (no change)`, "/api/locations/{id}", "PATCH", await call("PATCH", path, { body: {} }));
-    // Queues a read of the location's posts. Without a GBP account connected the job reads nothing and says so.
-    check(`POST ${path}/local-posts/refresh`, "/api/locations/{id}/local-posts/refresh", "POST", await call("POST", `${path}/local-posts/refresh`));
   } else if (requireData) {
     fail("GET /api/locations", "no location to check; was the seed applied?");
   } else {
     console.log("skip  location endpoints: no locations in this database");
+  }
+  if (seededLocation) {
+    const path = `/api/locations/${seededLocation.id}`;
+    check(`PATCH ${path} (no change)`, "/api/locations/{id}", "PATCH", await call("PATCH", path, { body: {} }));
+    // Queues a read of the location's posts. Its account does not exist, so the job reads nothing and says so.
+    check(`POST ${path}/local-posts/refresh`, "/api/locations/{id}/local-posts/refresh", "POST", await call("POST", `${path}/local-posts/refresh`));
+  } else if (requireData) {
+    fail("PATCH /api/locations/{id}", "the seeded location is missing; was the seed applied?");
+  } else {
+    console.log("skip  a location's PATCH and the read of its posts: this database has no seeded location, and the check changes no other");
   }
   // Local posts (Phase 6): the list with its filters, and each post's page.
   for (const filter of [
@@ -270,8 +281,6 @@ try {
   // A draft, start to finish. Only ever on the location contract-seed.sql adds, under an account that does
   // not exist: never on a real location, whatever database this runs against. Nothing is sent: each
   // approval is tried only right after reading that posting is off. The draft is deleted on every way out.
-  const allLocations = await call("GET", "/api/locations?per_page=100");
-  const seededLocation = (allLocations.json?.items ?? []).find((item) => item.gbp_location_id === "contract-location-1" && item.gbp_account_id === "contract-account-1");
   if (!seededLocation) {
     if (requireData) fail("POST /api/locations/{id}/local-posts", "the seeded location is missing; was the seed applied?");
     else console.log("skip  a draft of a local post: this database has no seeded location, and the check writes a draft on no other");
@@ -453,9 +462,11 @@ try {
 
   // A location's reply settings (D-093): its own complete voice, localization and policy. A save sends all of
   // them; here they are read, saved back as they are, saved with a change, and put back. Only a location that
-  // is linked to a client has settings.
+  // is linked to a client has settings, and only the seeded location's are saved: between the change and the
+  // putting back, a real location's replies would be drafted under the check's name, and a go-live test
+  // running there would be cancelled and started again (D-077).
   const settingsSpec = "/api/locations/{id}/reply-settings";
-  const linked = (await call("GET", "/api/locations?linked=true&per_page=1")).json?.items?.[0];
+  const linked = seededLocation?.client_id ? seededLocation : undefined;
   if (linked) {
     const path = `/api/locations/${linked.id}/reply-settings`;
     const stored = await call("GET", path);
@@ -478,9 +489,9 @@ try {
       fail(`GET ${path}`, `a linked location has reply settings, got ${stored.status}: ${stored.text.slice(0, 200)}`);
     }
   } else if (requireData) {
-    fail(`PUT ${settingsSpec}`, "no linked location whose settings to save; was the seed applied?");
+    fail(`PUT ${settingsSpec}`, "the seeded location is missing or not linked, so there are no settings to save; was the seed applied?");
   } else {
-    console.log("skip  reply settings: no location is linked to a client in this database");
+    console.log("skip  reply settings: this database has no seeded location linked to a client, and the check saves no other location's settings");
   }
   expectStatus("GET /api/locations/999999999/reply-settings", await call("GET", "/api/locations/999999999/reply-settings"), 404, "not_found");
   if (created.status === 201) {
