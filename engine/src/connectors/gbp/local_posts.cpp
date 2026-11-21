@@ -63,21 +63,43 @@ std::optional<LocalPostName> parse_local_post_name(std::string_view name) {
     return LocalPostName{std::string((*ids)[0]), std::string((*ids)[1]), std::string((*ids)[2])};
 }
 
+namespace {
+
+// The parts of a post that a create and an update spell the same way.
+boost::json::object action_object(const domain::LocalPostCallToAction& action) {
+    boost::json::object out{{"actionType", upper(action.action_type)}};
+    if (action.url) out["url"] = *action.url;
+    return out;
+}
+
+boost::json::object schedule_object(const domain::LocalPostSchedule& schedule) {
+    return {{"startDate", date_object(schedule.start_date)},
+            {"startTime", time_object(schedule.start_time)},
+            {"endDate", date_object(schedule.end_date)},
+            {"endTime", time_object(schedule.end_time)}};
+}
+
+// Empty when the offer says nothing.
+boost::json::object offer_object(const domain::LocalPostOffer& offer) {
+    boost::json::object out;
+    if (offer.coupon_code) out["couponCode"] = *offer.coupon_code;
+    if (offer.redeem_online_url) out["redeemOnlineUrl"] = *offer.redeem_online_url;
+    if (offer.terms_conditions) out["termsConditions"] = *offer.terms_conditions;
+    return out;
+}
+
+boost::json::array media_array(const MediaSource& media) {
+    return {boost::json::object{{"mediaFormat", upper(media.format)}, {"sourceUrl", media.url}}};
+}
+
+}  // namespace
+
 boost::json::object create_body(const domain::LocalPostContent& content, const std::optional<MediaSource>& media) {
     boost::json::object body{{"languageCode", content.language_code}, {"summary", content.summary}, {"topicType", upper(content.topic_type)}};
-    if (content.call_to_action) {
-        boost::json::object action{{"actionType", upper(content.call_to_action->action_type)}};
-        if (content.call_to_action->url) action["url"] = *content.call_to_action->url;
-        body["callToAction"] = std::move(action);
-    }
+    if (content.call_to_action) body["callToAction"] = action_object(*content.call_to_action);
     if (content.event) {
+        boost::json::object event{{"title", content.event->title}, {"schedule", schedule_object(content.event->schedule)}};
         const auto& schedule = content.event->schedule;
-        boost::json::object event{{"title", content.event->title},
-                                  {"schedule",
-                                   {{"startDate", date_object(schedule.start_date)},
-                                    {"startTime", time_object(schedule.start_time)},
-                                    {"endDate", date_object(schedule.end_date)},
-                                    {"endTime", time_object(schedule.end_time)}}}};
         if (content.event->recurrence) {
             const auto& recurrence = *content.event->recurrence;
             boost::json::object info;
@@ -98,16 +120,45 @@ boost::json::object create_body(const domain::LocalPostContent& content, const s
         body["event"] = std::move(event);
     }
     if (content.offer) {
-        boost::json::object offer;
-        if (content.offer->coupon_code) offer["couponCode"] = *content.offer->coupon_code;
-        if (content.offer->redeem_online_url) offer["redeemOnlineUrl"] = *content.offer->redeem_online_url;
-        if (content.offer->terms_conditions) offer["termsConditions"] = *content.offer->terms_conditions;
-        if (!offer.empty()) body["offer"] = std::move(offer);
+        if (auto offer = offer_object(*content.offer); !offer.empty()) body["offer"] = std::move(offer);
     }
-    if (media) {
-        body["media"] = boost::json::array{boost::json::object{{"mediaFormat", upper(media->format)}, {"sourceUrl", media->url}}};
-    }
+    if (media) body["media"] = media_array(*media);
     if (content.scheduled_time) body["scheduledTime"] = *content.scheduled_time;
+    return body;
+}
+
+boost::json::object update_body(const LocalPost& at_google, const domain::LocalPostContent& edit, const std::vector<std::string_view>& mask,
+                                const std::optional<MediaSource>& media) {
+    boost::json::object body;
+    for (const auto field : mask) {
+        if (field == "summary") {
+            body["summary"] = edit.summary;
+        } else if (field == "languageCode") {
+            body["languageCode"] = edit.language_code;
+        } else if (field == "callToAction") {
+            // Left out: no button any more.
+            if (edit.call_to_action) body["callToAction"] = action_object(*edit.call_to_action);
+        } else if (field == "event") {
+            if (!edit.event) continue;
+            // The event as Google holds it, with the edit's title and, where they differ, its days and times.
+            // Its repeat stays as it came.
+            boost::json::object event;
+            if (const auto* held = at_google.raw.is_object() ? at_google.raw.as_object().if_contains("event") : nullptr; held && held->is_object()) {
+                event = held->as_object();
+            }
+            event["title"] = edit.event->title;
+            const auto current = to_content(at_google);
+            if (!current.event || current.event->schedule != edit.event->schedule || !event.contains("schedule")) {
+                event["schedule"] = schedule_object(edit.event->schedule);
+            }
+            body["event"] = std::move(event);
+        } else if (field == "offer") {
+            if (!edit.offer) continue;
+            if (auto offer = offer_object(*edit.offer); !offer.empty()) body["offer"] = std::move(offer);
+        } else if (field == "media") {
+            body["media"] = media ? media_array(*media) : boost::json::array{};
+        }
+    }
     return body;
 }
 

@@ -295,7 +295,10 @@ inline gbp::LocalPost make_local_post(std::string_view account_id, std::string_v
 
 // The local posts of the same account, held in memory. A create is accepted
 // and the post is PROCESSING, as at Google, until finish_processing(): it is
-// listed and can be read meanwhile, but is neither scheduled nor shown.
+// listed and can be read meanwhile, but is neither scheduled nor shown. An
+// update replaces the fields its mask names, each whole, and clears one the
+// body leaves out; what it does to the post's state is the test's to say
+// (`state_after_update`), because nobody knows what Google does.
 class FakeLocalPosts final : public gbp::LocalPostReader, public gbp::LocalPostWriter {
 public:
     std::string account_id = "111";
@@ -326,6 +329,22 @@ public:
     // The connection drops; with `timeout_after_deleting` the post is gone anyway.
     bool delete_times_out = false;
     bool timeout_after_deleting = false;
+    struct Update {
+        std::string name;
+        std::vector<std::string> mask;
+        boost::json::object body;
+    };
+    // Every update that reached "Google", refused ones included.
+    std::vector<Update> updates;
+    // When set, the update is refused with this error and the post is as it was.
+    std::optional<gbp::ApiError> fail_update;
+    // The connection drops; with `timeout_after_updating` the post was changed anyway.
+    bool update_times_out = false;
+    bool timeout_after_updating = false;
+    // The state Google gives a post it has just changed; nothing: the state it had.
+    std::optional<std::string> state_after_update;
+    // The answer to an update names this post instead of the one that was changed.
+    std::optional<std::string> update_answers_as;
 
     boost::asio::awaitable<gbp::Result<gbp::LocalPost>> create_local_post(std::string account, std::string location_id,
                                                                           boost::json::object body) override {
@@ -364,6 +383,57 @@ public:
         if (!post || !remove(std::string(post->name))) co_return std::unexpected(not_found());
         if (delete_times_out) throw boost::system::system_error(boost::asio::error::timed_out);
         co_return gbp::Result<void>{};
+    }
+
+    boost::asio::awaitable<gbp::Result<gbp::LocalPost>> update_local_post(gbp::LocalPostName name, std::vector<std::string_view> mask,
+                                                                          boost::json::object body) override {
+        if (client_refuses) throw std::invalid_argument("the outbound client only sends PATCH for a local post, with the fields the edit changes");
+        updates.push_back({name.str(), {mask.begin(), mask.end()}, body});
+        if (fail_update) co_return std::unexpected(*fail_update);
+        if (update_times_out && !timeout_after_updating) throw boost::system::system_error(boost::asio::error::timed_out);
+        auto* post = name.account_id == account_id ? find_post(name.location_id, name.post_id) : nullptr;
+        if (!post) co_return std::unexpected(not_found());
+
+        // Each field the mask names is replaced whole; one the body does not carry is cleared.
+        const auto part = [&](std::string_view field) -> const boost::json::value* { return body.if_contains(field); };
+        for (const auto field : mask) {
+            const auto* value = part(field);
+            if (field == "summary") {
+                post->summary = value ? std::optional(std::string(value->as_string())) : std::nullopt;
+            } else if (field == "languageCode") {
+                post->languageCode = value ? std::optional(std::string(value->as_string())) : std::nullopt;
+            } else if (field == "callToAction") {
+                post->callToAction = value ? std::optional(core::from_json<gbp::CallToAction>(*value).value()) : std::nullopt;
+            } else if (field == "event") {
+                post->event = value ? std::optional(core::from_json<gbp::PostEvent>(*value).value()) : std::nullopt;
+            } else if (field == "offer") {
+                post->offer = value ? std::optional(core::from_json<gbp::PostOffer>(*value).value()) : std::nullopt;
+            } else if (field == "media") {
+                // Google fetches each file and serves it from an address of its own.
+                std::vector<gbp::PostMedia> items;
+                if (value) {
+                    for (const auto& item : value->as_array()) {
+                        items.push_back({.mediaFormat = std::string(item.at("mediaFormat").as_string()),
+                                         .googleUrl = std::format("https://lh3.googleusercontent.com/p/edited{}", ++edited_media_)});
+                    }
+                }
+                post->media = items.empty() ? std::nullopt : std::optional(std::move(items));
+            } else {
+                // The real Google names the field it will not take; so does this one.
+                co_return std::unexpected(gbp::ApiError{gbp::ApiError::Kind::other, 400,
+                                                        std::format("HTTP 400 INVALID_ARGUMENT update_mask: {} cannot be updated", field)});
+            }
+        }
+        post->updateTime = now;
+        if (state_after_update) post->state = *state_after_update;
+        post->raw = boost::json::value_from(*post);
+        if (update_times_out) throw boost::system::system_error(boost::asio::error::timed_out);
+        auto answer = *post;
+        if (update_answers_as) {
+            answer.name = *update_answers_as;
+            answer.raw = boost::json::value_from(answer);
+        }
+        co_return answer;
     }
 
     // ---- what happens at Google ----
@@ -427,6 +497,8 @@ public:
     std::set<std::string> hidden_from_lists;
     int list_calls = 0;
     int get_calls = 0;
+    // A get goes out and no answer comes back: a transport error.
+    bool get_times_out = false;
 
     boost::asio::awaitable<gbp::Result<gbp::LocalPostsPage>> list_local_posts(std::string account, std::string location_id,
                                                                               std::optional<std::string> page_token) override {
@@ -449,6 +521,7 @@ public:
     boost::asio::awaitable<gbp::Result<gbp::LocalPost>> get_local_post(gbp::LocalPostName name) override {
         ++get_calls;
         if (client_refuses) throw std::invalid_argument("the outbound client does not send this request");
+        if (get_times_out) throw boost::system::system_error(boost::asio::error::timed_out);
         if (fail_get) co_return std::unexpected(*fail_get);
         if (name.account_id == account_id) {
             if (const auto* post = find_post(name.location_id, name.post_id)) co_return *post;
@@ -463,6 +536,7 @@ private:
     }
 
     std::int64_t next_id_ = 7001;
+    int edited_media_ = 0;
 };
 
 class FakeSubscriber final : public pubsub::Subscriber {
