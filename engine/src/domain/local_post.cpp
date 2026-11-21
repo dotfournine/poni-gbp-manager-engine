@@ -330,30 +330,72 @@ std::expected<std::vector<std::string_view>, EditObstacle> local_post_edit_mask(
     return mask;
 }
 
+namespace {
+
+// One of the six fields, by its place in kLocalPostEditFields, taken from one content into another.
+void take_field(std::size_t i, const LocalPostContent& from, LocalPostContent& to) {
+    switch (i) {
+        case 0: to.summary = from.summary; break;
+        case 1: to.call_to_action = from.call_to_action; break;
+        case 2: to.event = from.event; break;
+        case 3: to.offer = from.offer; break;
+        case 4: to.media_id = from.media_id; break;
+        case 5: to.language_code = from.language_code; break;
+        default: break;
+    }
+}
+
+}  // namespace
+
+LocalPostContent local_post_with_edit(const LocalPostContent& base, const LocalPostContent& edit, const LocalPostContent& now) {
+    LocalPostContent out = now;
+    const auto then = normalize_local_post(base);
+    // A base no draft could hold has no edit (local_post_edit_mask): nothing of it is laid over the post.
+    if (!then) return out;
+    const auto changes = differing(*then, edit);
+    for (std::size_t i = 0; i < changes.size(); ++i) {
+        if (changes[i]) take_field(i, edit, out);
+    }
+    return out;
+}
+
 std::expected<std::vector<std::string_view>, EditObstacle> local_post_edit_request(const LocalPostContent& base, const LocalPostContent& edit,
                                                                                  const LocalPostContent& at_google) {
     const auto now = as_a_draft_holds(at_google);
     if (!now) return std::unexpected(now.error());
     const auto then = as_a_draft_holds(base);
     if (!then) return std::unexpected(then.error());
-    const auto changed_there = [](std::string_view member, std::string_view how) {
-        return std::unexpected(EditObstacle{EditObstacle::Kind::changed_at_google, std::string(member),
-                                            std::format("The post changed at Google after the edit was written: its \"{}\" {}. Nothing is sent. "
-                                                        "Look at the post as it is now and save the edit again.",
-                                                        member, how)});
-    };
-    if (const auto fixed = fixed_difference(edit, *now)) return changed_there(fixed->first, "is no longer what the edit was written for");
-
-    const auto changes = differing(*then, edit);     // what the edit's author changed
-    const auto to_write = differing(*now, edit);     // where Google does not have the edit's value
-    const auto moved = differing(*now, *then);       // what changed at Google since the edit was written
+    const auto changes = differing(*then, edit);  // what the edit's author changed
+    const auto to_write = differing(*now, edit);  // where Google does not have the edit's value
+    const auto moved = differing(*now, *then);    // what changed at Google since the edit was written
     std::vector<std::string_view> mask;
     for (std::size_t i = 0; i < changes.size(); ++i) {
         if (!changes[i] || !to_write[i]) continue;
-        if (moved[i]) return changed_there(kLocalPostEditMembers[i], "was changed there, and the edit would write over that change");
+        if (moved[i]) {
+            return std::unexpected(EditObstacle{
+                EditObstacle::Kind::changed_at_google, std::string(kLocalPostEditMembers[i]),
+                std::format("The post changed at Google after the edit was written: its \"{}\" was changed there, and the edit would write over "
+                            "that change. Nothing is sent. Load the post and save the edit again, against the post as it is now.",
+                            kLocalPostEditMembers[i])});
+        }
         mask.push_back(kLocalPostEditFields[i]);
     }
     return mask;
+}
+
+std::vector<std::string_view> edit_fields_not_shown(const LocalPostContent& sent, const std::vector<std::string_view>& fields,
+                                                    const LocalPostContent& answer) {
+    std::vector<std::string_view> missing;
+    for (std::size_t i = 0; i < kLocalPostEditFields.size(); ++i) {
+        const auto field = kLocalPostEditFields[i];
+        if (field == "media" || !std::ranges::contains(fields, field)) continue;
+        // What was sent, with this one field as the answer has it: whatever else the answer says or lacks stays out of it.
+        LocalPostContent with_answer = sent;
+        take_field(i, answer, with_answer);
+        const auto held = normalize_local_post(with_answer);
+        if (!held || differing(*held, sent)[i]) missing.push_back(field);
+    }
+    return missing;
 }
 
 bool is_post_language_tag(std::string_view tag) {

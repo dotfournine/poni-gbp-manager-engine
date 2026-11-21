@@ -194,8 +194,8 @@ struct EditObstacle {
         // `member` names it: "topic_type", "scheduled_time" or "event.recurrence".
         fixed_part,
         // Only from local_post_edit_request: the post changed at Google since
-        // the edit was written, in a part the edit would write over or in one
-        // an edit does not change. `member` names it by the API's name.
+        // the edit was written, in a field the edit would write over.
+        // `member` names it by the API's name.
         changed_at_google,
     };
     Kind kind = Kind::not_editable;
@@ -224,6 +224,15 @@ struct EditObstacle {
 // Google the engine could not write back.
 std::expected<std::vector<std::string_view>, EditObstacle> local_post_edit_mask(const LocalPostContent& post, const LocalPostContent& edit);
 
+// The post as it would say with the edit applied now: `now`, the post's
+// content as the engine holds it now, with the fields the edit changes
+// (local_post_edit_mask(base, edit)) laid over it, and nothing else of the
+// edit. So a field the edit's author did not change always says what the
+// post says now, whatever it said when the edit was written, and the kind,
+// the time and the repeat are the post's. This is what the API shows as the
+// edit's content and what a person approves.
+LocalPostContent local_post_with_edit(const LocalPostContent& base, const LocalPostContent& edit, const LocalPostContent& now);
+
 // What an approved edit sends: the mask of the one PATCH. `base` is the
 // post's content the edit was written against, `at_google` the post as
 // Google has it now. An edit never writes a field its author did not change,
@@ -235,10 +244,17 @@ std::expected<std::vector<std::string_view>, EditObstacle> local_post_edit_mask(
 //     write over a change its author never saw. No mask (changed_at_google);
 //   - otherwise it is named.
 // A field the edit does not change is never named, whatever Google holds
-// now. An empty mask: Google has everything the edit changes. The post's
-// kind, time and repeat must still be the edit's (changed_at_google if not),
-// and the post still content a draft can hold (not_editable).
+// now. An empty mask: Google has everything the edit changes. The post must
+// still be content a draft can hold (not_editable).
 std::expected<std::vector<std::string_view>, EditObstacle> local_post_edit_request(const LocalPostContent& base, const LocalPostContent& edit,
                                                                                  const LocalPostContent& at_google);
+
+// Of `fields` (Google's names, a mask that was sent), those in which
+// `answer`, the post as Google returned it afterwards, does not say what
+// `sent` says. Each field is compared on its own, so nothing else about the
+// answer counts; "media" is left out, because Google answers with addresses
+// of its own, which say nothing about which file they came from.
+std::vector<std::string_view> edit_fields_not_shown(const LocalPostContent& sent, const std::vector<std::string_view>& fields,
+                                                    const LocalPostContent& answer);
 
 }  // namespace poni::domain

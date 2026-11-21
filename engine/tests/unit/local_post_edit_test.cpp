@@ -315,19 +315,79 @@ TEST(LocalPostEditRequest, AFieldChangedOnBothSidesHasNoMaskAndIsNamed) {
     }
     EXPECT_EQ(domain::edit_member("topicType"), "");
 
-    // The post's kind, time or repeat changed at Google: the edit was written for another post than there is now.
+    // The post's time moved at Google: that is not a field of the edit's, and stops nothing it changes.
     auto base_with_time = base;
     base_with_time.scheduled_time = "2026-12-19T17:00:00.000000Z";
     const auto timed_edit = with(base_with_time, [](auto& c) { c.summary = "Open late on Saturdays."; });
     const auto rescheduled = with(base_with_time, [](auto& c) { c.scheduled_time = "2026-12-20T17:00:00.000000Z"; });
-    found = domain::local_post_edit_request(base_with_time, timed_edit, rescheduled);
-    ASSERT_FALSE(found);
-    EXPECT_EQ(found.error().kind, Kind::changed_at_google);
-    EXPECT_EQ(found.error().member, "scheduled_time");
-    // And a post that came to hold what a draft cannot hold is not written to.
+    EXPECT_THAT(domain::local_post_edit_request(base_with_time, timed_edit, rescheduled).value(), ElementsAre("summary"));
+    // A post that came to hold what a draft cannot hold is not written to.
     auto alert = base;
     alert.topic_type = "alert";
     EXPECT_EQ(domain::local_post_edit_request(base, edit, alert).error().kind, Kind::not_editable);
+}
+
+TEST(LocalPostEditRequest, TheEditAsItIsShownIsThePostAsItIsNowWithTheChangedFieldsLaidOver) {
+    auto base = a_base();
+    base.scheduled_time = "2026-12-19T17:00:00.000000Z";
+    const auto edit = with(base, [](auto& c) { c.call_to_action->url = "https://example.com/reserve"; });
+    // Nothing changed at Google: the edit as it was written.
+    EXPECT_EQ(domain::local_post_with_edit(base, edit, base), edit);
+    // Everything the edit leaves alone has changed at Google since: all of it shows, under the edit's one change.
+    auto now = base;
+    now.summary = "Open late on Fridays and Saturdays.";
+    now.language_code = "en-US";
+    now.media_id = 9;
+    now.scheduled_time = "2026-12-20T17:00:00.000000Z";
+    auto expected = now;
+    expected.call_to_action->url = "https://example.com/reserve";
+    EXPECT_EQ(domain::local_post_with_edit(base, edit, now), expected);
+    EXPECT_EQ(domain::local_post_with_edit(base, edit, now).summary, "Open late on Fridays and Saturdays.")
+        << "the old text the edit was sent with is not the edit's";
+    // The field the edit changes is the edit's, whatever Google holds there now.
+    now.call_to_action.reset();
+    EXPECT_EQ(domain::local_post_with_edit(base, edit, now).call_to_action->url, "https://example.com/reserve");
+    // An edit that changes nothing shows the post as it is, and a field taken away is taken away.
+    EXPECT_EQ(domain::local_post_with_edit(base, base, expected), expected);
+    const auto no_upload = with(base, [](auto& c) { c.media_id.reset(); });
+    EXPECT_FALSE(domain::local_post_with_edit(base, no_upload, expected).media_id);
+    // What is sent for it is the same question asked of the same three: only the changed field.
+    EXPECT_THAT(domain::local_post_edit_request(base, edit, expected).value(), IsEmpty()) << "Google has it";
+    auto elsewhere = expected;
+    elsewhere.call_to_action = base.call_to_action;
+    EXPECT_THAT(domain::local_post_edit_request(base, edit, elsewhere).value(), ElementsAre("callToAction"));
+}
+
+TEST(LocalPostEditRequest, AnAnswerIsComparedInTheFieldsThatWereSentAndInNothingElse) {
+    const auto sent = with(an_offer(), [](auto& c) {
+        c.summary = "Three for two.";
+        c.event->title = "Lunch fortnight";
+    });
+    const std::vector<std::string_view> mask{"summary", "event"};
+    EXPECT_THAT(domain::edit_fields_not_shown(sent, mask, sent), IsEmpty());
+    // The answer says the text and not the title.
+    auto half = sent;
+    half.event->title = "Lunch week";
+    EXPECT_THAT(domain::edit_fields_not_shown(sent, mask, half), ElementsAre("event"));
+    half.summary = "Two for one.";
+    EXPECT_THAT(domain::edit_fields_not_shown(sent, mask, half), ElementsAre("summary", "event"));
+    // Whatever else the answer says or lacks is not what was sent: another kind, time, language, offer, or no button.
+    auto other = sent;
+    other.topic_type = "alert";
+    other.scheduled_time = "2031-01-01T00:00:00.000000Z";
+    other.language_code = "fr";
+    other.offer.reset();
+    other.media_id = 9;
+    EXPECT_THAT(domain::edit_fields_not_shown(sent, mask, other), IsEmpty());
+    // An answer without the event at all does not show the title either; space around a text is no difference.
+    auto bare = sent;
+    bare.event.reset();
+    bare.summary = " Three for two.\n";
+    EXPECT_THAT(domain::edit_fields_not_shown(sent, mask, bare), ElementsAre("event"));
+    // The media is never compared: Google answers with addresses of its own.
+    auto with_media = sent;
+    with_media.media_id = 7;
+    EXPECT_THAT(domain::edit_fields_not_shown(with_media, {"media"}, sent), IsEmpty());
 }
 
 TEST(LocalPostEditChecks, AnEditIsNotCheckedForTheTimeAndTheRepeatItDoesNotSend) {
