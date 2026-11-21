@@ -301,6 +301,13 @@ asio::awaitable<void> LocalPosts::edit(std::int64_t local_post_id, bool last_att
         }
     }
     if (settled) {
+        if (!request.changed_since_approval.empty()) {
+            // Names of fields only, never what they say. A post nobody touched that shows up here would mean
+            // that Google's answer for one post and its list of the location's posts disagree (D-099 point 7).
+            std::string fields;
+            for (const auto& name : request.changed_since_approval) fields += (fields.empty() ? "" : ",") + name;
+            log::info("local post differs from what was approved; its edit is not sent", {{"local_post_id", local_post_id}, {"fields", fields}});
+        }
         log::info("local post edit not sent", {{"local_post_id", local_post_id}, {"reason", request.detail}});
         co_return;
     }

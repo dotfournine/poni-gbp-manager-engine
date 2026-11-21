@@ -268,6 +268,9 @@ struct LocalPostEditRequest {
     // What the post is to say: the approved content.
     domain::LocalPostContent content;
     std::string detail;
+    // Settled because the post no longer would say what was approved: the parts in which it differs, by
+    // the API's names ("summary", "scheduled_time"). Names only, for the reason and the log.
+    std::vector<std::string> changed_since_approval;
 };
 
 // The second step, with the post as Google returned it a moment ago. Like

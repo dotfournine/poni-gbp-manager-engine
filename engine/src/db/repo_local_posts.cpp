@@ -1000,7 +1000,8 @@ LocalPostEditRequest prepare_local_post_edit(pqxx::transaction_base& tx, std::in
                                              core::TimePoint now, std::string_view media_base) {
     using Outcome = LocalPostEditRequest::Outcome;
     const auto settled = [](std::string detail) {
-        return LocalPostEditRequest{.outcome = Outcome::settled, .mask = {}, .body = {}, .content = {}, .detail = std::move(detail)};
+        return LocalPostEditRequest{
+            .outcome = Outcome::settled, .mask = {}, .body = {}, .content = {}, .detail = std::move(detail), .changed_since_approval = {}};
     };
     const auto being_sent = lock_edit_being_sent(tx, id, claimed_at);
     if (!being_sent) return settled("the edit is not being sent under this run's claim");
@@ -1041,10 +1042,26 @@ LocalPostEditRequest prepare_local_post_edit(pqxx::transaction_base& tx, std::in
     // changed at Google since the approval would make it a post nobody approved as a whole.
     const auto said = with_edit(edit, current);
     if (!said || edit.approved_content.is_null() || read_content(edit.approved_content) != *said) {
-        const std::string why = "The post changed at Google after the edit was approved, so it would not say what was approved. Nothing is sent. "
-                                "Look at the post as it is now and approve the edit again.";
+        // Which parts differ, by name: the approval was made from what the location's list said, and this
+        // is what a read of the one post says. Should the two ever disagree about a post nobody touched,
+        // the names show where.
+        std::vector<std::string> differing;
+        if (said && !edit.approved_content.is_null()) {
+            if (const auto fields = domain::local_post_edit_mask(read_content(edit.approved_content), *said); !fields) {
+                differing.push_back(fields.error().member);
+            } else {
+                for (const auto field : *fields) differing.emplace_back(domain::edit_member(field));
+            }
+        }
+        std::string names;
+        for (const auto& name : differing) names += std::format("{}\"{}\"", names.empty() ? "" : ", ", name);
+        const auto why = std::format("The post changed at Google after the edit was approved{}, so it would not say what was approved. Nothing is "
+                                     "sent. Look at the post as it is now and approve the edit again.",
+                                     names.empty() ? std::string{} : std::format(" (its {})", names));
         cancel_edit(tx, id, why, now);
-        return settled(why);
+        auto stopped = settled(why);
+        stopped.changed_since_approval = std::move(differing);
+        return stopped;
     }
     const auto& content = *said;
     if (mask->empty()) {
@@ -1070,7 +1087,12 @@ LocalPostEditRequest prepare_local_post_edit(pqxx::transaction_base& tx, std::in
         const auto file = media_state(tx, *content.media_id, now, media_base);
         media = gbp::MediaSource{.format = file.format, .url = file.url};
     }
-    return {.outcome = Outcome::send, .mask = *mask, .body = gbp::update_body(read, content, *mask, media), .content = content, .detail = {}};
+    return {.outcome = Outcome::send,
+            .mask = *mask,
+            .body = gbp::update_body(read, content, *mask, media),
+            .content = content,
+            .detail = {},
+            .changed_since_approval = {}};
 }
 
 void local_post_edit_accepted(pqxx::transaction_base& tx, std::int64_t id, core::TimePoint claimed_at, const domain::LocalPostContent& sent,

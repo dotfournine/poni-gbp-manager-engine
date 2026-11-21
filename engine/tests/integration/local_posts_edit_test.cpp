@@ -399,6 +399,8 @@ TEST_F(LocalPostsEdit, AnApproverApprovesWhatThePostWillReallySay) {
     EXPECT_TRUE(google_.updates.empty());
     EXPECT_EQ(edit(id, "status"), "draft");
     EXPECT_THAT(edit(id, "status_reason"), HasSubstr("changed at Google after the edit was approved"));
+    EXPECT_THAT(edit(id, "status_reason"), HasSubstr(R"((its "call_to_action", "language_code"))")) << "the parts that differ, by name";
+    EXPECT_THAT(edit(id, "status_reason"), Not(HasSubstr("somewhere-new"))) << "and never what they say";
     EXPECT_THAT(edit(id, "status_reason"), HasSubstr("Nothing is sent"));
     EXPECT_EQ(post(id, "(content#>>'{call_to_action,url}')"), "https://example.com/somewhere-new") << "the row has what was read";
     EXPECT_EQ(problems(), 0);
@@ -1555,7 +1557,7 @@ TEST_F(LocalPostsEdit, ATimeMovedAtGoogleIsNeitherUndoneNorWrittenOverByAnEdit) 
     run_jobs();
     EXPECT_TRUE(google_.updates.empty());
     EXPECT_EQ(edit(id, "status"), "draft");
-    EXPECT_THAT(edit(id, "status_reason"), HasSubstr("changed at Google after the edit was approved"));
+    EXPECT_THAT(edit(id, "status_reason"), HasSubstr(R"(changed at Google after the edit was approved (its "scheduled_time"))"));
     EXPECT_EQ(post(id, "(content->>'scheduled_time')"), "2026-12-21T17:00:00.000000Z") << "the row has what was read";
     EXPECT_EQ(problems(), 0);
 
