@@ -1,0 +1,7 @@
+# OpenAPI lint rules: `npm run lint` in api/.
+extends:
+  - recommended
+rules:
+  operation-operationId: error
+  operation-summary: error
+  no-unused-components: off  # Error is used from Phase 1 on

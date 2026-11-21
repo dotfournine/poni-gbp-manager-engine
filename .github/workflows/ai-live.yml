@@ -1,0 +1,62 @@
+name: AI live suite
+
+# The adversarial suite against the real model with the seeded configuration
+# (architecture section 10): the check for a change to the prompts or the
+# checks before it is released. What a client's own configuration does is
+# the go-live test's business, which runs inside the engine (D-074).
+# Started by hand, and only by hand: it calls the LLM (about 120 requests, a few cents) and
+# needs the repository secrets PONI_LLM_DASHSCOPE_BASE_URL and
+# PONI_LLM_DASHSCOPE_API_KEY. The
+# offline suite, which needs neither, runs in CI on every change.
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Model for both tasks (empty, the seeded default)
+        required: false
+        default: ""
+      filter:
+        description: Only cases whose id starts with this, for example "M-" (empty, all)
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    name: adversarial suite, live
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      PONI_SKIP_IMAGE_BUILD: "1"
+      PONI_VCPKG_CACHE: ${{ github.workspace }}/.vcpkg-cache
+      PONI_BUILD_JOBS: "2"
+      PONI_LLM_DASHSCOPE_BASE_URL: ${{ secrets.PONI_LLM_DASHSCOPE_BASE_URL }}
+      PONI_LLM_DASHSCOPE_API_KEY: ${{ secrets.PONI_LLM_DASHSCOPE_API_KEY }}
+      PONI_AI_LIVE_MODEL: ${{ inputs.model }}
+      PONI_AI_LIVE_FILTER: ${{ inputs.filter }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build the toolchain image
+        uses: docker/build-push-action@v7
+        with:
+          context: engine
+          target: toolchain
+          load: true
+          tags: poni-gbp-toolchain
+          cache-from: type=gha,scope=toolchain-x86_64
+
+      - name: Restore the vcpkg binary cache
+        uses: actions/cache/restore@v6
+        with:
+          path: .vcpkg-cache
+          key: vcpkg-x86_64-linux-clang-${{ hashFiles('engine/vcpkg.json', 'engine/triplets/**', 'engine/cmake/**', 'engine/Dockerfile') }}
+          restore-keys: |
+            vcpkg-x86_64-linux-clang-
+
+      - name: Run the suite against the model
+        run: engine/scripts/linux.sh ai-live

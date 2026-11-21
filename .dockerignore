@@ -1,0 +1,16 @@
+# For image builds whose context is the repository root (tools/Dockerfile).
+# The engine image uses engine/ as its context and engine/.dockerignore.
+.git
+.github
+.claude
+**/node_modules
+**/dist
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+engine/build
+docs
+*.md
+# The Google mock is a development tool (D-087): never in an image.
+tools/src/poni_tools/mock_google

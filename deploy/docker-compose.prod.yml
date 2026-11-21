@@ -1,0 +1,165 @@
+# Production: one Linux VM running Caddy, the engine, PostgreSQL and a nightly
+# backup (architecture section 7). Read deploy/README.md before using it.
+#
+#   docker compose -f deploy/docker-compose.prod.yml --env-file /etc/poni-gbp/poni.env up -d
+#
+# Settings and secrets come from the env file (see deploy/poni.env.example),
+# which lives on the VM and never in the repository.
+name: poni-gbp
+
+services:
+  # HTTPS (automatic certificates), the dashboard's static files, and /api
+  # forwarded to the engine. The only service reachable from outside.
+  # The web image (Caddy with the built dashboard) is built in the dashboard's
+  # repository; the Caddyfile is this repository's, mounted over the image's.
+  caddy:
+    image: ${PONI_IMAGE_PREFIX:-poni-gbp}-web:${PONI_WEB_IMAGE_TAG:-${PONI_IMAGE_TAG:-latest}}
+    restart: unless-stopped
+    depends_on:
+      - engine
+    environment:
+      PONI_SITE_ADDRESS: ${PONI_SITE_ADDRESS:?set PONI_SITE_ADDRESS, e.g. gbp.example.com}
+    ports:
+      - "${PONI_HTTP_PORT:-80}:80"
+      - "${PONI_HTTPS_PORT:-443}:443"
+      - "${PONI_HTTPS_PORT:-443}:443/udp"  # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data      # certificates: keep, or Let's Encrypt rate limits bite
+      - caddy-config:/config
+
+  # Applies pending migrations, then exits (poni-tools, D-079). The engine
+  # refuses to start against a database that is behind, so it waits for this.
+  migrate:
+    image: ${PONI_IMAGE_PREFIX:-poni-gbp}-tools:${PONI_IMAGE_TAG:-latest}
+    build:
+      context: ..
+      dockerfile: tools/Dockerfile
+    command: ["migrate"]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PONI_DATABASE_URL: postgresql://poni:${PONI_DB_PASSWORD:?set PONI_DB_PASSWORD}@db:5432/poni
+
+  # Seeds the knowledge base (FR-13), then exits: downloads the archive that
+  # poni.env names from the bucket as the VM's service account, compares its
+  # content with the hash in its name, checks it and replaces the kb_* tables.
+  # The engine refuses to start without a seeded knowledge base, so it waits
+  # for this. A later update needs no new image and no engine restart: name
+  # the new archive in poni.env and run this service again (deploy/README.md).
+  seed:
+    image: ${PONI_IMAGE_PREFIX:-poni-gbp}-tools:${PONI_IMAGE_TAG:-latest}
+    command: ["seed"]
+    restart: "no"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      PONI_DATABASE_URL: postgresql://poni:${PONI_DB_PASSWORD}@db:5432/poni
+      PONI_KNOWLEDGE_BUCKET: ${PONI_KNOWLEDGE_BUCKET:?set PONI_KNOWLEDGE_BUCKET, the bucket knowledge archives are published to}
+      PONI_KNOWLEDGE_ARCHIVE: ${PONI_KNOWLEDGE_ARCHIVE:?set PONI_KNOWLEDGE_ARCHIVE, e.g. knowledge-20261115.tar.gz}
+
+  engine:
+    image: ${PONI_IMAGE_PREFIX:-poni-gbp}-engine:${PONI_IMAGE_TAG:-latest}
+    build:
+      context: ../engine
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      seed:
+        condition: service_completed_successfully
+    environment:
+      PONI_DATABASE_URL: postgresql://poni:${PONI_DB_PASSWORD:?set PONI_DB_PASSWORD}@db:5432/poni
+      PONI_HTTP_HOST: 0.0.0.0
+      PONI_LOG_LEVEL: ${PONI_LOG_LEVEL:-info}
+      # The address staff type. Decides the cookie flags (Secure, __Host-) and
+      # the Google sign-in redirect address.
+      PONI_PUBLIC_URL: https://${PONI_SITE_ADDRESS}
+      PONI_SECRET_KEY: ${PONI_SECRET_KEY:?set PONI_SECRET_KEY (openssl rand -base64 32)}
+      PONI_SIGNIN_DOMAINS: ${PONI_SIGNIN_DOMAINS:-xvisionmediaus.com,xvisionus.com}
+      PONI_GOOGLE_SIGNIN_CLIENT_ID: ${PONI_GOOGLE_SIGNIN_CLIENT_ID:-}
+      PONI_GOOGLE_SIGNIN_CLIENT_SECRET: ${PONI_GOOGLE_SIGNIN_CLIENT_SECRET:-}
+      # The web OAuth client through which the GBP managing account and the
+      # sending mailbox are connected on the dashboard's status page (D-079).
+      PONI_GBP_OAUTH_CLIENT_ID: ${PONI_GBP_OAUTH_CLIENT_ID:-}
+      PONI_GBP_OAUTH_CLIENT_SECRET: ${PONI_GBP_OAUTH_CLIENT_SECRET:-}
+      # Caddy is the only client, so the visitor's address is in X-Forwarded-For.
+      PONI_TRUST_FORWARDED_FOR: "true"
+      # Pub/Sub as the VM's service account; empty subscription = polling only.
+      PONI_PUBSUB_SUBSCRIPTION: ${PONI_PUBSUB_SUBSCRIPTION:-}
+      PONI_GOOGLE_CREDENTIALS: ${PONI_GOOGLE_CREDENTIALS:-metadata}
+      # Model providers for review analysis and drafts (D-059). All empty:
+      # nothing is analyzed. Compose passes only the names listed here, so
+      # another provider needs its three lines added (address, key, protocol).
+      PONI_LLM_DASHSCOPE_BASE_URL: ${PONI_LLM_DASHSCOPE_BASE_URL:-}
+      PONI_LLM_DASHSCOPE_API_KEY: ${PONI_LLM_DASHSCOPE_API_KEY:-}
+      PONI_LLM_DASHSCOPE_PROTOCOL: ${PONI_LLM_DASHSCOPE_PROTOCOL:-}
+      PONI_LLM_OPENAI_BASE_URL: ${PONI_LLM_OPENAI_BASE_URL:-}
+      PONI_LLM_OPENAI_API_KEY: ${PONI_LLM_OPENAI_API_KEY:-}
+      PONI_LLM_OPENAI_PROTOCOL: ${PONI_LLM_OPENAI_PROTOCOL:-}
+      # The judge of the go-live test (D-074).
+      PONI_LLM_ANTHROPIC_BASE_URL: ${PONI_LLM_ANTHROPIC_BASE_URL:-}
+      PONI_LLM_ANTHROPIC_API_KEY: ${PONI_LLM_ANTHROPIC_API_KEY:-}
+      PONI_LLM_ANTHROPIC_PROTOCOL: ${PONI_LLM_ANTHROPIC_PROTOCOL:-}
+      # Notifications are sent from this mailbox (connect it once on the status page).
+      PONI_EMAIL_FROM: ${PONI_EMAIL_FROM:-host@xvisionmediaus.com}
+      PONI_EMAIL_FROM_NAME: ${PONI_EMAIL_FROM_NAME:-PONI GBP Manager}
+      # Reports (D-085): the public bucket shared report pages are put in.
+      # Empty: nothing can be shared or sent.
+      PONI_PUBLIC_BUCKET: ${PONI_PUBLIC_BUCKET:-}
+    expose:
+      - "8080"
+    healthcheck:
+      # The runtime image has no curl; bash can open the socket itself.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /api/health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '\"status\":\"ok\"' <&3"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: poni
+      POSTGRES_PASSWORD: ${PONI_DB_PASSWORD}
+      POSTGRES_DB: poni
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "poni", "-d", "poni"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # pg_dump every night into the backups volume and, when a bucket is set,
+  # to Cloud Storage as the VM's service account (off the server, NFR).
+  backup:
+    image: ${PONI_IMAGE_PREFIX:-poni-gbp}-backup:${PONI_IMAGE_TAG:-latest}
+    build:
+      context: backup
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: poni
+      PGPASSWORD: ${PONI_DB_PASSWORD}
+      PGDATABASE: poni
+      PONI_BACKUP_TIME_UTC: ${PONI_BACKUP_TIME_UTC:-08:30}
+      PONI_BACKUP_KEEP_DAYS: ${PONI_BACKUP_KEEP_DAYS:-14}
+      PONI_BACKUP_BUCKET: ${PONI_BACKUP_BUCKET:-}
+    volumes:
+      - backups:/backups
+
+volumes:
+  pgdata:
+  backups:
+  caddy-data:
+  caddy-config:

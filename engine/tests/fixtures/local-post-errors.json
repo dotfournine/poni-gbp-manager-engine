@@ -1,0 +1,94 @@
+{
+  "note": "Google's own answers, sanitized: the text echoed in `value` is replaced.",
+  "summary_too_long": {
+    "error": {
+      "code": 400,
+      "message": "Request contains an invalid argument.",
+      "status": "INVALID_ARGUMENT",
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.mybusiness.v4.ValidationError",
+          "errorDetails": [
+            {
+              "code": 3,
+              "field": "summary",
+              "message": "Must be at most 1500 characters",
+              "value": "(the text that was sent)",
+              "subErrorCode": 20,
+              "additionalValue": "1500"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "too_many_photos": {
+    "error": {
+      "code": 400,
+      "message": "Request contains an invalid argument.",
+      "status": "INVALID_ARGUMENT",
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.mybusiness.v4.ValidationError",
+          "errorDetails": [
+            {
+              "code": 6,
+              "field": "media",
+              "message": "Too many photos. A post may only have a maximum of 1 photos.",
+              "value": "2"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "scheduled_in_the_past": {
+    "error": {
+      "code": 400,
+      "message": "Request contains an invalid argument.",
+      "status": "INVALID_ARGUMENT",
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.mybusiness.v4.ValidationError",
+          "errorDetails": [
+            {
+              "code": 10,
+              "field": "scheduled_time",
+              "message": "Scheduled time cannot be in the past.",
+              "subErrorCode": 140
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "not_found": {
+    "error": {
+      "code": 404,
+      "message": "Requested entity was not found.",
+      "status": "NOT_FOUND"
+    }
+  },
+  "title_too_long": {
+    "error": {
+      "code": 400,
+      "message": "Request contains an invalid argument.",
+      "status": "INVALID_ARGUMENT",
+      "details": [
+        {
+          "@type": "type.googleapis.com/google.mybusiness.v4.ValidationError",
+          "errorDetails": [
+            {
+              "code": 3,
+              "field": "event.title",
+              "message": "Must be at most 58 characters",
+              "value": "(the title that was sent)",
+              "subErrorCode": 20,
+              "additionalValue": "58"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

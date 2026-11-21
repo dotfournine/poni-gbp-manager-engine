@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://poni-gbp.invalid/knowledge/models.schema.json",
+  "title": "knowledge/models.json: USD per million tokens, for the cost estimate of a model call",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "prices": {
+      "type": "object",
+      "maxProperties": 200,
+      "propertyNames": {
+        "minLength": 1,
+        "maxLength": 200
+      },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "input_per_mtok": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000
+          },
+          "output_per_mtok": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10000
+          }
+        },
+        "required": [
+          "input_per_mtok",
+          "output_per_mtok"
+        ]
+      }
+    }
+  },
+  "required": [
+    "prices"
+  ]
+}

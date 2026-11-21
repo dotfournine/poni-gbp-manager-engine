@@ -1,0 +1,126 @@
+{
+  "note": "Sanitized sample from Gangnam AYCE Buffet. Order: 5-star with text, rating-only, 3-star, 1-star, Google-translated, edited after reply.",
+  "reviews": [
+    {
+      "reviewId": "REVIEW_ID_0",
+      "reviewer": {
+        "displayName": "Reviewer 0",
+        "isAnonymous": false
+      },
+      "starRating": "FIVE",
+      "comment": "New Asian buffet did not disappoint. Great variety of food and was fresh and delicious. Staff made sure we were taken care of the whole time. 10/10 service and food. Can't wait to come back!",
+      "createTime": "2026-08-31T20:41:02.712507Z",
+      "updateTime": "2026-08-31T20:41:02.712507Z",
+      "reviewReply": {
+        "comment": "Thanks for your fantastic feedback! Happy you enjoyed our food variety, fresh dishes and great service. Hope to see you again soon.",
+        "updateTime": "2026-09-01T03:29:13.113814Z",
+        "reviewReplyState": "APPROVED"
+      },
+      "name": "accounts/111283263702173569518/locations/6336855403902537758/reviews/REVIEW_ID_0",
+      "reviewMediaItems": [
+        {
+          "thumbnailUrl": "https://example.invalid/photo",
+          "thumbnailLabel": "진열된 다양한 롤과 초밥"
+        },
+        {
+          "thumbnailUrl": "https://example.invalid/photo",
+          "thumbnailLabel": "다양한 종류의 신선한 초밥"
+        },
+        {
+          "thumbnailUrl": "https://example.invalid/photo",
+          "thumbnailLabel": "신선한 초밥과 사시미 메뉴"
+        }
+      ],
+      "reviewReplyUrl": "https://business.google.com/n/6336855403902537758/reviews/Ci9DQUlRQUNvZENodHljRjlvT2w5S2MwSm1abEZoZEhkb2NuWndVRE5zVTFFdFNXYxAB"
+    },
+    {
+      "reviewId": "REVIEW_ID_1",
+      "reviewer": {
+        "displayName": "Reviewer 1",
+        "isAnonymous": false
+      },
+      "starRating": "FIVE",
+      "createTime": "2026-08-29T01:05:54.722639Z",
+      "updateTime": "2026-08-29T01:05:54.722639Z",
+      "reviewReply": {
+        "comment": "Thanks for your 5‑star rating! We appreciate your support. Hope we can serve you again soon.",
+        "updateTime": "2026-09-01T06:29:37.336063Z",
+        "reviewReplyState": "APPROVED"
+      },
+      "name": "accounts/111283263702173569518/locations/6336855403902537758/reviews/REVIEW_ID_1",
+      "reviewReplyUrl": "https://business.google.com/n/6336855403902537758/reviews/Ci9DQUlRQUNvZENodHljRjlvT25CbGMyNUdkMDVGTFZwaWJGUlJSa2RwYVdZeVNWRRAB"
+    },
+    {
+      "reviewId": "REVIEW_ID_2",
+      "reviewer": {
+        "displayName": "Reviewer 2",
+        "isAnonymous": false
+      },
+      "starRating": "THREE",
+      "comment": "The renovation is nice. Food was as expected. A bit pricey at $28.99 for Columbus Day lunch. No ice cream and long hair in tapioca pudding.",
+      "createTime": "2026-10-12T19:43:55.733489Z",
+      "updateTime": "2026-10-12T19:43:55.733489Z",
+      "reviewReply": {
+        "comment": "Thank you for your honest feedback. We’re glad you like our renovation and the food met your expectation. We sincerely apologize for the hair found in tapioca pudding and the lack of ice cream on your visit. Food safety is our top priority, and we will thoroughly check our food preparation process. We hope we can have a chance to regain your trust.",
+        "updateTime": "2026-10-16T06:31:04.769398Z",
+        "reviewReplyState": "APPROVED"
+      },
+      "name": "accounts/111283263702173569518/locations/6336855403902537758/reviews/REVIEW_ID_2",
+      "reviewReplyUrl": "https://business.google.com/n/6336855403902537758/reviews/Ci9DQUlRQUNvZENodHljRjlvT25sM1lVTkhaRVZMUkhvMk9EaDJka1J6YVRGU1pFRRAB"
+    },
+    {
+      "reviewId": "REVIEW_ID_3",
+      "reviewer": {
+        "displayName": "Reviewer 3",
+        "isAnonymous": false
+      },
+      "starRating": "ONE",
+      "comment": "They simply changed the name to cover up all the bad reviews from before, but the food is still just as terrible. The food isn’t fresh, there’s hardly anything worth eating, and the prices are actually even more expensive now.",
+      "createTime": "2026-08-31T04:57:36.111505Z",
+      "updateTime": "2026-08-31T04:57:36.111505Z",
+      "reviewReply": {
+        "comment": "Thank you for taking the time to share your thoughts with us. Our ingredients are freshly purchased. We are truly sorry that our food did not live up to your expectations. We take your feedback about food quality and pricing very seriously and will work closely with our kitchen team to make improvements. Should you be willing to give us another chance, you are welcome to come back with your original receipt to get 10% off your meal. Thank you again for your valuable feedback.",
+        "updateTime": "2026-09-01T06:12:29.444565Z",
+        "reviewReplyState": "APPROVED"
+      },
+      "name": "accounts/111283263702173569518/locations/6336855403902537758/reviews/REVIEW_ID_3",
+      "reviewReplyUrl": "https://business.google.com/n/6336855403902537758/reviews/Ci9DQUlRQUNvZENodHljRjlvT2podlZsbERNVTVvVTFkdk5YRk9ZemhEVDB0WFpGRRAB"
+    },
+    {
+      "reviewId": "REVIEW_ID_4",
+      "reviewer": {
+        "displayName": "Reviewer 4",
+        "isAnonymous": false
+      },
+      "starRating": "FIVE",
+      "comment": "(Translated by Google) The food was great, the place was super comfortable, and it was nice and clean—I loved it!\n\n(Original)\nMuy buena comida y un lugar súper cómodo y mi bonito y limpio me encantó",
+      "createTime": "2026-09-20T21:29:20.098574Z",
+      "updateTime": "2026-09-20T21:29:20.098574Z",
+      "reviewReply": {
+        "comment": "Thank you so much for your lovely review! We’re glad you enjoyed our delicious food and our comfortable, clean space. We look forward to welcoming you back soon.",
+        "updateTime": "2026-09-21T08:00:17.581877Z",
+        "reviewReplyState": "APPROVED"
+      },
+      "name": "accounts/111283263702173569518/locations/6336855403902537758/reviews/REVIEW_ID_4",
+      "reviewReplyUrl": "https://business.google.com/n/6336855403902537758/reviews/Ci9DQUlRQUNvZENodHljRjlvT2pZeVNEUnhiamt0VWpSQ1R6YzVjamhhWVZReWJVRRAB"
+    },
+    {
+      "reviewId": "REVIEW_ID_5",
+      "reviewer": {
+        "displayName": "Reviewer 5",
+        "isAnonymous": false
+      },
+      "starRating": "THREE",
+      "comment": "It was alright. The crawfish was the only good thing, and the glass noodles.\n\nMy friend and husband got food poisoning/unpleasant discharge. Very bad.",
+      "createTime": "2026-09-14T23:19:22.128613Z",
+      "updateTime": "2026-09-15T03:20:13.814556Z",
+      "reviewReply": {
+        "comment": "Thank you for your feedback! We will keep working to improve other menu items and hope to welcome you back soon.",
+        "updateTime": "2026-09-15T03:02:07.629892Z",
+        "reviewReplyState": "APPROVED"
+      },
+      "name": "accounts/111283263702173569518/locations/6336855403902537758/reviews/REVIEW_ID_5",
+      "reviewReplyUrl": "https://business.google.com/n/6336855403902537758/reviews/Ci9DQUlRQUNvZENodHljRjlvT21JelZHVlVNREpTVEVKMWEwbFVUamhMYW10bWQyYxAB"
+    }
+  ]
+}

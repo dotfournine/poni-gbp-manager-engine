@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://poni-gbp.invalid/knowledge/test_client.schema.json",
+  "title": "knowledge/industries/<key>/test_client.json: a made-up business the test suites run as",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "template": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "maxLength": 60,
+      "description": "A voice template to start from, as a client that adopts one does."
+    },
+    "voice": {
+      "$ref": "settings.schema.json#/$defs/voiceLayer"
+    },
+    "localization": {
+      "$ref": "settings.schema.json#/$defs/localizationLayer"
+    },
+    "policy": {
+      "$ref": "settings.schema.json#/$defs/policyLayer"
+    }
+  },
+  "required": [
+    "name",
+    "voice",
+    "localization",
+    "policy"
+  ]
+}

@@ -1,0 +1,72 @@
+# Local development services.
+#
+#   docker compose -f deploy/docker-compose.dev.yml up -d --wait db     # PostgreSQL for the native engine
+#   docker compose -f deploy/docker-compose.dev.yml down                # stop (add -v to delete the data)
+#
+# The Linux build of the engine (the same one CI runs) lives behind the
+# "linux" profile; use engine/scripts/linux.sh rather than calling it directly.
+name: poni-gbp-dev
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: poni
+      POSTGRES_PASSWORD: poni  # local development only; never used anywhere else
+      POSTGRES_DB: poni
+    ports:
+      # Loopback only.
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "poni", "-d", "poni"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Ubuntu toolchain container: builds and tests the engine with clang,
+  # and can run it. The repository is mounted read-only; build output goes to
+  # a volume so it never mixes with the native build in engine/build/.
+  engine-linux:
+    profiles: ["linux"]
+    image: poni-gbp-toolchain
+    build:
+      context: ../engine
+      target: toolchain
+    depends_on:
+      db:
+        condition: service_healthy
+    working_dir: /src/engine
+    entrypoint: ["/src/engine/scripts/in-container.sh"]
+    environment:
+      VCPKG_MAX_CONCURRENCY: ${VCPKG_MAX_CONCURRENCY:-4}
+      # Parallel compiles. Four jobs may not fit into Docker Desktop's
+      # default 4 GB (the compiler gets killed): use PONI_BUILD_JOBS=2 there.
+      PONI_BUILD_JOBS: ${PONI_BUILD_JOBS:-4}
+      # `serve` gets its own database (created by linux.sh): the contract check
+      # writes to it. Tests use databases of their own on the development server.
+      PONI_DATABASE_URL: postgresql://poni:poni@db:5432/poni_linux
+      PONI_TEST_DATABASE_URL: postgresql://poni:poni@db:5432/poni
+      PONI_HTTP_HOST: 0.0.0.0
+      # Development sign-in, so the contract check can reach the API. The
+      # engine only allows it because PONI_PUBLIC_URL is plain http://localhost.
+      PONI_DEV_LOGIN_EMAIL: contract-check@localhost
+      # Only for `linux.sh ai-live`, which calls the real model. Empty otherwise:
+      # the tests and the contract check never reach an LLM.
+      PONI_LLM_DASHSCOPE_BASE_URL: ${PONI_LLM_DASHSCOPE_BASE_URL:-}
+      PONI_LLM_DASHSCOPE_API_KEY: ${PONI_LLM_DASHSCOPE_API_KEY:-}
+      PONI_AI_LIVE_MODEL: ${PONI_AI_LIVE_MODEL:-}
+      PONI_AI_LIVE_FILTER: ${PONI_AI_LIVE_FILTER:-}
+    ports:
+      # Only published by `docker compose run --service-ports` (linux.sh serve).
+      - "127.0.0.1:${PONI_LINUX_HTTP_PORT:-8081}:8080"
+    volumes:
+      - ..:/src:ro
+      - linux-build:/build
+      - ${PONI_VCPKG_CACHE:-vcpkg-cache}:/root/.cache/vcpkg
+
+volumes:
+  pgdata:
+  linux-build:
+  vcpkg-cache:

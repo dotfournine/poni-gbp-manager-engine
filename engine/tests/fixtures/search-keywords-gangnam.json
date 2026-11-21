@@ -1,0 +1,65 @@
+{
+  "searchKeywordsCounts": [
+    {
+      "searchKeyword": "gangnam ayce buffet, metrotech drive, chantilly, va",
+      "insightsValue": {
+        "value": "7146"
+      }
+    },
+    {
+      "searchKeyword": "restaurants",
+      "insightsValue": {
+        "value": "4380"
+      }
+    },
+    {
+      "searchKeyword": "gangnam buffet chantilly",
+      "insightsValue": {
+        "value": "4323"
+      }
+    },
+    {
+      "searchKeyword": "gangnam buffet",
+      "insightsValue": {
+        "value": "3856"
+      }
+    },
+    {
+      "searchKeyword": "buffet near me",
+      "insightsValue": {
+        "value": "3091"
+      }
+    },
+    {
+      "searchKeyword": "buffet",
+      "insightsValue": {
+        "value": "2591"
+      }
+    },
+    {
+      "searchKeyword": "gangnam ayce buffet",
+      "insightsValue": {
+        "value": "1224"
+      }
+    },
+    {
+      "searchKeyword": "ayce",
+      "insightsValue": {
+        "value": "1134"
+      }
+    },
+    {
+      "searchKeyword": "chinese buffet near me",
+      "insightsValue": {
+        "value": "798"
+      }
+    },
+    {
+      "searchKeyword": "ayce sushi",
+      "insightsValue": {
+        "value": "693"
+      }
+    }
+  ],
+  "nextPageToken": "ARht0biezc4oSV/KndghjpkQzKEVxLO20sVtOA74ekz9KMGuoA=="
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://poni-gbp.invalid/knowledge/manifest.schema.json",
+  "title": "knowledge/manifest.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "format": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Raised when the shape of the files changes in a way an older engine cannot read."
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]{8}(-[1-9][0-9]?)?$",
+      "description": "The day this knowledge base was made, YYYYMMDD; a later one of the same day adds -2, -3 and so on. Set a new one with every change."
+    }
+  },
+  "required": [
+    "format",
+    "version"
+  ]
+}

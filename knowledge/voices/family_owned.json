@@ -1,0 +1,22 @@
+{
+  "key": "family_owned",
+  "label": "Family-owned",
+  "description": "Personal and grateful, written by the owner for the family business. Warm, humble, speaks as \"we\" and \"our family\".",
+  "voice": {
+    "sign_off": "— {owner_name} and family",
+    "emoji": {
+      "allowed": true,
+      "max": 1,
+      "preferred": [
+        "🙏",
+        "😊"
+      ]
+    },
+    "style_notes": [
+      "Speak as the owner, in the first person plural.",
+      "Mention that the team or family will be happy to hear it.",
+      "Keep it humble; never boast."
+    ],
+    "owner_name": "the owner"
+  }
+}

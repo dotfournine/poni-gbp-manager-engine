@@ -1,0 +1,101 @@
+{
+  "key": "food_beverage",
+  "label": "Food and beverage",
+  "topics": [
+    {
+      "id": "food_quality",
+      "label": "Food quality and taste"
+    },
+    {
+      "id": "selection_variety",
+      "label": "Selection and variety"
+    },
+    {
+      "id": "freshness_restocking",
+      "label": "Freshness and restocking (empty trays, slow refills)"
+    },
+    {
+      "id": "service",
+      "label": "Service and staff friendliness"
+    },
+    {
+      "id": "wait_time",
+      "label": "Wait time"
+    },
+    {
+      "id": "price_value",
+      "label": "Price and value"
+    },
+    {
+      "id": "cleanliness",
+      "label": "Cleanliness (dining room, plates, utensils, restrooms)"
+    },
+    {
+      "id": "ambience",
+      "label": "Ambience, decor, seating, noise, temperature"
+    },
+    {
+      "id": "concept_expectations",
+      "label": "Concept or name expectations (e.g. cuisine not what the name suggests)"
+    },
+    {
+      "id": "promotions_billing",
+      "label": "Promotions, billing and payment"
+    }
+  ],
+  "item_types": [
+    {
+      "id": "dish",
+      "description": "A named dish or food item (e.g. sushi, crab legs, hot and sour soup, pho)."
+    },
+    {
+      "id": "drink",
+      "description": "A drink (e.g. bubble tea, soda, beer)."
+    },
+    {
+      "id": "dessert",
+      "description": "Desserts, fruit, ice cream."
+    },
+    {
+      "id": "station",
+      "description": "A buffet station or section (e.g. sushi bar, hibachi grill, dim sum, noodle soup station, seafood)."
+    },
+    {
+      "id": "staff",
+      "description": "A staff member named in the review: a server, host, chef or manager (first name only, as the reviewer wrote it).",
+      "person": true
+    }
+  ],
+  "severity_flags": [
+    {
+      "id": "illness_food_poisoning",
+      "label": "Illness or food poisoning",
+      "description": "The reviewer or someone in their party got sick (stomach pain, vomiting, diarrhea, fever, hospital visit) after eating here, or says they suspect food poisoning. Raise it even when the rating is high or the reviewer is unsure of the cause.",
+      "enabled": true
+    },
+    {
+      "id": "allergen_incident",
+      "label": "Allergen incident",
+      "description": "An allergic reaction, or an allergen (nuts, shellfish, gluten, dairy, egg, soy, sesame and so on) that was served despite a warning or was not labelled. Includes \"almost\" incidents where the reviewer caught it in time.",
+      "enabled": true
+    },
+    {
+      "id": "foreign_object",
+      "label": "Foreign object in food",
+      "description": "Hair, glass, plastic, metal, a bandage, an insect, a pest or any other object that should not be in the food or drink, or pests seen in the restaurant.",
+      "enabled": true
+    },
+    {
+      "id": "food_safety",
+      "label": "Food safety and handling",
+      "description": "Spoiled, expired or rotten food; raw or undercooked meat or seafood; cold food that should be hot, or sushi and seafood left warm; visibly unsafe food handling.",
+      "enabled": true
+    },
+    {
+      "id": "hygiene",
+      "label": "Hygiene",
+      "description": "Unsanitary conditions that could affect health: dirty, greasy or wet plates, bowls, cups or utensils; food residue on tableware; staff handling food with unwashed hands; filthy restrooms. General \"could be cleaner\" remarks go under the cleanliness topic instead.",
+      "enabled": true
+    }
+  ]
+}

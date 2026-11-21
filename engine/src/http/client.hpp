@@ -1,0 +1,140 @@
+// Outbound HTTP(S) client for the connectors. The interface keeps Beast and
+// OpenSSL inside client.cpp and lets tests replace the network with a fake.
+//
+// What the engine can do to the outside world is limited here, in code
+// (D-042, D-061, D-088). The engine changes a Google Business Profile with
+// three requests, each on the one address shape of the v4 API
+// (mybusiness.googleapis.com) that Google has for it:
+//
+//   PUT     .../accounts/{a}/locations/{l}/reviews/{r}/reply   a reply to a review
+//   POST    .../accounts/{a}/locations/{l}/localPosts          a new local post
+//   DELETE  .../accounts/{a}/locations/{l}/localPosts/{p}      that local post, and nothing else
+//
+// What the client enforces, before a name is resolved: a PUT goes nowhere
+// but to a reply, and a DELETE nowhere but to a local post, on any host. A
+// POST to the v4 host is refused unless it is the create above or the
+// read-only batchGetReviews. A POST to any other host is not limited here:
+// those are the engine's ordinary calls (OAuth tokens, Pub/Sub, Gmail, Cloud
+// Storage, the models), and that the engine sends no other POST to a Google
+// service is a rule for the code that calls this client (CLAUDE.md). PATCH
+// does not exist here and is not to be added.
+//
+// An address that changes something is taken only as the engine itself
+// writes it: the ids are letters, digits, '-' and '_', and the address must
+// equal the one built from its own parts, so what is checked is what is
+// sent. No request names its host with other characters than letters,
+// digits, '.' and '-', carries a header that would change its method or its
+// host, or holds a line break in a header; a DELETE carries no body.
+//
+// Against the local mock of Google (PONI_GOOGLE_MOCK_URL, D-087) the callers
+// still address Google; this client sends what the mock stands in for to the
+// mock instead, and refuses every other Google address. The rules above are
+// checked on the Google address, before it is changed, so a write is the
+// same write in both modes.
+#pragma once
+
+#include <boost/asio/awaitable.hpp>
+#include <boost/asio/ssl/context.hpp>
+#include <boost/url/url.hpp>
+
+#include <chrono>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+namespace poni::http {
+
+enum class ClientMethod { get, post, put, del };
+
+// True for the only address a PUT may go to:
+// https://mybusiness.googleapis.com/v4/accounts/{a}/locations/{l}/reviews/{r}/reply
+bool is_reply_url(const boost::urls::url& url);
+
+// True for the address a local post is created at (POST):
+// https://mybusiness.googleapis.com/v4/accounts/{a}/locations/{l}/localPosts
+bool is_local_post_collection_url(const boost::urls::url& url);
+
+// True for the only address a DELETE may go to, one local post:
+// https://mybusiness.googleapis.com/v4/accounts/{a}/locations/{l}/localPosts/{p}
+bool is_local_post_url(const boost::urls::url& url);
+
+// True for GBP's read that travels as a POST:
+// https://mybusiness.googleapis.com/v4/accounts/{a}/locations:batchGetReviews
+bool is_batch_get_reviews_url(const boost::urls::url& url);
+
+// True when the address names the GBP v4 host in any case, with a trailing
+// dot, a port or another scheme: the host whose POSTs are limited to the two
+// above. (A host written with other characters is refused for every method.)
+bool is_gbp_host(const boost::urls::url& url);
+
+// An id as Google's are, of accounts, locations, reviews and local posts:
+// letters, digits, '-' and '_' (ASCII, whatever the locale), at most 128 of
+// them. The ids the three write addresses take.
+bool is_plain_id(std::string_view id);
+
+// The rule for a method and an address alone: why the client will not send
+// to it, or nothing.
+std::optional<std::string_view> why_refused(ClientMethod method, const boost::urls::url& url);
+
+// Where the mock serves what `google` names: http://127.0.0.1:8090/mybusiness.googleapis.com/v4/...,
+// the Google host as the first segment, then the same path and query. Nothing
+// if `google` is an address the mock does not stand in for.
+std::optional<boost::urls::url> google_mock_address(const boost::urls::url& mock, const boost::urls::url& google);
+
+// True for an address of Google's (googleapis.com, google.com, the metadata
+// server), which against the mock must either be the mock's or not be called.
+bool is_google_address(const boost::urls::url& url);
+
+struct ClientRequest {
+    ClientMethod method = ClientMethod::get;
+    boost::urls::url url;  // https://, or http:// for loopback and the metadata server
+    std::vector<std::pair<std::string, std::string>> headers;
+    std::string content_type;  // sent when the body is not empty or the method is not GET
+    std::string body;
+    // Applied to each stage (connect, TLS handshake, write, read) separately.
+    std::chrono::seconds timeout{30};
+};
+
+struct ClientResponse {
+    unsigned status = 0;
+    std::string body;
+    bool ok() const { return status >= 200 && status < 300; }
+};
+
+// Why the client will not send this request, or nothing if it may be sent:
+// the rule above for its method and address, and what its headers and body
+// may not be. NetClient asks before it resolves a name; a test's stand-in
+// for the network asks too, so a connector that builds a forbidden request
+// fails its test the way it would fail in the engine.
+std::optional<std::string_view> why_refused(const ClientRequest& request);
+
+class Client {
+public:
+    virtual ~Client() = default;
+    // Throws boost::system::system_error on transport or TLS failure, and
+    // std::invalid_argument for a request the client refuses to send. HTTP
+    // error statuses are returned, not thrown.
+    virtual boost::asio::awaitable<ClientResponse> send(ClientRequest request) = 0;
+};
+
+// One connection per request. Polling a handful of Google endpoints every few
+// minutes doesn't justify a connection pool yet.
+class NetClient final : public Client {
+public:
+    // `tls` must outlive the client (core::make_tls_client_context()).
+    // `google_mock`: PONI_GOOGLE_MOCK_URL, already checked to be loopback.
+    explicit NetClient(boost::asio::ssl::context& tls, std::optional<boost::urls::url> google_mock = std::nullopt)
+        : tls_(tls), google_mock_(std::move(google_mock)) {}
+    boost::asio::awaitable<ClientResponse> send(ClientRequest request) override;
+
+private:
+    boost::asio::ssl::context& tls_;
+    std::optional<boost::urls::url> google_mock_;
+};
+
+// application/x-www-form-urlencoded encoding of one value.
+std::string form_encode(std::string_view value);
+
+}  // namespace poni::http

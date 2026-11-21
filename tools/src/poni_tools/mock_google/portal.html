@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mock Google: test portal</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 900px; margin: 0 auto; padding: 16px; line-height: 1.4; }
+  h1 { font-size: 1.4em; } h2 { font-size: 1.15em; margin-top: 2em; border-bottom: 1px solid #ccc; }
+  fieldset { border: 1px solid #ccc; margin-bottom: 1em; }
+  label { display: block; margin: 0.4em 0; }
+  input, select, textarea { font: inherit; max-width: 100%; }
+  textarea { width: 100%; box-sizing: border-box; }
+  .review { border: 1px solid #ddd; padding: 8px; margin: 8px 0; }
+  .meta { color: #555; font-size: 0.9em; }
+  .reply { margin: 6px 0 0 16px; padding-left: 8px; border-left: 3px solid #888; white-space: pre-wrap; }
+  .text { white-space: pre-wrap; }
+  .error { color: #b00; } .note { color: #555; font-size: 0.9em; }
+  .mail { border: 1px solid #ddd; padding: 8px; margin: 8px 0; }
+  .mail pre { white-space: pre-wrap; margin: 6px 0 0; }
+</style>
+</head>
+<body>
+<h1>Mock Google: test portal</h1>
+<p class="note">Everything here is made up. The engine reads these reviews and posts its replies here when
+it runs with <code>PONI_GOOGLE_MOCK_URL</code>. The page refreshes every few seconds.</p>
+
+<h2>Post a review</h2>
+<form id="post">
+  <label>Location <select name="location_id" id="location"></select></label>
+  <label>Reviewer's name <input name="reviewer" required value="Test Reviewer"></label>
+  <label>Stars <select name="stars"><option>5</option><option>4</option><option>3</option><option>2</option><option>1</option></select></label>
+  <label>Text (may be empty) <textarea name="comment" rows="3"></textarea></label>
+  <button>Post</button> <span id="post-result"></span>
+</form>
+
+<h2>Setting</h2>
+<form id="settings">
+  <label>A posted reply stays invisible for <input name="reply_delay_s" type="number" min="0" max="3600" size="5"> seconds
+    <span class="note">(Google shows a reply minutes after accepting it; 0 shows it at once)</span></label>
+  <button>Save</button> <span id="settings-result"></span>
+</form>
+
+<h2>Reviews</h2>
+<div id="reviews"></div>
+
+<h2>Outbox</h2>
+<p class="note">What the engine sent through Gmail. It went nowhere.</p>
+<div id="outbox"></div>
+
+<script>
+"use strict";
+let editing = null;  // the review being edited: no refresh replaces its form
+
+function el(tag, text, cls) {
+  const node = document.createElement(tag);
+  if (text !== undefined) node.textContent = text;  // never HTML: review text is untrusted
+  if (cls) node.className = cls;
+  return node;
+}
+
+async function call(path, body) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Mock-Portal": "1" },
+    body: JSON.stringify(body),
+  });
+  const answer = await response.json();
+  if (!response.ok) throw new Error(answer.error || response.statusText);
+  return answer;
+}
+
+function stars(n) { return "★".repeat(n) + "☆".repeat(5 - n); }
+function when(text) { return new Date(text).toLocaleString(); }
+
+function reviewNode(review) {
+  const box = el("div", undefined, "review");
+  box.append(el("div", `${stars(review.stars)}  ${review.reviewer}`));
+  box.append(el("div", `${when(review.create_time)}${review.edited ? ` · edited ${when(review.update_time)}` : ""} · ${review.id}`, "meta"));
+  box.append(el("div", review.comment || "(no text)", review.comment ? "text" : "meta"));
+  if (review.reply) {
+    const who = review.reply.by === "engine" ? "Reply posted by the engine" : "Reply by the owner";
+    const hidden = review.reply.visible_in > 0 ? ` · invisible to the engine for ${review.reply.visible_in} more s` : "";
+    const reply = el("div", undefined, "reply");
+    reply.append(el("div", `${who}, ${when(review.reply.update_time)}${hidden}`, "meta"));
+    reply.append(el("div", review.reply.comment));
+    box.append(reply);
+  }
+  if (editing === review.id) {
+    const form = el("form");
+    const text = el("textarea"); text.rows = 3; text.value = review.comment;
+    const select = el("select");
+    for (const n of [5, 4, 3, 2, 1]) { const o = el("option", String(n)); o.selected = n === review.stars; select.append(o); }
+    form.append(el("label", "Stars "), select, text, el("button", "Save"));
+    const cancel = el("button", "Cancel"); cancel.type = "button";
+    cancel.onclick = () => { editing = null; refresh(); };
+    form.append(" ", cancel);
+    form.onsubmit = async (event) => {
+      event.preventDefault();
+      try { await call(`/portal/reviews/${encodeURIComponent(review.id)}/edit`, { stars: Number(select.value), comment: text.value }); }
+      catch (error) { alert(error.message); return; }
+      editing = null; refresh();
+    };
+    box.append(form);
+  } else {
+    const edit = el("button", "Edit"); edit.onclick = () => { editing = review.id; refresh(); };
+    const remove = el("button", "Delete");
+    remove.onclick = async () => {
+      if (!confirm("Take this review down? The engine will see it as removed.")) return;
+      try { await call(`/portal/reviews/${encodeURIComponent(review.id)}/remove`, {}); } catch (error) { alert(error.message); }
+      refresh();
+    };
+    box.append(edit, " ", remove);
+  }
+  return box;
+}
+
+let firstLoad = true;
+async function refresh() {
+  let state;
+  try { state = await (await fetch("/portal/state")).json(); } catch { return; }
+  const select = document.getElementById("location");
+  if (firstLoad) {
+    for (const loc of state.locations) { const o = el("option", loc.title); o.value = loc.id; select.append(o); }
+    document.querySelector("#settings input").value = state.reply_delay_s;
+    firstLoad = false;
+  }
+  const reviews = document.getElementById("reviews");
+  reviews.replaceChildren();
+  for (const loc of state.locations) {
+    reviews.append(el("h3", `${loc.title} (${loc.reviews.length})`));
+    reviews.append(el("div", `location ${loc.id} · ${loc.industry}`, "meta"));
+    for (const review of loc.reviews) reviews.append(reviewNode(review));
+  }
+  const outbox = document.getElementById("outbox");
+  outbox.replaceChildren();
+  if (!state.outbox.length) outbox.append(el("p", "Nothing sent yet.", "note"));
+  for (const mail of state.outbox) {
+    const box = el("div", undefined, "mail");
+    box.append(el("div", `${when(mail.sent_at)} · to ${mail.to}`, "meta"));
+    box.append(el("strong", mail.subject));
+    box.append(el("pre", mail.body));
+    outbox.append(box);
+  }
+}
+
+document.getElementById("post").onsubmit = async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.target);
+  const result = document.getElementById("post-result");
+  try {
+    const answer = await call("/portal/reviews", Object.fromEntries(form));
+    result.className = ""; result.textContent = `Posted ${answer.id}.`;
+    event.target.comment.value = "";
+  } catch (error) { result.className = "error"; result.textContent = error.message; }
+  refresh();
+};
+document.getElementById("settings").onsubmit = async (event) => {
+  event.preventDefault();
+  const result = document.getElementById("settings-result");
+  try {
+    await call("/portal/settings", { reply_delay_s: Number(event.target.reply_delay_s.value) });
+    result.className = ""; result.textContent = "Saved.";
+  } catch (error) { result.className = "error"; result.textContent = error.message; }
+};
+
+refresh();
+setInterval(() => { if (editing === null) refresh(); }, 4000);
+</script>
+</body>
+</html>

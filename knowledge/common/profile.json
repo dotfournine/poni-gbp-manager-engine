@@ -1,0 +1,28 @@
+{
+  "severity_flags": [
+    {
+      "id": "discrimination_harassment",
+      "label": "Discrimination or harassment",
+      "description": "The reviewer says they, or someone with them, were treated differently or badly because of race, ethnicity, language, religion, gender, sexuality, age, disability or similar; or were harassed, followed, profiled or humiliated by staff.",
+      "enabled": true
+    },
+    {
+      "id": "staff_misconduct",
+      "label": "Staff misconduct",
+      "description": "Staff behaved in a seriously improper way beyond poor service: theft, intoxication at work, physical aggression, verbal abuse, threats, recording customers, fraud or overcharging on purpose, or tampering with food or belongings.",
+      "enabled": true
+    },
+    {
+      "id": "legal_regulatory_threat",
+      "label": "Legal or regulatory threat",
+      "description": "The reviewer threatens or reports legal action, a lawyer, a lawsuit, police, or a complaint to a health department, licensing board, consumer protection agency or similar regulator.",
+      "enabled": true
+    },
+    {
+      "id": "threat_of_violence",
+      "label": "Threat of violence",
+      "description": "The reviewer threatens to harm staff, the owner, customers or the property, or describes an intention to commit violence (including arson or vandalism).",
+      "enabled": true
+    }
+  ]
+}

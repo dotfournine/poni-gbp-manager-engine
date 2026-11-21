@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://poni-gbp.invalid/knowledge/voice_template.schema.json",
+  "title": "knowledge/voices/<key>.json",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "key": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "maxLength": 60
+    },
+    "label": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "voice": {
+      "$ref": "settings.schema.json#/$defs/voiceLayer"
+    }
+  },
+  "required": [
+    "description",
+    "key",
+    "label",
+    "voice"
+  ]
+}

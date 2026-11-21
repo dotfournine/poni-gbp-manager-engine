@@ -1,0 +1,183 @@
+{
+  "name": "locations/6336855403902537758",
+  "languageCode": "en",
+  "storeCode": "14570798219083678786",
+  "title": "Gangnam AYCE Buffet",
+  "phoneNumbers": {
+    "primaryPhone": "(703) 378-8808"
+  },
+  "categories": {
+    "primaryCategory": {
+      "name": "categories/gcid:buffet_restaurant",
+      "displayName": "Buffet restaurant",
+      "moreHoursTypes": [
+        {
+          "hoursTypeId": "ACCESS",
+          "displayName": "Access",
+          "localizedDisplayName": "Access"
+        },
+        {
+          "hoursTypeId": "BREAKFAST",
+          "displayName": "Breakfast",
+          "localizedDisplayName": "Breakfast"
+        },
+        {
+          "hoursTypeId": "BRUNCH",
+          "displayName": "Brunch",
+          "localizedDisplayName": "Brunch"
+        },
+        {
+          "hoursTypeId": "DELIVERY",
+          "displayName": "Delivery",
+          "localizedDisplayName": "Delivery"
+        },
+        {
+          "hoursTypeId": "DINNER",
+          "displayName": "Dinner",
+          "localizedDisplayName": "Dinner"
+        },
+        {
+          "hoursTypeId": "DRIVE_THROUGH",
+          "displayName": "Drive through",
+          "localizedDisplayName": "Drive through"
+        },
+        {
+          "hoursTypeId": "HAPPY_HOUR",
+          "displayName": "Happy hours",
+          "localizedDisplayName": "Happy hours"
+        },
+        {
+          "hoursTypeId": "KITCHEN",
+          "displayName": "Kitchen",
+          "localizedDisplayName": "Kitchen"
+        },
+        {
+          "hoursTypeId": "LUNCH",
+          "displayName": "Lunch",
+          "localizedDisplayName": "Lunch"
+        },
+        {
+          "hoursTypeId": "ONLINE_SERVICE_HOURS",
+          "displayName": "Online service hours",
+          "localizedDisplayName": "Online service hours"
+        },
+        {
+          "hoursTypeId": "TAKEOUT",
+          "displayName": "Takeout",
+          "localizedDisplayName": "Takeout"
+        },
+        {
+          "hoursTypeId": "SENIOR_HOURS",
+          "displayName": "Senior hours",
+          "localizedDisplayName": "Senior hours"
+        }
+      ]
+    }
+  },
+  "storefrontAddress": {
+    "regionCode": "US",
+    "languageCode": "en",
+    "postalCode": "20151",
+    "administrativeArea": "VA",
+    "locality": "Chantilly",
+    "addressLines": [
+      "13948 Metrotech Dr"
+    ]
+  },
+  "websiteUri": "https://www.gangnambuffet.com/",
+  "regularHours": {
+    "periods": [
+      {
+        "openDay": "SUNDAY",
+        "openTime": {
+          "hours": 11
+        },
+        "closeDay": "SUNDAY",
+        "closeTime": {
+          "hours": 21,
+          "minutes": 30
+        }
+      },
+      {
+        "openDay": "MONDAY",
+        "openTime": {
+          "hours": 11
+        },
+        "closeDay": "MONDAY",
+        "closeTime": {
+          "hours": 21,
+          "minutes": 30
+        }
+      },
+      {
+        "openDay": "TUESDAY",
+        "openTime": {
+          "hours": 11
+        },
+        "closeDay": "TUESDAY",
+        "closeTime": {
+          "hours": 21,
+          "minutes": 30
+        }
+      },
+      {
+        "openDay": "WEDNESDAY",
+        "openTime": {
+          "hours": 11
+        },
+        "closeDay": "WEDNESDAY",
+        "closeTime": {
+          "hours": 21,
+          "minutes": 30
+        }
+      },
+      {
+        "openDay": "THURSDAY",
+        "openTime": {
+          "hours": 11
+        },
+        "closeDay": "THURSDAY",
+        "closeTime": {
+          "hours": 21,
+          "minutes": 30
+        }
+      },
+      {
+        "openDay": "FRIDAY",
+        "openTime": {
+          "hours": 11
+        },
+        "closeDay": "FRIDAY",
+        "closeTime": {
+          "hours": 22
+        }
+      },
+      {
+        "openDay": "SATURDAY",
+        "openTime": {
+          "hours": 11
+        },
+        "closeDay": "SATURDAY",
+        "closeTime": {
+          "hours": 22
+        }
+      }
+    ]
+  },
+  "openInfo": {
+    "status": "OPEN",
+    "canReopen": true
+  },
+  "metadata": {
+    "canDelete": true,
+    "canHaveFoodMenus": true,
+    "placeId": "ChIJAQbbM35HtokRS9zLVLV7rYk",
+    "mapsUri": "https://maps.google.com/maps?cid=9920721572909014091",
+    "newReviewUri": "https://search.google.com/local/writereview?placeid=ChIJAQbbM35HtokRS9zLVLV7rYk",
+    "canHaveBusinessCalls": true,
+    "hasVoiceOfMerchant": true
+  },
+  "profile": {
+    "description": "Gangnam Buffet is a family-friendly all-you-can-eat restaurant offering a wide selection of fresh and flavorful dishes for lunch and dinner. It is a great place for family meals, casual dining, and gatherings with friends."
+  }
+}

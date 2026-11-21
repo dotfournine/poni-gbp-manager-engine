@@ -1,0 +1,41 @@
+# Caddy in front of the engine (architecture section 7): automatic HTTPS, the
+# dashboard's static files, and /api forwarded to the engine.
+#
+# PONI_SITE_ADDRESS is the dashboard's host name, e.g. gbp.example.com. Caddy
+# gets and renews the certificate by itself; the name's DNS record must point
+# at this server and ports 80 and 443 must be reachable. ("localhost" works
+# for a local trial, with Caddy's own certificate.)
+{$PONI_SITE_ADDRESS} {
+	encode zstd gzip
+
+	header {
+		# HTTPS only, for a year (architecture section 8).
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+		# The dashboard loads only its own scripts and talks only to its own
+		# origin. Review text is untrusted input: even if some of it were ever
+		# rendered as HTML, this keeps it from running or phoning out.
+		# Inline styles are what Material UI generates; reviewer photos come
+		# from Google's image hosts.
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.googleusercontent.com; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+		-Server
+	}
+
+	handle /api/* {
+		reverse_proxy engine:8080
+	}
+
+	handle {
+		root * /srv/dashboard
+		# Fingerprinted build files never change; the page itself is always re-checked.
+		@assets path /assets/*
+		header @assets Cache-Control "public, max-age=31536000, immutable"
+		@page not path /assets/*
+		header @page Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+}

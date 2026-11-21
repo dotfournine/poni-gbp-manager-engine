@@ -1,0 +1,9 @@
+# This file instructs Redocly's linter to ignore the rules contained for specific parts of your API.
+# See https://redocly.com/docs/cli/ for more information.
+openapi.yaml:
+  operation-4xx-response:
+    - '#/paths/~1api~1health/get/responses'
+  operation-2xx-response:
+    - '#/paths/~1api~1auth~1google~1start/get/responses'
+    - '#/paths/~1api~1auth~1google~1callback/get/responses'
+    - '#/paths/~1api~1connections~1{account}~1callback/get/responses'

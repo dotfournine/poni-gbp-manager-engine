@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # The engine on both architectures (D-034) with clang, the compiler
+  # production ships (D-028).
+  # Each job runs engine/scripts/linux.sh, the same script developers run
+  # locally: build in the Ubuntu toolchain container, unit and integration
+  # tests against PostgreSQL, then the OpenAPI contract check.
+  engine:
+    name: engine (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-24.04 }
+          - { arch: arm64, runner: ubuntu-24.04-arm }
+    env:
+      PONI_SKIP_IMAGE_BUILD: "1"
+      # vcpkg's binary cache, as a host directory so actions/cache can save it.
+      PONI_VCPKG_CACHE: ${{ github.workspace }}/.vcpkg-cache
+      # Two compiles at a time: private-repository runners are small.
+      PONI_BUILD_JOBS: "2"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build the toolchain image
+        uses: docker/build-push-action@v7
+        with:
+          context: engine
+          target: toolchain
+          load: true
+          tags: poni-gbp-toolchain
+          cache-from: type=gha,scope=toolchain-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=toolchain-${{ matrix.arch }}
+
+      # vcpkg's ABI hash includes the compiler, and apt.llvm.org publishes new
+      # builds of the same clang major version, so a cache built with an older
+      # clang is restored but none of its archives match. The compiler's full
+      # version string goes into the key: a new compiler gets a new key, starts
+      # from the old archives through restore-keys, and saves what it rebuilt.
+      - name: Read the compiler version
+        id: compiler
+        run: |
+          version=$(docker run --rm poni-gbp-toolchain clang++ --version)
+          echo "$version"
+          echo "hash=$(printf '%s' "$version" | sha256sum | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+      # Shared vcpkg binary cache: a warm cache turns the ~4 minute dependency
+      # build into seconds. The GitHub Actions cache is the starting point; a
+      # Cloud Storage bucket (vcpkg's x-gcs provider) is the later option if
+      # the 10 GB repository limit or cache eviction becomes a problem.
+      - name: Restore the vcpkg binary cache
+        uses: actions/cache@v6
+        with:
+          path: .vcpkg-cache
+          key: vcpkg-${{ matrix.arch }}-linux-clang-${{ steps.compiler.outputs.hash }}-${{ hashFiles('engine/vcpkg.json', 'engine/triplets/**', 'engine/cmake/**', 'engine/Dockerfile') }}
+          restore-keys: |
+            vcpkg-${{ matrix.arch }}-linux-clang-
+
+      - name: Build and test
+        run: engine/scripts/linux.sh test
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+
+      - name: Check the engine against api/openapi.yaml
+        run: |
+          npm --prefix api ci
+          engine/scripts/linux.sh contract
+
+      - name: Make the vcpkg cache readable for saving
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" .vcpkg-cache || true
+
+  api:
+    name: openapi lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: api/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+
+  # The operations scripts (D-079) and the knowledge base (D-078): the
+  # scripts' own tests, then the check every seed and every publish runs.
+  tools:
+    name: tools and knowledge base
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tools
+    # The migration tests run against a real PostgreSQL, as the engine's do.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: poni
+          POSTGRES_PASSWORD: poni
+          POSTGRES_DB: poni
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U poni -d poni" --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      PONI_TEST_DATABASE_URL: postgresql://poni:poni@127.0.0.1:5432/poni
+    steps:
+      - uses: actions/checkout@v7
+      # setup-uv publishes full versions only, no moving major tag. uv itself is the Dockerfiles' version.
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.13.5"
+          enable-cache: true
+          cache-dependency-glob: tools/uv.lock
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest -q
+      - name: The knowledge base is complete
+        run: uv run poni-tools check

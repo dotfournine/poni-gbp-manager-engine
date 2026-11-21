@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "poni-gbp-engine",
+  "version": "0.1.0",
+  "description": "PONI GBP Manager core engine",
+  "builtin-baseline": "ec48c11eae9448c8c6e7739d93e06fa2433aa95f",
+  "dependencies": [
+    "boost-asio",
+    "boost-beast",
+    "boost-describe",
+    "boost-json",
+    "boost-url",
+    "cctz",
+    "gtest",
+    {
+      "name": "libpqxx",
+      "default-features": false
+    },
+    "openssl"
+  ]
+}

@@ -1,0 +1,91 @@
+{
+  "key": "wellness",
+  "label": "Wellness",
+  "topics": [
+    {
+      "id": "treatment_quality",
+      "label": "Treatment quality and technique"
+    },
+    {
+      "id": "therapist",
+      "label": "Therapist skill and friendliness"
+    },
+    {
+      "id": "relaxation_results",
+      "label": "Relaxation and results (scalp, skin, pain relief)"
+    },
+    {
+      "id": "cleanliness",
+      "label": "Cleanliness and hygiene"
+    },
+    {
+      "id": "booking",
+      "label": "Booking, scheduling, timing and treatment length"
+    },
+    {
+      "id": "price_value",
+      "label": "Price and value"
+    },
+    {
+      "id": "ambience",
+      "label": "Ambience, decor, music, scent, rooms"
+    },
+    {
+      "id": "communication",
+      "label": "Communication, language and listening to requests"
+    },
+    {
+      "id": "hair_styling",
+      "label": "Hair drying and styling after treatment"
+    },
+    {
+      "id": "promotions_billing",
+      "label": "Promotions, packages, upsell and billing"
+    }
+  ],
+  "item_types": [
+    {
+      "id": "treatment",
+      "description": "A named treatment or package (e.g. head spa, scalp treatment, gua sha facial, foot massage, deep tissue massage, combo)."
+    },
+    {
+      "id": "therapist",
+      "description": "A staff member named in the review (first name only, as the reviewer wrote it).",
+      "person": true
+    },
+    {
+      "id": "product",
+      "description": "A product used or sold (oil, shampoo, mask)."
+    },
+    {
+      "id": "amenity",
+      "description": "An amenity (tea and snacks, steam, water ring, blow-dry, room with fountain)."
+    }
+  ],
+  "severity_flags": [
+    {
+      "id": "injury",
+      "label": "Injury",
+      "description": "Physical harm during or after a treatment: lasting pain (\"still in pain\"), bruising, burns, cuts, strains, hair or scalp damage, being hit, or a treatment so rough it hurt. Ordinary \"strong pressure\" that the reviewer liked is NOT an injury.",
+      "enabled": true
+    },
+    {
+      "id": "allergic_skin_reaction",
+      "label": "Allergic or skin reaction",
+      "description": "Rash, redness, hives, swelling, breakouts, burning or itching skin or scalp, or eye irritation after a facial, scalp treatment, oil or product.",
+      "enabled": true
+    },
+    {
+      "id": "hygiene",
+      "label": "Hygiene",
+      "description": "Unsanitary conditions that could affect health: dirty or reused towels, sheets or tools, hair or stains on linens, unwashed hands, bugs, mold, dirty water. General \"could be cleaner\" remarks go under the cleanliness topic instead.",
+      "enabled": true
+    },
+    {
+      "id": "inappropriate_conduct",
+      "label": "Inappropriate conduct by staff",
+      "description": "Sexual or inappropriate touching, assault, comments of a sexual nature, draping violations, a therapist making the guest feel unsafe, or any allegation of assault. Always raise it on an allegation, even if vague.",
+      "enabled": true
+    }
+  ]
+}

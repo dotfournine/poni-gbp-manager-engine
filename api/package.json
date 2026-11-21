@@ -1,0 +1,16 @@
+{
+  "name": "poni-gbp-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tooling for api/openapi.yaml: lint, and a check that a running engine answers as the spec says.",
+  "type": "module",
+  "scripts": {
+    "lint": "redocly lint openapi.yaml",
+    "check:contract": "node scripts/check-contract.mjs"
+  },
+  "devDependencies": {
+    "@redocly/cli": "^2.77.0",
+    "ajv": "^8.20.0",
+    "yaml": "^2.9.1"
+  }
+}

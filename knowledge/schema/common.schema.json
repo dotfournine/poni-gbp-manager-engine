@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://poni-gbp.invalid/knowledge/common.schema.json",
+  "title": "knowledge/common/profile.json: the severity flags of every industry",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "severity_flags": {
+      "type": "array",
+      "maxItems": 50,
+      "items": {
+        "$ref": "#/$defs/flag"
+      }
+    }
+  },
+  "required": [
+    "severity_flags"
+  ],
+  "$defs": {
+    "flag": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "maxLength": 60
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "description",
+        "enabled",
+        "id",
+        "label"
+      ]
+    }
+  }
+}

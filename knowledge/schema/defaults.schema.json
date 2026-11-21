@@ -1,0 +1,134 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://poni-gbp.invalid/knowledge/defaults.schema.json",
+  "title": "knowledge/defaults.json: what a new client starts from, and the default of every analysis setting",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "voice": {
+      "$ref": "settings.schema.json#/$defs/voice"
+    },
+    "localization": {
+      "$ref": "settings.schema.json#/$defs/localization"
+    },
+    "policy": {
+      "$ref": "settings.schema.json#/$defs/policy"
+    },
+    "analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "analyzer_provider": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "maxLength": 40
+        },
+        "analyzer_model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "analyzer_temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2
+        },
+        "analyzer_send_temperature": {
+          "type": "boolean"
+        },
+        "generator_provider": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "maxLength": 40
+        },
+        "generator_model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "generator_send_temperature": {
+          "type": "boolean"
+        },
+        "judge_provider": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "maxLength": 40
+        },
+        "judge_model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "summary_provider": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "maxLength": 40
+        },
+        "summary_model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "posts_provider": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "maxLength": 40
+        },
+        "posts_model": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 8000
+        },
+        "request_extras": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "maxLength": 40
+          },
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
+        "batch_size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "analyzer_model",
+        "analyzer_provider",
+        "analyzer_send_temperature",
+        "analyzer_temperature",
+        "batch_size",
+        "enabled",
+        "generator_model",
+        "generator_provider",
+        "generator_send_temperature",
+        "judge_model",
+        "judge_provider",
+        "max_output_tokens",
+        "posts_model",
+        "posts_provider",
+        "request_extras",
+        "summary_model",
+        "summary_provider"
+      ]
+    }
+  },
+  "required": [
+    "analysis",
+    "localization",
+    "policy",
+    "voice"
+  ]
+}

@@ -1,0 +1,162 @@
+{
+  "note": "Sanitized. One page of localPosts.list: a scheduled offer, a recurring event still processing, a video still processing, a live post made in Google's interface with three photos and a CALL button, and an offer made there (no `offer` object, start time {}).",
+  "localPosts": [
+    {
+      "name": "accounts/111/locations/9001/localPosts/7002",
+      "languageCode": "en",
+      "summary": "Ten percent off lunch for the opening week.",
+      "state": "SCHEDULED",
+      "event": {
+        "title": "Opening week lunch",
+        "schedule": {
+          "startDate": {
+            "year": 2026,
+            "month": 12,
+            "day": 19
+          },
+          "startTime": {
+            "hours": 18
+          },
+          "endDate": {
+            "year": 2026,
+            "month": 12,
+            "day": 19
+          },
+          "endTime": {
+            "hours": 20
+          }
+        }
+      },
+      "updateTime": "2026-11-19T05:57:59.166170451Z",
+      "createTime": "2026-11-19T05:57:59.166170451Z",
+      "searchUrl": "https://local.google.com/place?id=1000&use=posts&lpsid=MADEUP7002",
+      "topicType": "OFFER",
+      "offer": {
+        "couponCode": "FALL10",
+        "termsConditions": "Dine-in only. One per table."
+      },
+      "scheduledTime": "2026-12-19T17:00:00Z"
+    },
+    {
+      "name": "accounts/111/locations/9001/localPosts/7001",
+      "languageCode": "en",
+      "summary": "Live music every Friday evening through January.",
+      "state": "PROCESSING",
+      "event": {
+        "title": "Friday live music",
+        "schedule": {
+          "startDate": {
+            "year": 2026,
+            "month": 12,
+            "day": 19
+          },
+          "startTime": {
+            "hours": 18
+          },
+          "endDate": {
+            "year": 2026,
+            "month": 12,
+            "day": 19
+          },
+          "endTime": {
+            "hours": 20
+          }
+        },
+        "recurrenceInfo": {
+          "weeklyPattern": {},
+          "seriesEndTime": "2027-01-31T00:00:00Z"
+        }
+      },
+      "updateTime": "2026-11-19T05:57:55.881928181Z",
+      "createTime": "2026-11-19T05:57:55.881928181Z",
+      "searchUrl": "https://local.google.com/place?id=1000&use=posts&lpsid=MADEUP7001",
+      "topicType": "EVENT",
+      "scheduledTime": "2026-12-19T17:00:00Z"
+    },
+    {
+      "name": "accounts/111/locations/9001/localPosts/7003",
+      "languageCode": "en",
+      "summary": "A look inside the new dining room.",
+      "state": "PROCESSING",
+      "updateTime": "2026-11-19T05:57:57.704411135Z",
+      "createTime": "2026-11-19T05:57:57.704411135Z",
+      "searchUrl": "https://local.google.com/place?id=1000&use=posts&lpsid=MADEUP7003",
+      "media": [
+        {
+          "name": "accounts/111/locations/9001/media/localPosts/MADEUP1",
+          "mediaFormat": "VIDEO",
+          "googleUrl": "https://lh3.googleusercontent.com/p/MADEUP1"
+        }
+      ],
+      "topicType": "STANDARD",
+      "scheduledTime": "2026-12-19T17:00:00Z"
+    },
+    {
+      "name": "accounts/111/locations/9001/localPosts/7004",
+      "languageCode": "en",
+      "summary": "Now open late on Fridays and Saturdays. Call to book a table.",
+      "callToAction": {
+        "actionType": "CALL"
+      },
+      "state": "LIVE",
+      "updateTime": "2026-11-04T03:29:35.562427231Z",
+      "createTime": "2026-11-04T03:29:35.562427231Z",
+      "searchUrl": "https://local.google.com/place?id=1000&use=posts&lpsid=MADEUP7004",
+      "media": [
+        {
+          "name": "accounts/111/locations/9001/media/localPosts/MADEUP2",
+          "mediaFormat": "PHOTO",
+          "googleUrl": "https://lh3.googleusercontent.com/p/MADEUP2"
+        },
+        {
+          "name": "accounts/111/locations/9001/media/localPosts/MADEUP3",
+          "mediaFormat": "PHOTO",
+          "googleUrl": "https://lh3.googleusercontent.com/p/MADEUP3"
+        },
+        {
+          "name": "accounts/111/locations/9001/media/localPosts/MADEUP4",
+          "mediaFormat": "PHOTO",
+          "googleUrl": "https://lh3.googleusercontent.com/p/MADEUP4"
+        }
+      ],
+      "topicType": "STANDARD",
+      "scheduledTime": "2026-11-05T17:30:00Z"
+    },
+    {
+      "name": "accounts/111/locations/9001/localPosts/7005",
+      "languageCode": "en",
+      "summary": "Weekend special for the whole table.",
+      "state": "LIVE",
+      "event": {
+        "title": "Weekend special",
+        "schedule": {
+          "startDate": {
+            "year": 2026,
+            "month": 8,
+            "day": 28
+          },
+          "startTime": {},
+          "endDate": {
+            "year": 2026,
+            "month": 9,
+            "day": 6
+          },
+          "endTime": {
+            "hours": 22
+          }
+        }
+      },
+      "updateTime": "2026-08-28T22:40:31.216289Z",
+      "createTime": "2026-08-28T22:40:31.216289Z",
+      "searchUrl": "https://local.google.com/place?id=1000&use=posts&lpsid=MADEUP7005",
+      "media": [
+        {
+          "name": "accounts/111/locations/9001/media/localPosts/MADEUP5",
+          "mediaFormat": "PHOTO",
+          "googleUrl": "https://lh3.googleusercontent.com/p/MADEUP5"
+        }
+      ],
+      "topicType": "OFFER"
+    }
+  ]
+}

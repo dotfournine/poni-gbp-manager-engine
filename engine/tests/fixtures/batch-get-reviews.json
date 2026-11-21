@@ -1,0 +1,68 @@
+{
+  "note": "Sanitized sample of locations:batchGetReviews (3 of 50 entries).",
+  "locationReviews": [
+    {
+      "name": "accounts/111283263702173569518/locations/2989613862617415874",
+      "review": {
+        "reviewId": "REVIEW_ID_200",
+        "reviewer": {
+          "displayName": "Reviewer 200",
+          "isAnonymous": false
+        },
+        "starRating": "FIVE",
+        "comment": "Sheri was great! Thank you for the great experience!",
+        "createTime": "2026-11-09T00:04:49.835729Z",
+        "updateTime": "2026-11-09T00:04:49.835729Z",
+        "reviewReply": {
+          "comment": "Thank you so much for your kind review! We’re thrilled you had a wonderful experience. Hope to welcome you back soon!",
+          "updateTime": "2026-11-09T02:41:49.409641Z",
+          "reviewReplyState": "APPROVED"
+        },
+        "name": "accounts/111283263702173569518/locations/2989613862617415874/reviews/REVIEW_ID_200",
+        "reviewReplyUrl": "https://business.google.com/n/2989613862617415874/reviews/Ci9DQUlRQUNvZENodHljRjlvT2pkWU4zY3daSGxyYzJGbmVuQjNObk5wYW1WWk0yYxAB"
+      }
+    },
+    {
+      "name": "accounts/111283263702173569518/locations/17097548622226710238",
+      "review": {
+        "reviewId": "REVIEW_ID_201",
+        "reviewer": {
+          "displayName": "Reviewer 201",
+          "isAnonymous": false
+        },
+        "starRating": "FIVE",
+        "comment": "I got a guasha and hair spa from Alice and she was amazing! The whole experience was really relaxing and worth it, she also gave me amazing neck massage. Definitely will come back!",
+        "createTime": "2026-11-08T18:46:58.622272Z",
+        "updateTime": "2026-11-08T18:46:58.622272Z",
+        "reviewReply": {
+          "comment": "Thank you so much for your lovely review! We’re thrilled you had such a relaxing experience with your gua sha and hair spa. We’re glad you enjoyed the neck massage as well. Hope to welcome you back soon!",
+          "updateTime": "2026-11-09T02:35:59.584582Z",
+          "reviewReplyState": "APPROVED"
+        },
+        "name": "accounts/111283263702173569518/locations/17097548622226710238/reviews/REVIEW_ID_201",
+        "reviewReplyUrl": "https://business.google.com/n/17097548622226710238/reviews/Ci9DQUlRQUNvZENodHljRjlvT25oQ1ZVYzBRek53T0RoNlZUaGFTR3RSVkdWb1FWRRAB"
+      }
+    },
+    {
+      "name": "accounts/111283263702173569518/locations/2989613862617415874",
+      "review": {
+        "reviewId": "REVIEW_ID_202",
+        "reviewer": {
+          "displayName": "Reviewer 202",
+          "isAnonymous": false
+        },
+        "starRating": "FIVE",
+        "comment": "Mila was amazing. I did the head spa with Guasha facial and left feeling incredible. Highly Recommended !!",
+        "createTime": "2026-11-08T17:14:31.032801Z",
+        "updateTime": "2026-11-08T17:14:31.032801Z",
+        "reviewReply": {
+          "comment": "Thank you so much for your wonderful review! We’re thrilled you loved your head spa and gua sha facial combo. Hope to welcome you back soon!",
+          "updateTime": "2026-11-09T02:42:03.426828Z",
+          "reviewReplyState": "APPROVED"
+        },
+        "name": "accounts/111283263702173569518/locations/2989613862617415874/reviews/REVIEW_ID_202",
+        "reviewReplyUrl": "https://business.google.com/n/2989613862617415874/reviews/Ci9DQUlRQUNvZENodHljRjlvT25OTVNrSkljMDVoWjBwMVVHdFVNaTEwVlVoQ01YYxAB"
+      }
+    }
+  ]
+}

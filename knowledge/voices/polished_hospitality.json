@@ -1,0 +1,17 @@
+{
+  "key": "polished_hospitality",
+  "label": "Polished hospitality",
+  "description": "Gracious and composed, like a good hotel front desk. Complete sentences, no slang, no emoji.",
+  "voice": {
+    "emoji": {
+      "allowed": false,
+      "max": 0,
+      "preferred": []
+    },
+    "style_notes": [
+      "Courteous and measured. No exclamation marks in replies to complaints.",
+      "Two to four sentences.",
+      "Acknowledge specifics without repeating the whole review."
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+# Only for "Trying the stack locally" (deploy/README.md), on top of
+# docker-compose.prod.yml: a folder of this machine stands in for the Cloud
+# Storage bucket that knowledge archives are published to.
+#
+#   PONI_TRIAL_KNOWLEDGE   the folder `poni-tools pack --out` wrote the archive into
+#   PONI_KNOWLEDGE_BUCKET  /published (where that folder is mounted)
+services:
+  seed:
+    volumes:
+      - ${PONI_TRIAL_KNOWLEDGE:?set PONI_TRIAL_KNOWLEDGE to the folder that holds the packed archive}:/published:ro

@@ -1,0 +1,4225 @@
+{
+  "_comment": "Captured on 2026-11-20 with the engine as it was before D-093 (the simplification branch at a468819): made-up clients and locations with voice and policy layers at every level, as the engine stored them in voice_profiles and reply_policies, and for each location what domain::resolve_settings gave and the fingerprint of that. Giving every location one complete row must change none of them. Never regenerate this file.",
+  "defaults": {
+    "voice": {
+      "temperature": 0.7,
+      "reply_name": "",
+      "business_facts": [],
+      "example_replies": [],
+      "sign_off": "",
+      "emoji": {
+        "allowed": false,
+        "max": 0,
+        "preferred": []
+      },
+      "promos_allowed": false,
+      "contact_allowed": false,
+      "words_to_avoid": [
+        "sorry for any inconvenience",
+        "valued customer",
+        "we apologize for the inconvenience",
+        "per our policy",
+        "unfortunately you"
+      ],
+      "style_notes": [],
+      "owner_name": "",
+      "length": {
+        "en": {
+          "rating_only": {
+            "min": 30,
+            "max": 160
+          },
+          "positive": {
+            "min": 60,
+            "max": 420
+          },
+          "complaint": {
+            "min": 120,
+            "max": 650
+          },
+          "severity": {
+            "min": 120,
+            "max": 650
+          }
+        },
+        "zh": {
+          "rating_only": {
+            "min": 8,
+            "max": 60
+          },
+          "positive": {
+            "min": 20,
+            "max": 160
+          },
+          "complaint": {
+            "min": 40,
+            "max": 260
+          },
+          "severity": {
+            "min": 40,
+            "max": 260
+          }
+        },
+        "es": {
+          "rating_only": {
+            "min": 30,
+            "max": 180
+          },
+          "positive": {
+            "min": 60,
+            "max": 450
+          },
+          "complaint": {
+            "min": 120,
+            "max": 700
+          },
+          "severity": {
+            "min": 120,
+            "max": 700
+          }
+        }
+      },
+      "base_style": ""
+    },
+    "localization": {
+      "reply_languages": [
+        "en",
+        "zh",
+        "es"
+      ],
+      "chinese_script": "match",
+      "chinese_region": "taiwan",
+      "english_variant": "us",
+      "fallback_language": "en"
+    },
+    "policy": {
+      "auto_post_positive": true,
+      "auto_post_rating_only": true,
+      "auto_post_min_stars": 4,
+      "auto_post_delay_min_minutes": 0,
+      "auto_post_delay_max_minutes": 0,
+      "auto_post_window_start": "",
+      "auto_post_window_end": ""
+    }
+  },
+  "analyzer": {
+    "provider": "dashscope",
+    "model": "qwen3.7-plus",
+    "temperature": 0.0,
+    "max_tokens": 1200,
+    "extras": {
+      "enable_thinking": false
+    }
+  },
+  "writer": {
+    "provider": "dashscope",
+    "model": "qwen3.7-plus",
+    "max_tokens": 1200,
+    "extras": {
+      "enable_thinking": false
+    }
+  },
+  "industries": {
+    "food_beverage": {
+      "key": "food_beverage",
+      "label": "Food and beverage",
+      "topics": [
+        {
+          "id": "food_quality",
+          "label": "Food quality and taste"
+        },
+        {
+          "id": "selection_variety",
+          "label": "Selection and variety"
+        },
+        {
+          "id": "freshness_restocking",
+          "label": "Freshness and restocking (empty trays, slow refills)"
+        },
+        {
+          "id": "service",
+          "label": "Service and staff friendliness"
+        },
+        {
+          "id": "wait_time",
+          "label": "Wait time"
+        },
+        {
+          "id": "price_value",
+          "label": "Price and value"
+        },
+        {
+          "id": "cleanliness",
+          "label": "Cleanliness (dining room, plates, utensils, restrooms)"
+        },
+        {
+          "id": "ambience",
+          "label": "Ambience, decor, seating, noise, temperature"
+        },
+        {
+          "id": "concept_expectations",
+          "label": "Concept or name expectations (e.g. cuisine not what the name suggests)"
+        },
+        {
+          "id": "promotions_billing",
+          "label": "Promotions, billing and payment"
+        }
+      ],
+      "item_types": [
+        {
+          "id": "dish",
+          "description": "A named dish or food item (e.g. sushi, crab legs, hot and sour soup, pho).",
+          "person": null
+        },
+        {
+          "id": "drink",
+          "description": "A drink (e.g. bubble tea, soda, beer).",
+          "person": null
+        },
+        {
+          "id": "dessert",
+          "description": "Desserts, fruit, ice cream.",
+          "person": null
+        },
+        {
+          "id": "station",
+          "description": "A buffet station or section (e.g. sushi bar, hibachi grill, dim sum, noodle soup station, seafood).",
+          "person": null
+        },
+        {
+          "id": "staff",
+          "description": "A staff member named in the review: a server, host, chef or manager (first name only, as the reviewer wrote it).",
+          "person": true
+        }
+      ],
+      "severity_flags": [
+        {
+          "id": "illness_food_poisoning",
+          "label": "Illness or food poisoning",
+          "description": "The reviewer or someone in their party got sick (stomach pain, vomiting, diarrhea, fever, hospital visit) after eating here, or says they suspect food poisoning. Raise it even when the rating is high or the reviewer is unsure of the cause.",
+          "enabled": true
+        },
+        {
+          "id": "allergen_incident",
+          "label": "Allergen incident",
+          "description": "An allergic reaction, or an allergen (nuts, shellfish, gluten, dairy, egg, soy, sesame and so on) that was served despite a warning or was not labelled. Includes \"almost\" incidents where the reviewer caught it in time.",
+          "enabled": true
+        },
+        {
+          "id": "foreign_object",
+          "label": "Foreign object in food",
+          "description": "Hair, glass, plastic, metal, a bandage, an insect, a pest or any other object that should not be in the food or drink, or pests seen in the restaurant.",
+          "enabled": true
+        },
+        {
+          "id": "food_safety",
+          "label": "Food safety and handling",
+          "description": "Spoiled, expired or rotten food; raw or undercooked meat or seafood; cold food that should be hot, or sushi and seafood left warm; visibly unsafe food handling.",
+          "enabled": true
+        },
+        {
+          "id": "hygiene",
+          "label": "Hygiene",
+          "description": "Unsanitary conditions that could affect health: dirty, greasy or wet plates, bowls, cups or utensils; food residue on tableware; staff handling food with unwashed hands; filthy restrooms. General \"could be cleaner\" remarks go under the cleanliness topic instead.",
+          "enabled": true
+        },
+        {
+          "id": "discrimination_harassment",
+          "label": "Discrimination or harassment",
+          "description": "The reviewer says they, or someone with them, were treated differently or badly because of race, ethnicity, language, religion, gender, sexuality, age, disability or similar; or were harassed, followed, profiled or humiliated by staff.",
+          "enabled": true
+        },
+        {
+          "id": "staff_misconduct",
+          "label": "Staff misconduct",
+          "description": "Staff behaved in a seriously improper way beyond poor service: theft, intoxication at work, physical aggression, verbal abuse, threats, recording customers, fraud or overcharging on purpose, or tampering with food or belongings.",
+          "enabled": true
+        },
+        {
+          "id": "legal_regulatory_threat",
+          "label": "Legal or regulatory threat",
+          "description": "The reviewer threatens or reports legal action, a lawyer, a lawsuit, police, or a complaint to a health department, licensing board, consumer protection agency or similar regulator.",
+          "enabled": true
+        },
+        {
+          "id": "threat_of_violence",
+          "label": "Threat of violence",
+          "description": "The reviewer threatens to harm staff, the owner, customers or the property, or describes an intention to commit violence (including arson or vandalism).",
+          "enabled": true
+        }
+      ]
+    },
+    "wellness": {
+      "key": "wellness",
+      "label": "Wellness",
+      "topics": [
+        {
+          "id": "treatment_quality",
+          "label": "Treatment quality and technique"
+        },
+        {
+          "id": "therapist",
+          "label": "Therapist skill and friendliness"
+        },
+        {
+          "id": "relaxation_results",
+          "label": "Relaxation and results (scalp, skin, pain relief)"
+        },
+        {
+          "id": "cleanliness",
+          "label": "Cleanliness and hygiene"
+        },
+        {
+          "id": "booking",
+          "label": "Booking, scheduling, timing and treatment length"
+        },
+        {
+          "id": "price_value",
+          "label": "Price and value"
+        },
+        {
+          "id": "ambience",
+          "label": "Ambience, decor, music, scent, rooms"
+        },
+        {
+          "id": "communication",
+          "label": "Communication, language and listening to requests"
+        },
+        {
+          "id": "hair_styling",
+          "label": "Hair drying and styling after treatment"
+        },
+        {
+          "id": "promotions_billing",
+          "label": "Promotions, packages, upsell and billing"
+        }
+      ],
+      "item_types": [
+        {
+          "id": "treatment",
+          "description": "A named treatment or package (e.g. head spa, scalp treatment, gua sha facial, foot massage, deep tissue massage, combo).",
+          "person": null
+        },
+        {
+          "id": "therapist",
+          "description": "A staff member named in the review (first name only, as the reviewer wrote it).",
+          "person": true
+        },
+        {
+          "id": "product",
+          "description": "A product used or sold (oil, shampoo, mask).",
+          "person": null
+        },
+        {
+          "id": "amenity",
+          "description": "An amenity (tea and snacks, steam, water ring, blow-dry, room with fountain).",
+          "person": null
+        }
+      ],
+      "severity_flags": [
+        {
+          "id": "injury",
+          "label": "Injury",
+          "description": "Physical harm during or after a treatment: lasting pain (\"still in pain\"), bruising, burns, cuts, strains, hair or scalp damage, being hit, or a treatment so rough it hurt. Ordinary \"strong pressure\" that the reviewer liked is NOT an injury.",
+          "enabled": true
+        },
+        {
+          "id": "allergic_skin_reaction",
+          "label": "Allergic or skin reaction",
+          "description": "Rash, redness, hives, swelling, breakouts, burning or itching skin or scalp, or eye irritation after a facial, scalp treatment, oil or product.",
+          "enabled": true
+        },
+        {
+          "id": "hygiene",
+          "label": "Hygiene",
+          "description": "Unsanitary conditions that could affect health: dirty or reused towels, sheets or tools, hair or stains on linens, unwashed hands, bugs, mold, dirty water. General \"could be cleaner\" remarks go under the cleanliness topic instead.",
+          "enabled": true
+        },
+        {
+          "id": "inappropriate_conduct",
+          "label": "Inappropriate conduct by staff",
+          "description": "Sexual or inappropriate touching, assault, comments of a sexual nature, draping violations, a therapist making the guest feel unsafe, or any allegation of assault. Always raise it on an allegation, even if vague.",
+          "enabled": true
+        },
+        {
+          "id": "discrimination_harassment",
+          "label": "Discrimination or harassment",
+          "description": "The reviewer says they, or someone with them, were treated differently or badly because of race, ethnicity, language, religion, gender, sexuality, age, disability or similar; or were harassed, followed, profiled or humiliated by staff.",
+          "enabled": true
+        },
+        {
+          "id": "staff_misconduct",
+          "label": "Staff misconduct",
+          "description": "Staff behaved in a seriously improper way beyond poor service: theft, intoxication at work, physical aggression, verbal abuse, threats, recording customers, fraud or overcharging on purpose, or tampering with food or belongings.",
+          "enabled": true
+        },
+        {
+          "id": "legal_regulatory_threat",
+          "label": "Legal or regulatory threat",
+          "description": "The reviewer threatens or reports legal action, a lawyer, a lawsuit, police, or a complaint to a health department, licensing board, consumer protection agency or similar regulator.",
+          "enabled": true
+        },
+        {
+          "id": "threat_of_violence",
+          "label": "Threat of violence",
+          "description": "The reviewer threatens to harm staff, the owner, customers or the property, or describes an intention to commit violence (including arson or vandalism).",
+          "enabled": true
+        }
+      ]
+    }
+  },
+  "rows": {
+    "clients": [
+      {
+        "id": 1,
+        "name": "Golden Harbor Buffet",
+        "industry_key": "food_beverage"
+      },
+      {
+        "id": 2,
+        "name": "Willow Moon Head Spa",
+        "industry_key": "wellness"
+      },
+      {
+        "id": 3,
+        "name": "Juniper Day Spa",
+        "industry_key": "wellness"
+      },
+      {
+        "id": 4,
+        "name": "Copper Kettle Cafe",
+        "industry_key": "food_beverage"
+      }
+    ],
+    "locations": [
+      {
+        "id": 11,
+        "client_id": 1,
+        "title": "Made-up business 1, main street"
+      },
+      {
+        "id": 21,
+        "client_id": 2,
+        "title": "Made-up business 2, main street"
+      },
+      {
+        "id": 22,
+        "client_id": 2,
+        "title": "Made-up business 2, harbour"
+      },
+      {
+        "id": 31,
+        "client_id": 3,
+        "title": "Juniper Day Spa, Elm Road"
+      },
+      {
+        "id": 32,
+        "client_id": 3,
+        "title": "Juniper Day Spa, Mill Lane"
+      },
+      {
+        "id": 33,
+        "client_id": 3,
+        "title": "Juniper Day Spa, Station Square"
+      },
+      {
+        "id": 34,
+        "client_id": 3,
+        "title": "Juniper Day Spa, Riverside"
+      },
+      {
+        "id": 35,
+        "client_id": 3,
+        "title": "Juniper Day Spa, Old Town"
+      },
+      {
+        "id": 36,
+        "client_id": 3,
+        "title": "Juniper Day Spa, Hillside"
+      },
+      {
+        "id": 37,
+        "client_id": 3,
+        "title": "Juniper Day Spa, Lakeview"
+      },
+      {
+        "id": 38,
+        "client_id": 3,
+        "title": "Juniper Day Spa, Northgate"
+      },
+      {
+        "id": 39,
+        "client_id": 3,
+        "title": "Juniper Day Spa, Southbank"
+      },
+      {
+        "id": 41,
+        "client_id": 4,
+        "title": "Copper Kettle Cafe, Market Hall"
+      },
+      {
+        "id": 42,
+        "client_id": 4,
+        "title": "Copper Kettle Cafe, Pier"
+      },
+      {
+        "id": 51,
+        "client_id": null,
+        "title": "A location without a client"
+      }
+    ],
+    "voice_profiles": [
+      {
+        "scope": "client",
+        "client_id": 1,
+        "location_id": null,
+        "voice": {
+          "reply_name": "Golden Harbor Buffet",
+          "business_facts": [
+            "An all-you-can-eat buffet in a suburban shopping plaza, which opened recently in a renovated space that used to be a different buffet.",
+            "The buffet is mostly Chinese and pan-Asian food with sushi, seafood, dim sum, a noodle soup station and desserts.",
+            "Lunch and dinner are priced differently, with seniors and children priced separately."
+          ],
+          "sign_off": "",
+          "owner_name": "",
+          "emoji": {
+            "allowed": false,
+            "max": 0,
+            "preferred": []
+          },
+          "promos_allowed": false,
+          "contact_allowed": false,
+          "words_to_avoid": [
+            "cheap",
+            "sorry for any inconvenience",
+            "valued customer"
+          ],
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            }
+          },
+          "style_notes": [
+            "Five-star replies are two or three sentences. Thank the guest, name a dish or station they liked, invite them back.",
+            "Never argue with the reviewer.",
+            "Do not defend the food with claims you cannot check (e.g. \"our ingredients are freshly purchased\").",
+            "For complaints, apologise for the specific issue (restocking, temperature, cleanliness, seasoning) and say the team will review it; do not promise a specific fix or date.",
+            "Do not address the reviewer by name; we never know it."
+          ],
+          "example_replies": [
+            "Thank you for the kind review. We're glad the sushi and the seafood were to your liking, and we look forward to your next visit.",
+            "Thank you for your honest feedback. We apologize that the dim sum station sat empty during your visit. We will review this with our team."
+          ],
+          "temperature": 0.7,
+          "base_style": "Polished hospitality. Gracious and composed, like a good hotel front desk. Complete sentences, no slang, no emoji."
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "zh",
+            "es"
+          ],
+          "chinese_script": "simplified",
+          "chinese_region": "taiwan",
+          "english_variant": "us",
+          "fallback_language": "en"
+        }
+      },
+      {
+        "scope": "client",
+        "client_id": 2,
+        "location_id": null,
+        "voice": {
+          "reply_name": "Willow Moon Head Spa",
+          "business_facts": [
+            "A head spa and wellness studio in New York City with two locations.",
+            "Treatments include head spa and scalp care, massage, foot massage, gua sha sculpting facials and combination packages.",
+            "A rough blow-dry follows the head spa; it is not a professional salon blowout."
+          ],
+          "sign_off": "",
+          "owner_name": "",
+          "emoji": {
+            "allowed": true,
+            "max": 2,
+            "preferred": [
+              "🤍",
+              "💕",
+              "🌿",
+              "✨"
+            ]
+          },
+          "promos_allowed": false,
+          "contact_allowed": false,
+          "words_to_avoid": [
+            "cheap",
+            "deal",
+            "sorry for any inconvenience",
+            "valued customer"
+          ],
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            }
+          },
+          "style_notes": [
+            "Five-star replies are one to three short sentences. Thank the guest, echo one detail (treatment, therapist, space), invite them back.",
+            "If the reviewer names a therapist, mention that therapist by name (\"We'll share your kind words with Eva!\").",
+            "Do not address the reviewer by name; we never know it.",
+            "A Chinese reply is warm and natural (e.g. 谢谢您的好评！很开心您喜欢这次头疗，期待下次再见～). Light emoji is fine.",
+            "For complaints, apologise sincerely, show you understood the specific issue, and invite the guest to contact the spa directly by \"reaching out to us\" without giving a phone, email or link."
+          ],
+          "example_replies": [
+            "Thank you for the lovely review! So happy the head spa left you relaxed. See you again soon 🤍",
+            "We'll pass your kind words on to Eva! Thank you for coming in ✨",
+            "谢谢您的好评！💕 很高兴您喜欢我们的环境，期待下次再为您服务！"
+          ],
+          "temperature": 0.7,
+          "base_style": "Warm and casual. Friendly and upbeat, like a host who remembers you. Short sentences, light exclamation marks, a little emoji."
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "zh"
+          ],
+          "chinese_script": "match",
+          "chinese_region": "taiwan",
+          "english_variant": "us",
+          "fallback_language": "en"
+        }
+      },
+      {
+        "scope": "client",
+        "client_id": 3,
+        "location_id": null,
+        "voice": {
+          "temperature": 0.7,
+          "reply_name": "",
+          "business_facts": [],
+          "example_replies": [],
+          "sign_off": "",
+          "emoji": {
+            "allowed": false,
+            "max": 0,
+            "preferred": []
+          },
+          "promos_allowed": false,
+          "contact_allowed": false,
+          "words_to_avoid": [
+            "sorry for any inconvenience",
+            "valued customer",
+            "we apologize for the inconvenience",
+            "per our policy",
+            "unfortunately you"
+          ],
+          "style_notes": [],
+          "owner_name": "",
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            }
+          },
+          "base_style": ""
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "zh",
+            "es"
+          ],
+          "chinese_script": "match",
+          "chinese_region": "taiwan",
+          "english_variant": "us",
+          "fallback_language": "en"
+        }
+      },
+      {
+        "scope": "client",
+        "client_id": 4,
+        "location_id": null,
+        "voice": {
+          "reply_name": "The Copper Kettle",
+          "business_facts": [],
+          "owner_name": "",
+          "emoji": {
+            "allowed": false,
+            "max": 0,
+            "preferred": []
+          },
+          "promos_allowed": false,
+          "contact_allowed": false,
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            }
+          },
+          "style_notes": [],
+          "example_replies": [],
+          "temperature": 0.7,
+          "base_style": ""
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "zh",
+            "es"
+          ],
+          "chinese_script": "match",
+          "chinese_region": "taiwan",
+          "fallback_language": "en"
+        }
+      },
+      {
+        "scope": "location",
+        "client_id": null,
+        "location_id": 22,
+        "voice": {
+          "length": {
+            "zh": {
+              "positive": {
+                "min": 15,
+                "max": 120
+              },
+              "complaint": {
+                "min": 30,
+                "max": 200
+              }
+            }
+          },
+          "temperature": 0.3
+        },
+        "localization": {}
+      },
+      {
+        "scope": "location",
+        "client_id": null,
+        "location_id": 32,
+        "voice": {
+          "sign_off": "Warmly, {owner_name}"
+        },
+        "localization": {}
+      },
+      {
+        "scope": "location",
+        "client_id": null,
+        "location_id": 33,
+        "voice": {
+          "reply_name": "Juniper at the Station",
+          "business_facts": [
+            "Open every day from 10 to 8.",
+            "Walk-ins are welcome before noon."
+          ],
+          "owner_name": "Mina",
+          "promos_allowed": true,
+          "words_to_avoid": [
+            "cheap"
+          ],
+          "style_notes": [
+            "Keep it to two sentences."
+          ],
+          "base_style": "Warm and casual. Short, friendly sentences."
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "es"
+          ],
+          "english_variant": "ca"
+        }
+      },
+      {
+        "scope": "location",
+        "client_id": null,
+        "location_id": 34,
+        "voice": {},
+        "localization": {
+          "reply_languages": [
+            "zh"
+          ],
+          "chinese_script": "traditional",
+          "chinese_region": "hong_kong",
+          "english_variant": "ca",
+          "fallback_language": "zh"
+        }
+      },
+      {
+        "scope": "location",
+        "client_id": null,
+        "location_id": 35,
+        "voice": {
+          "emoji": {
+            "allowed": true,
+            "max": 1
+          },
+          "length": {
+            "en": {
+              "positive": {
+                "min": 10,
+                "max": 50
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 5,
+                "max": 40
+              }
+            }
+          }
+        },
+        "localization": {}
+      },
+      {
+        "scope": "location",
+        "client_id": null,
+        "location_id": 37,
+        "voice": {
+          "contact_allowed": true,
+          "example_replies": [
+            "Thank you, see you soon!"
+          ]
+        },
+        "localization": {}
+      },
+      {
+        "scope": "location",
+        "client_id": null,
+        "location_id": 38,
+        "voice": {},
+        "localization": {}
+      },
+      {
+        "scope": "location",
+        "client_id": null,
+        "location_id": 39,
+        "voice": {
+          "sign_off": null,
+          "owner_name": "Lee",
+          "emoji": {
+            "max": null,
+            "allowed": true
+          },
+          "legacy_note": "kept"
+        },
+        "localization": {
+          "chinese_region": null
+        }
+      },
+      {
+        "scope": "location",
+        "client_id": null,
+        "location_id": 42,
+        "voice": {
+          "sign_off": "The Copper Kettle team"
+        },
+        "localization": {}
+      },
+      {
+        "scope": "location",
+        "client_id": null,
+        "location_id": 51,
+        "voice": {
+          "sign_off": "See you soon"
+        },
+        "localization": {}
+      }
+    ],
+    "reply_policies": [
+      {
+        "scope": "client",
+        "client_id": 1,
+        "location_id": null,
+        "rules": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 4,
+          "auto_post_delay_min_minutes": 0,
+          "auto_post_delay_max_minutes": 0,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      {
+        "scope": "client",
+        "client_id": 2,
+        "location_id": null,
+        "rules": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 4,
+          "auto_post_delay_min_minutes": 0,
+          "auto_post_delay_max_minutes": 0,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      {
+        "scope": "client",
+        "client_id": 3,
+        "location_id": null,
+        "rules": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 4,
+          "auto_post_delay_min_minutes": 0,
+          "auto_post_delay_max_minutes": 0,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      {
+        "scope": "client",
+        "client_id": 4,
+        "location_id": null,
+        "rules": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": true,
+          "auto_post_delay_min_minutes": 0,
+          "auto_post_delay_max_minutes": 0,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      {
+        "scope": "location",
+        "client_id": null,
+        "location_id": 33,
+        "rules": {
+          "auto_post_min_stars": 5,
+          "auto_post_delay_min_minutes": 20,
+          "auto_post_delay_max_minutes": 120
+        }
+      },
+      {
+        "scope": "location",
+        "client_id": null,
+        "location_id": 34,
+        "rules": {
+          "auto_post_positive": false,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 5,
+          "auto_post_delay_min_minutes": 5,
+          "auto_post_delay_max_minutes": 45,
+          "auto_post_window_start": "09:00",
+          "auto_post_window_end": "21:30"
+        }
+      },
+      {
+        "scope": "location",
+        "client_id": null,
+        "location_id": 36,
+        "rules": {
+          "auto_post_rating_only": false
+        }
+      },
+      {
+        "scope": "location",
+        "client_id": null,
+        "location_id": 38,
+        "rules": {}
+      },
+      {
+        "scope": "location",
+        "client_id": null,
+        "location_id": 39,
+        "rules": {
+          "auto_post_positive": null,
+          "auto_post_min_stars": 5
+        }
+      },
+      {
+        "scope": "location",
+        "client_id": null,
+        "location_id": 42,
+        "rules": {
+          "auto_post_min_stars": 5
+        }
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "the made-up business of the first pack, no layer of the location",
+      "location_id": 11,
+      "resolved": {
+        "voice": {
+          "reply_name": "Golden Harbor Buffet",
+          "business_facts": [
+            "An all-you-can-eat buffet in a suburban shopping plaza, which opened recently in a renovated space that used to be a different buffet.",
+            "The buffet is mostly Chinese and pan-Asian food with sushi, seafood, dim sum, a noodle soup station and desserts.",
+            "Lunch and dinner are priced differently, with seniors and children priced separately."
+          ],
+          "sign_off": "",
+          "owner_name": "",
+          "emoji": {
+            "allowed": false,
+            "max": 0,
+            "preferred": []
+          },
+          "promos_allowed": false,
+          "contact_allowed": false,
+          "words_to_avoid": [
+            "cheap",
+            "sorry for any inconvenience",
+            "valued customer"
+          ],
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "style_notes": [
+            "Five-star replies are two or three sentences. Thank the guest, name a dish or station they liked, invite them back.",
+            "Never argue with the reviewer.",
+            "Do not defend the food with claims you cannot check (e.g. \"our ingredients are freshly purchased\").",
+            "For complaints, apologise for the specific issue (restocking, temperature, cleanliness, seasoning) and say the team will review it; do not promise a specific fix or date.",
+            "Do not address the reviewer by name; we never know it."
+          ],
+          "example_replies": [
+            "Thank you for the kind review. We're glad the sushi and the seafood were to your liking, and we look forward to your next visit.",
+            "Thank you for your honest feedback. We apologize that the dim sum station sat empty during your visit. We will review this with our team."
+          ],
+          "temperature": 0.7,
+          "base_style": "Polished hospitality. Gracious and composed, like a good hotel front desk. Complete sentences, no slang, no emoji."
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "zh",
+            "es"
+          ],
+          "chinese_script": "simplified",
+          "chinese_region": "taiwan",
+          "english_variant": "us",
+          "fallback_language": "en"
+        },
+        "policy": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 4,
+          "auto_post_delay_min_minutes": 0,
+          "auto_post_delay_max_minutes": 0,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      "fingerprint": "3ebfac4bd8a1155d",
+      "fingerprint_inputs": {
+        "gate": "phase-4.1",
+        "prompts": {
+          "analyzer": "b0685491cb7893ba",
+          "writer:positive:en": "5d666afaa775dbad",
+          "writer:complaint:en": "309d7259df1933d9",
+          "writer:severity:en": "5e724d4d06bf9880",
+          "writer:rating_only:en": "e34e64735c7453cf",
+          "writer:rating_only_low:en": "570517ddc536ffcc",
+          "writer:positive:es": "def51bc5b83a1104",
+          "writer:complaint:es": "fd1e12ce69fb48b9",
+          "writer:severity:es": "0f61badd75b6a585",
+          "writer:rating_only:es": "bc2374797adc0360",
+          "writer:rating_only_low:es": "ab8733e69a0a0374",
+          "writer:positive:zh-Hans": "85e74d9e74a3870f",
+          "writer:complaint:zh-Hans": "1d4824fe44824314",
+          "writer:severity:zh-Hans": "0a9bbeb8edb9cbad",
+          "writer:rating_only:zh-Hans": "5ea9d78b4315961b",
+          "writer:rating_only_low:zh-Hans": "2b551e200e26de21"
+        },
+        "analyzer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.0,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "writer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.7,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "checks": {
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "emoji_allowed": false,
+          "emoji_max": 0,
+          "contact_allowed": false
+        }
+      }
+    },
+    {
+      "name": "the made-up business of the second pack, no layer of the location",
+      "location_id": 21,
+      "resolved": {
+        "voice": {
+          "reply_name": "Willow Moon Head Spa",
+          "business_facts": [
+            "A head spa and wellness studio in New York City with two locations.",
+            "Treatments include head spa and scalp care, massage, foot massage, gua sha sculpting facials and combination packages.",
+            "A rough blow-dry follows the head spa; it is not a professional salon blowout."
+          ],
+          "sign_off": "",
+          "owner_name": "",
+          "emoji": {
+            "allowed": true,
+            "max": 2,
+            "preferred": [
+              "🤍",
+              "💕",
+              "🌿",
+              "✨"
+            ]
+          },
+          "promos_allowed": false,
+          "contact_allowed": false,
+          "words_to_avoid": [
+            "cheap",
+            "deal",
+            "sorry for any inconvenience",
+            "valued customer"
+          ],
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "style_notes": [
+            "Five-star replies are one to three short sentences. Thank the guest, echo one detail (treatment, therapist, space), invite them back.",
+            "If the reviewer names a therapist, mention that therapist by name (\"We'll share your kind words with Eva!\").",
+            "Do not address the reviewer by name; we never know it.",
+            "A Chinese reply is warm and natural (e.g. 谢谢您的好评！很开心您喜欢这次头疗，期待下次再见～). Light emoji is fine.",
+            "For complaints, apologise sincerely, show you understood the specific issue, and invite the guest to contact the spa directly by \"reaching out to us\" without giving a phone, email or link."
+          ],
+          "example_replies": [
+            "Thank you for the lovely review! So happy the head spa left you relaxed. See you again soon 🤍",
+            "We'll pass your kind words on to Eva! Thank you for coming in ✨",
+            "谢谢您的好评！💕 很高兴您喜欢我们的环境，期待下次再为您服务！"
+          ],
+          "temperature": 0.7,
+          "base_style": "Warm and casual. Friendly and upbeat, like a host who remembers you. Short sentences, light exclamation marks, a little emoji."
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "zh"
+          ],
+          "chinese_script": "match",
+          "chinese_region": "taiwan",
+          "english_variant": "us",
+          "fallback_language": "en"
+        },
+        "policy": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 4,
+          "auto_post_delay_min_minutes": 0,
+          "auto_post_delay_max_minutes": 0,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      "fingerprint": "67b79a338e7ac197",
+      "fingerprint_inputs": {
+        "gate": "phase-4.1",
+        "prompts": {
+          "analyzer": "088cacf8050dd337",
+          "writer:positive:en": "eea64109ad2ba03c",
+          "writer:complaint:en": "f4d87bdd20151c3b",
+          "writer:severity:en": "a68de187a1aacee5",
+          "writer:rating_only:en": "a2d723a5734f5487",
+          "writer:rating_only_low:en": "50bfe444c5993715",
+          "writer:positive:zh-Hans": "551e1b369da33861",
+          "writer:complaint:zh-Hans": "27c0e424b7026119",
+          "writer:severity:zh-Hans": "50d84dd5b7a0bc89",
+          "writer:rating_only:zh-Hans": "9b8c60f1b15f38c8",
+          "writer:rating_only_low:zh-Hans": "99d5ba47f8fe0ac3",
+          "writer:positive:zh-Hant": "888589cb8b7d8fc3",
+          "writer:complaint:zh-Hant": "e1a3455900bbf719",
+          "writer:severity:zh-Hant": "4833a3251559966c",
+          "writer:rating_only:zh-Hant": "4ed79f281defa182",
+          "writer:rating_only_low:zh-Hant": "b2b6212b10706080"
+        },
+        "analyzer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.0,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "writer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.7,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "checks": {
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "emoji_allowed": true,
+          "emoji_max": 2,
+          "contact_allowed": false
+        }
+      }
+    },
+    {
+      "name": "a location that sets the writer's temperature and one language's lengths",
+      "location_id": 22,
+      "resolved": {
+        "voice": {
+          "reply_name": "Willow Moon Head Spa",
+          "business_facts": [
+            "A head spa and wellness studio in New York City with two locations.",
+            "Treatments include head spa and scalp care, massage, foot massage, gua sha sculpting facials and combination packages.",
+            "A rough blow-dry follows the head spa; it is not a professional salon blowout."
+          ],
+          "sign_off": "",
+          "owner_name": "",
+          "emoji": {
+            "allowed": true,
+            "max": 2,
+            "preferred": [
+              "🤍",
+              "💕",
+              "🌿",
+              "✨"
+            ]
+          },
+          "promos_allowed": false,
+          "contact_allowed": false,
+          "words_to_avoid": [
+            "cheap",
+            "deal",
+            "sorry for any inconvenience",
+            "valued customer"
+          ],
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 15,
+                "max": 120
+              },
+              "complaint": {
+                "min": 30,
+                "max": 200
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "style_notes": [
+            "Five-star replies are one to three short sentences. Thank the guest, echo one detail (treatment, therapist, space), invite them back.",
+            "If the reviewer names a therapist, mention that therapist by name (\"We'll share your kind words with Eva!\").",
+            "Do not address the reviewer by name; we never know it.",
+            "A Chinese reply is warm and natural (e.g. 谢谢您的好评！很开心您喜欢这次头疗，期待下次再见～). Light emoji is fine.",
+            "For complaints, apologise sincerely, show you understood the specific issue, and invite the guest to contact the spa directly by \"reaching out to us\" without giving a phone, email or link."
+          ],
+          "example_replies": [
+            "Thank you for the lovely review! So happy the head spa left you relaxed. See you again soon 🤍",
+            "We'll pass your kind words on to Eva! Thank you for coming in ✨",
+            "谢谢您的好评！💕 很高兴您喜欢我们的环境，期待下次再为您服务！"
+          ],
+          "temperature": 0.3,
+          "base_style": "Warm and casual. Friendly and upbeat, like a host who remembers you. Short sentences, light exclamation marks, a little emoji."
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "zh"
+          ],
+          "chinese_script": "match",
+          "chinese_region": "taiwan",
+          "english_variant": "us",
+          "fallback_language": "en"
+        },
+        "policy": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 4,
+          "auto_post_delay_min_minutes": 0,
+          "auto_post_delay_max_minutes": 0,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      "fingerprint": "99812dc28426d63f",
+      "fingerprint_inputs": {
+        "gate": "phase-4.1",
+        "prompts": {
+          "analyzer": "088cacf8050dd337",
+          "writer:positive:en": "eea64109ad2ba03c",
+          "writer:complaint:en": "f4d87bdd20151c3b",
+          "writer:severity:en": "a68de187a1aacee5",
+          "writer:rating_only:en": "a2d723a5734f5487",
+          "writer:rating_only_low:en": "50bfe444c5993715",
+          "writer:positive:zh-Hans": "2e5f3dd41afab9d6",
+          "writer:complaint:zh-Hans": "cc59a43c569c60ff",
+          "writer:severity:zh-Hans": "50d84dd5b7a0bc89",
+          "writer:rating_only:zh-Hans": "9b8c60f1b15f38c8",
+          "writer:rating_only_low:zh-Hans": "99d5ba47f8fe0ac3",
+          "writer:positive:zh-Hant": "1ede56377a407b52",
+          "writer:complaint:zh-Hant": "7a5e103918c144b0",
+          "writer:severity:zh-Hant": "4833a3251559966c",
+          "writer:rating_only:zh-Hant": "4ed79f281defa182",
+          "writer:rating_only_low:zh-Hant": "b2b6212b10706080"
+        },
+        "analyzer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.0,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "writer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.3,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "checks": {
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 15,
+                "max": 120
+              },
+              "complaint": {
+                "min": 30,
+                "max": 200
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "emoji_allowed": true,
+          "emoji_max": 2,
+          "contact_allowed": false
+        }
+      }
+    },
+    {
+      "name": "a client with the plain defaults, no layer of the location",
+      "location_id": 31,
+      "resolved": {
+        "voice": {
+          "reply_name": "",
+          "business_facts": [],
+          "sign_off": "",
+          "owner_name": "",
+          "emoji": {
+            "allowed": false,
+            "max": 0,
+            "preferred": []
+          },
+          "promos_allowed": false,
+          "contact_allowed": false,
+          "words_to_avoid": [
+            "sorry for any inconvenience",
+            "valued customer",
+            "we apologize for the inconvenience",
+            "per our policy",
+            "unfortunately you"
+          ],
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "style_notes": [],
+          "example_replies": [],
+          "temperature": 0.7,
+          "base_style": ""
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "zh",
+            "es"
+          ],
+          "chinese_script": "match",
+          "chinese_region": "taiwan",
+          "english_variant": "us",
+          "fallback_language": "en"
+        },
+        "policy": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 4,
+          "auto_post_delay_min_minutes": 0,
+          "auto_post_delay_max_minutes": 0,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      "fingerprint": "457360398c5b078d",
+      "fingerprint_inputs": {
+        "gate": "phase-4.1",
+        "prompts": {
+          "analyzer": "fb04947b9d962f2f",
+          "writer:positive:en": "63dd7b358e9c43c6",
+          "writer:complaint:en": "bdc378ed24f6da6f",
+          "writer:severity:en": "0c5a3e2bdbf430c8",
+          "writer:rating_only:en": "f851e85663af6c5e",
+          "writer:rating_only_low:en": "22143d8eb86a1f2f",
+          "writer:positive:es": "e41adac3db025e7e",
+          "writer:complaint:es": "55238603f8cfc3c7",
+          "writer:severity:es": "dd175912fa65ca89",
+          "writer:rating_only:es": "6988f16e666c4fa2",
+          "writer:rating_only_low:es": "f4df084241e0ab01",
+          "writer:positive:zh-Hans": "c064b80214bfe69b",
+          "writer:complaint:zh-Hans": "a672d3d0fe400dac",
+          "writer:severity:zh-Hans": "4000d8df9699d87f",
+          "writer:rating_only:zh-Hans": "64c9ad95d4b80ca2",
+          "writer:rating_only_low:zh-Hans": "b69f06796292525f",
+          "writer:positive:zh-Hant": "06a0e46d1c8483f8",
+          "writer:complaint:zh-Hant": "bdf1b3e854185ccb",
+          "writer:severity:zh-Hant": "63b0db24c0e297e8",
+          "writer:rating_only:zh-Hant": "00ff728f583eeb45",
+          "writer:rating_only_low:zh-Hant": "3449e67cea9d6d88"
+        },
+        "analyzer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.0,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "writer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.7,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "checks": {
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "emoji_allowed": false,
+          "emoji_max": 0,
+          "contact_allowed": false
+        }
+      }
+    },
+    {
+      "name": "a location that overrides one field",
+      "location_id": 32,
+      "resolved": {
+        "voice": {
+          "reply_name": "",
+          "business_facts": [],
+          "sign_off": "Warmly, {owner_name}",
+          "owner_name": "",
+          "emoji": {
+            "allowed": false,
+            "max": 0,
+            "preferred": []
+          },
+          "promos_allowed": false,
+          "contact_allowed": false,
+          "words_to_avoid": [
+            "sorry for any inconvenience",
+            "valued customer",
+            "we apologize for the inconvenience",
+            "per our policy",
+            "unfortunately you"
+          ],
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "style_notes": [],
+          "example_replies": [],
+          "temperature": 0.7,
+          "base_style": ""
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "zh",
+            "es"
+          ],
+          "chinese_script": "match",
+          "chinese_region": "taiwan",
+          "english_variant": "us",
+          "fallback_language": "en"
+        },
+        "policy": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 4,
+          "auto_post_delay_min_minutes": 0,
+          "auto_post_delay_max_minutes": 0,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      "fingerprint": "403bf8e8867b1543",
+      "fingerprint_inputs": {
+        "gate": "phase-4.1",
+        "prompts": {
+          "analyzer": "fb04947b9d962f2f",
+          "writer:positive:en": "db944176b335c3bc",
+          "writer:complaint:en": "26c6b4c3cbdf4d35",
+          "writer:severity:en": "a50ab6a766593795",
+          "writer:rating_only:en": "4f6cbc971530f98e",
+          "writer:rating_only_low:en": "6d11e3f3d7cb092f",
+          "writer:positive:es": "5bf4d054714cd070",
+          "writer:complaint:es": "377f1c157c6a3cdd",
+          "writer:severity:es": "f033cb1ffb0affc3",
+          "writer:rating_only:es": "4e292122c1f7c005",
+          "writer:rating_only_low:es": "05f36c5f134e3b48",
+          "writer:positive:zh-Hans": "84717dafe7203179",
+          "writer:complaint:zh-Hans": "c9735c5f3673cd97",
+          "writer:severity:zh-Hans": "8d93d769a7419ba2",
+          "writer:rating_only:zh-Hans": "3b9187906867a628",
+          "writer:rating_only_low:zh-Hans": "280b228f0b1ceb66",
+          "writer:positive:zh-Hant": "97d68db5380ea6f4",
+          "writer:complaint:zh-Hant": "d1058077e7b34a4c",
+          "writer:severity:zh-Hant": "77a41e4afaf1cfc2",
+          "writer:rating_only:zh-Hant": "93bee49ba1c68050",
+          "writer:rating_only_low:zh-Hant": "afde929993e82396"
+        },
+        "analyzer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.0,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "writer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.7,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "checks": {
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "emoji_allowed": false,
+          "emoji_max": 0,
+          "contact_allowed": false
+        }
+      }
+    },
+    {
+      "name": "a location that overrides several fields of every part",
+      "location_id": 33,
+      "resolved": {
+        "voice": {
+          "reply_name": "Juniper at the Station",
+          "business_facts": [
+            "Open every day from 10 to 8.",
+            "Walk-ins are welcome before noon."
+          ],
+          "sign_off": "",
+          "owner_name": "Mina",
+          "emoji": {
+            "allowed": false,
+            "max": 0,
+            "preferred": []
+          },
+          "promos_allowed": true,
+          "contact_allowed": false,
+          "words_to_avoid": [
+            "cheap"
+          ],
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "style_notes": [
+            "Keep it to two sentences."
+          ],
+          "example_replies": [],
+          "temperature": 0.7,
+          "base_style": "Warm and casual. Short, friendly sentences."
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "es"
+          ],
+          "chinese_script": "match",
+          "chinese_region": "taiwan",
+          "english_variant": "ca",
+          "fallback_language": "en"
+        },
+        "policy": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 5,
+          "auto_post_delay_min_minutes": 20,
+          "auto_post_delay_max_minutes": 120,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      "fingerprint": "486b91da4ed3337b",
+      "fingerprint_inputs": {
+        "gate": "phase-4.1",
+        "prompts": {
+          "analyzer": "9a9a7e716fc47677",
+          "writer:positive:en": "74b72a36169d18b2",
+          "writer:complaint:en": "10a201b49dfe626e",
+          "writer:severity:en": "dfa0f5822b81e7c7",
+          "writer:rating_only:en": "72ade116299d9ced",
+          "writer:rating_only_low:en": "3b6c28d53d5a2666",
+          "writer:positive:es": "13228dc25c1dc650",
+          "writer:complaint:es": "9b5bb0642e5bf0e3",
+          "writer:severity:es": "211b842211bb50a9",
+          "writer:rating_only:es": "4dba0441114302f5",
+          "writer:rating_only_low:es": "2d70804cc2cb9cdd"
+        },
+        "analyzer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.0,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "writer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.7,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "checks": {
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "emoji_allowed": false,
+          "emoji_max": 0,
+          "contact_allowed": false
+        }
+      }
+    },
+    {
+      "name": "a location that sets a whole part: every localization preference and every rule",
+      "location_id": 34,
+      "resolved": {
+        "voice": {
+          "reply_name": "",
+          "business_facts": [],
+          "sign_off": "",
+          "owner_name": "",
+          "emoji": {
+            "allowed": false,
+            "max": 0,
+            "preferred": []
+          },
+          "promos_allowed": false,
+          "contact_allowed": false,
+          "words_to_avoid": [
+            "sorry for any inconvenience",
+            "valued customer",
+            "we apologize for the inconvenience",
+            "per our policy",
+            "unfortunately you"
+          ],
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "style_notes": [],
+          "example_replies": [],
+          "temperature": 0.7,
+          "base_style": ""
+        },
+        "localization": {
+          "reply_languages": [
+            "zh"
+          ],
+          "chinese_script": "traditional",
+          "chinese_region": "hong_kong",
+          "english_variant": "ca",
+          "fallback_language": "zh"
+        },
+        "policy": {
+          "auto_post_positive": false,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 5,
+          "auto_post_delay_min_minutes": 5,
+          "auto_post_delay_max_minutes": 45,
+          "auto_post_window_start": "09:00",
+          "auto_post_window_end": "21:30"
+        }
+      },
+      "fingerprint": "2affab47dc1e6bb3",
+      "fingerprint_inputs": {
+        "gate": "phase-4.1",
+        "prompts": {
+          "analyzer": "fb04947b9d962f2f",
+          "writer:positive:zh-Hant": "65ff6f5ba47697b4",
+          "writer:complaint:zh-Hant": "ac94d02420a32255",
+          "writer:severity:zh-Hant": "865152ed6b43df1c",
+          "writer:rating_only:zh-Hant": "0124c11bbbb586db",
+          "writer:rating_only_low:zh-Hant": "11c71ac693485a82"
+        },
+        "analyzer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.0,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "writer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.7,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "checks": {
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "emoji_allowed": false,
+          "emoji_max": 0,
+          "contact_allowed": false
+        }
+      }
+    },
+    {
+      "name": "a location that sets part of the emoji rule and part of the lengths",
+      "location_id": 35,
+      "resolved": {
+        "voice": {
+          "reply_name": "",
+          "business_facts": [],
+          "sign_off": "",
+          "owner_name": "",
+          "emoji": {
+            "allowed": true,
+            "max": 1,
+            "preferred": []
+          },
+          "promos_allowed": false,
+          "contact_allowed": false,
+          "words_to_avoid": [
+            "sorry for any inconvenience",
+            "valued customer",
+            "we apologize for the inconvenience",
+            "per our policy",
+            "unfortunately you"
+          ],
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 10,
+                "max": 50
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 5,
+                "max": 40
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "style_notes": [],
+          "example_replies": [],
+          "temperature": 0.7,
+          "base_style": ""
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "zh",
+            "es"
+          ],
+          "chinese_script": "match",
+          "chinese_region": "taiwan",
+          "english_variant": "us",
+          "fallback_language": "en"
+        },
+        "policy": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 4,
+          "auto_post_delay_min_minutes": 0,
+          "auto_post_delay_max_minutes": 0,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      "fingerprint": "8aa5077b28fdad21",
+      "fingerprint_inputs": {
+        "gate": "phase-4.1",
+        "prompts": {
+          "analyzer": "fb04947b9d962f2f",
+          "writer:positive:en": "5814f31bd1f9f7a1",
+          "writer:complaint:en": "442278d9d8e138ee",
+          "writer:severity:en": "0257881e2a637d71",
+          "writer:rating_only:en": "353436f352a3940f",
+          "writer:rating_only_low:en": "3e6c772bf4711578",
+          "writer:positive:es": "07fc715e92a72f41",
+          "writer:complaint:es": "1644ba90450091ae",
+          "writer:severity:es": "c730d16eff43a6b4",
+          "writer:rating_only:es": "e9d337ef234c1d9b",
+          "writer:rating_only_low:es": "d1eaca0f514b26a9",
+          "writer:positive:zh-Hans": "13bbf32ab1153bdb",
+          "writer:complaint:zh-Hans": "78bf211f680a6f7f",
+          "writer:severity:zh-Hans": "2c578c9f055ed5fd",
+          "writer:rating_only:zh-Hans": "f8a8f2051eab0296",
+          "writer:rating_only_low:zh-Hans": "45ccc4e22738fae3",
+          "writer:positive:zh-Hant": "f45dde238aaf00ef",
+          "writer:complaint:zh-Hant": "343445dc3ed143db",
+          "writer:severity:zh-Hant": "dd77805099c6056d",
+          "writer:rating_only:zh-Hant": "04426a10607129bd",
+          "writer:rating_only_low:zh-Hant": "388f08ea0eff083f"
+        },
+        "analyzer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.0,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "writer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.7,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "checks": {
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 10,
+                "max": 50
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 5,
+                "max": 40
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "emoji_allowed": true,
+          "emoji_max": 1,
+          "contact_allowed": false
+        }
+      }
+    },
+    {
+      "name": "a location with a policy row and no voice row",
+      "location_id": 36,
+      "resolved": {
+        "voice": {
+          "reply_name": "",
+          "business_facts": [],
+          "sign_off": "",
+          "owner_name": "",
+          "emoji": {
+            "allowed": false,
+            "max": 0,
+            "preferred": []
+          },
+          "promos_allowed": false,
+          "contact_allowed": false,
+          "words_to_avoid": [
+            "sorry for any inconvenience",
+            "valued customer",
+            "we apologize for the inconvenience",
+            "per our policy",
+            "unfortunately you"
+          ],
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "style_notes": [],
+          "example_replies": [],
+          "temperature": 0.7,
+          "base_style": ""
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "zh",
+            "es"
+          ],
+          "chinese_script": "match",
+          "chinese_region": "taiwan",
+          "english_variant": "us",
+          "fallback_language": "en"
+        },
+        "policy": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": false,
+          "auto_post_min_stars": 4,
+          "auto_post_delay_min_minutes": 0,
+          "auto_post_delay_max_minutes": 0,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      "fingerprint": "457360398c5b078d",
+      "fingerprint_inputs": {
+        "gate": "phase-4.1",
+        "prompts": {
+          "analyzer": "fb04947b9d962f2f",
+          "writer:positive:en": "63dd7b358e9c43c6",
+          "writer:complaint:en": "bdc378ed24f6da6f",
+          "writer:severity:en": "0c5a3e2bdbf430c8",
+          "writer:rating_only:en": "f851e85663af6c5e",
+          "writer:rating_only_low:en": "22143d8eb86a1f2f",
+          "writer:positive:es": "e41adac3db025e7e",
+          "writer:complaint:es": "55238603f8cfc3c7",
+          "writer:severity:es": "dd175912fa65ca89",
+          "writer:rating_only:es": "6988f16e666c4fa2",
+          "writer:rating_only_low:es": "f4df084241e0ab01",
+          "writer:positive:zh-Hans": "c064b80214bfe69b",
+          "writer:complaint:zh-Hans": "a672d3d0fe400dac",
+          "writer:severity:zh-Hans": "4000d8df9699d87f",
+          "writer:rating_only:zh-Hans": "64c9ad95d4b80ca2",
+          "writer:rating_only_low:zh-Hans": "b69f06796292525f",
+          "writer:positive:zh-Hant": "06a0e46d1c8483f8",
+          "writer:complaint:zh-Hant": "bdf1b3e854185ccb",
+          "writer:severity:zh-Hant": "63b0db24c0e297e8",
+          "writer:rating_only:zh-Hant": "00ff728f583eeb45",
+          "writer:rating_only_low:zh-Hant": "3449e67cea9d6d88"
+        },
+        "analyzer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.0,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "writer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.7,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "checks": {
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "emoji_allowed": false,
+          "emoji_max": 0,
+          "contact_allowed": false
+        }
+      }
+    },
+    {
+      "name": "a location with a voice row and no policy row",
+      "location_id": 37,
+      "resolved": {
+        "voice": {
+          "reply_name": "",
+          "business_facts": [],
+          "sign_off": "",
+          "owner_name": "",
+          "emoji": {
+            "allowed": false,
+            "max": 0,
+            "preferred": []
+          },
+          "promos_allowed": false,
+          "contact_allowed": true,
+          "words_to_avoid": [
+            "sorry for any inconvenience",
+            "valued customer",
+            "we apologize for the inconvenience",
+            "per our policy",
+            "unfortunately you"
+          ],
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "style_notes": [],
+          "example_replies": [
+            "Thank you, see you soon!"
+          ],
+          "temperature": 0.7,
+          "base_style": ""
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "zh",
+            "es"
+          ],
+          "chinese_script": "match",
+          "chinese_region": "taiwan",
+          "english_variant": "us",
+          "fallback_language": "en"
+        },
+        "policy": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 4,
+          "auto_post_delay_min_minutes": 0,
+          "auto_post_delay_max_minutes": 0,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      "fingerprint": "14450dff3f261607",
+      "fingerprint_inputs": {
+        "gate": "phase-4.1",
+        "prompts": {
+          "analyzer": "fb04947b9d962f2f",
+          "writer:positive:en": "6fa65e7d88e458de",
+          "writer:complaint:en": "0b51168f76058931",
+          "writer:severity:en": "977dbdcd7243a46e",
+          "writer:rating_only:en": "f851e85663af6c5e",
+          "writer:rating_only_low:en": "22143d8eb86a1f2f",
+          "writer:positive:es": "123dcf847c3a2942",
+          "writer:complaint:es": "eff0eb9c578c394f",
+          "writer:severity:es": "1362c78e6cbdf4d7",
+          "writer:rating_only:es": "6988f16e666c4fa2",
+          "writer:rating_only_low:es": "f4df084241e0ab01",
+          "writer:positive:zh-Hans": "f79809f9686d3d2a",
+          "writer:complaint:zh-Hans": "16ff0d03c6b0c531",
+          "writer:severity:zh-Hans": "3072f07b2c4356c9",
+          "writer:rating_only:zh-Hans": "64c9ad95d4b80ca2",
+          "writer:rating_only_low:zh-Hans": "b69f06796292525f",
+          "writer:positive:zh-Hant": "db9c1d31ee82907d",
+          "writer:complaint:zh-Hant": "497b152d9c790955",
+          "writer:severity:zh-Hant": "b267b38bb1c1ff7b",
+          "writer:rating_only:zh-Hant": "00ff728f583eeb45",
+          "writer:rating_only_low:zh-Hant": "3449e67cea9d6d88"
+        },
+        "analyzer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.0,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "writer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.7,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "checks": {
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "emoji_allowed": false,
+          "emoji_max": 0,
+          "contact_allowed": true
+        }
+      }
+    },
+    {
+      "name": "a location whose rows set nothing",
+      "location_id": 38,
+      "resolved": {
+        "voice": {
+          "reply_name": "",
+          "business_facts": [],
+          "sign_off": "",
+          "owner_name": "",
+          "emoji": {
+            "allowed": false,
+            "max": 0,
+            "preferred": []
+          },
+          "promos_allowed": false,
+          "contact_allowed": false,
+          "words_to_avoid": [
+            "sorry for any inconvenience",
+            "valued customer",
+            "we apologize for the inconvenience",
+            "per our policy",
+            "unfortunately you"
+          ],
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "style_notes": [],
+          "example_replies": [],
+          "temperature": 0.7,
+          "base_style": ""
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "zh",
+            "es"
+          ],
+          "chinese_script": "match",
+          "chinese_region": "taiwan",
+          "english_variant": "us",
+          "fallback_language": "en"
+        },
+        "policy": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 4,
+          "auto_post_delay_min_minutes": 0,
+          "auto_post_delay_max_minutes": 0,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      "fingerprint": "457360398c5b078d",
+      "fingerprint_inputs": {
+        "gate": "phase-4.1",
+        "prompts": {
+          "analyzer": "fb04947b9d962f2f",
+          "writer:positive:en": "63dd7b358e9c43c6",
+          "writer:complaint:en": "bdc378ed24f6da6f",
+          "writer:severity:en": "0c5a3e2bdbf430c8",
+          "writer:rating_only:en": "f851e85663af6c5e",
+          "writer:rating_only_low:en": "22143d8eb86a1f2f",
+          "writer:positive:es": "e41adac3db025e7e",
+          "writer:complaint:es": "55238603f8cfc3c7",
+          "writer:severity:es": "dd175912fa65ca89",
+          "writer:rating_only:es": "6988f16e666c4fa2",
+          "writer:rating_only_low:es": "f4df084241e0ab01",
+          "writer:positive:zh-Hans": "c064b80214bfe69b",
+          "writer:complaint:zh-Hans": "a672d3d0fe400dac",
+          "writer:severity:zh-Hans": "4000d8df9699d87f",
+          "writer:rating_only:zh-Hans": "64c9ad95d4b80ca2",
+          "writer:rating_only_low:zh-Hans": "b69f06796292525f",
+          "writer:positive:zh-Hant": "06a0e46d1c8483f8",
+          "writer:complaint:zh-Hant": "bdf1b3e854185ccb",
+          "writer:severity:zh-Hant": "63b0db24c0e297e8",
+          "writer:rating_only:zh-Hant": "00ff728f583eeb45",
+          "writer:rating_only_low:zh-Hant": "3449e67cea9d6d88"
+        },
+        "analyzer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.0,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "writer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.7,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "checks": {
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "emoji_allowed": false,
+          "emoji_max": 0,
+          "contact_allowed": false
+        }
+      }
+    },
+    {
+      "name": "a location whose stored layer holds a null and a member the code does not know",
+      "location_id": 39,
+      "resolved": {
+        "voice": {
+          "reply_name": "",
+          "business_facts": [],
+          "sign_off": "",
+          "owner_name": "Lee",
+          "emoji": {
+            "allowed": true,
+            "max": 0,
+            "preferred": []
+          },
+          "promos_allowed": false,
+          "contact_allowed": false,
+          "words_to_avoid": [
+            "sorry for any inconvenience",
+            "valued customer",
+            "we apologize for the inconvenience",
+            "per our policy",
+            "unfortunately you"
+          ],
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "style_notes": [],
+          "example_replies": [],
+          "temperature": 0.7,
+          "base_style": ""
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "zh",
+            "es"
+          ],
+          "chinese_script": "match",
+          "chinese_region": "taiwan",
+          "english_variant": "us",
+          "fallback_language": "en"
+        },
+        "policy": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 5,
+          "auto_post_delay_min_minutes": 0,
+          "auto_post_delay_max_minutes": 0,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      "fingerprint": "79631b26bd419c28",
+      "fingerprint_inputs": {
+        "gate": "phase-4.1",
+        "prompts": {
+          "analyzer": "fb04947b9d962f2f",
+          "writer:positive:en": "63dd7b358e9c43c6",
+          "writer:complaint:en": "bdc378ed24f6da6f",
+          "writer:severity:en": "0c5a3e2bdbf430c8",
+          "writer:rating_only:en": "f851e85663af6c5e",
+          "writer:rating_only_low:en": "22143d8eb86a1f2f",
+          "writer:positive:es": "e41adac3db025e7e",
+          "writer:complaint:es": "55238603f8cfc3c7",
+          "writer:severity:es": "dd175912fa65ca89",
+          "writer:rating_only:es": "6988f16e666c4fa2",
+          "writer:rating_only_low:es": "f4df084241e0ab01",
+          "writer:positive:zh-Hans": "c064b80214bfe69b",
+          "writer:complaint:zh-Hans": "a672d3d0fe400dac",
+          "writer:severity:zh-Hans": "4000d8df9699d87f",
+          "writer:rating_only:zh-Hans": "64c9ad95d4b80ca2",
+          "writer:rating_only_low:zh-Hans": "b69f06796292525f",
+          "writer:positive:zh-Hant": "06a0e46d1c8483f8",
+          "writer:complaint:zh-Hant": "bdf1b3e854185ccb",
+          "writer:severity:zh-Hant": "63b0db24c0e297e8",
+          "writer:rating_only:zh-Hant": "00ff728f583eeb45",
+          "writer:rating_only_low:zh-Hant": "3449e67cea9d6d88"
+        },
+        "analyzer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.0,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "writer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.7,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "checks": {
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "emoji_allowed": true,
+          "emoji_max": 0,
+          "contact_allowed": false
+        }
+      }
+    },
+    {
+      "name": "a client whose copy lacks fields, which come from the defaults",
+      "location_id": 41,
+      "resolved": {
+        "voice": {
+          "reply_name": "The Copper Kettle",
+          "business_facts": [],
+          "sign_off": "",
+          "owner_name": "",
+          "emoji": {
+            "allowed": false,
+            "max": 0,
+            "preferred": []
+          },
+          "promos_allowed": false,
+          "contact_allowed": false,
+          "words_to_avoid": [
+            "sorry for any inconvenience",
+            "valued customer",
+            "we apologize for the inconvenience",
+            "per our policy",
+            "unfortunately you"
+          ],
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "style_notes": [],
+          "example_replies": [],
+          "temperature": 0.7,
+          "base_style": ""
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "zh",
+            "es"
+          ],
+          "chinese_script": "match",
+          "chinese_region": "taiwan",
+          "english_variant": "us",
+          "fallback_language": "en"
+        },
+        "policy": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 4,
+          "auto_post_delay_min_minutes": 0,
+          "auto_post_delay_max_minutes": 0,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      "fingerprint": "b461f01a024f7169",
+      "fingerprint_inputs": {
+        "gate": "phase-4.1",
+        "prompts": {
+          "analyzer": "82382f088c5eec28",
+          "writer:positive:en": "f1860fbd4e1d192a",
+          "writer:complaint:en": "39ab3b2e5b900946",
+          "writer:severity:en": "05f42e9f0d6d4dc4",
+          "writer:rating_only:en": "88d8efcf18983484",
+          "writer:rating_only_low:en": "2272cc82acd6df04",
+          "writer:positive:es": "a7e57465b68ee1be",
+          "writer:complaint:es": "6116d4b69cb90355",
+          "writer:severity:es": "c990966e523f6284",
+          "writer:rating_only:es": "ecd226dcbf722852",
+          "writer:rating_only_low:es": "82deaa1eb9945e5c",
+          "writer:positive:zh-Hans": "7e850e836642ea75",
+          "writer:complaint:zh-Hans": "a2b7dfb56ccd187a",
+          "writer:severity:zh-Hans": "d06d67004746be15",
+          "writer:rating_only:zh-Hans": "8265a9706e6fee08",
+          "writer:rating_only_low:zh-Hans": "76b4ba54b58eb63a",
+          "writer:positive:zh-Hant": "d6f11f0ab3dce418",
+          "writer:complaint:zh-Hant": "1f142273d0172c86",
+          "writer:severity:zh-Hant": "06b89a2bf1cfe065",
+          "writer:rating_only:zh-Hant": "af5dd91c1111c731",
+          "writer:rating_only_low:zh-Hant": "ef2404da5c9184e7"
+        },
+        "analyzer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.0,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "writer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.7,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "checks": {
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "emoji_allowed": false,
+          "emoji_max": 0,
+          "contact_allowed": false
+        }
+      }
+    },
+    {
+      "name": "a location that sets a field its client's copy lacks",
+      "location_id": 42,
+      "resolved": {
+        "voice": {
+          "reply_name": "The Copper Kettle",
+          "business_facts": [],
+          "sign_off": "The Copper Kettle team",
+          "owner_name": "",
+          "emoji": {
+            "allowed": false,
+            "max": 0,
+            "preferred": []
+          },
+          "promos_allowed": false,
+          "contact_allowed": false,
+          "words_to_avoid": [
+            "sorry for any inconvenience",
+            "valued customer",
+            "we apologize for the inconvenience",
+            "per our policy",
+            "unfortunately you"
+          ],
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "style_notes": [],
+          "example_replies": [],
+          "temperature": 0.7,
+          "base_style": ""
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "zh",
+            "es"
+          ],
+          "chinese_script": "match",
+          "chinese_region": "taiwan",
+          "english_variant": "us",
+          "fallback_language": "en"
+        },
+        "policy": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 5,
+          "auto_post_delay_min_minutes": 0,
+          "auto_post_delay_max_minutes": 0,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      "fingerprint": "ca69780a8b2552d8",
+      "fingerprint_inputs": {
+        "gate": "phase-4.1",
+        "prompts": {
+          "analyzer": "82382f088c5eec28",
+          "writer:positive:en": "6f61e4a33987d08e",
+          "writer:complaint:en": "d2149ad0d2afe06e",
+          "writer:severity:en": "f301617f5513178d",
+          "writer:rating_only:en": "a5e16d451a2817b4",
+          "writer:rating_only_low:en": "1f1a21a35f114683",
+          "writer:positive:es": "74ecdf5262bc962f",
+          "writer:complaint:es": "0cdc1c9b87ba2b8f",
+          "writer:severity:es": "fefb38b27d307437",
+          "writer:rating_only:es": "df29067f6b12af94",
+          "writer:rating_only_low:es": "b20b5809f2baa758",
+          "writer:positive:zh-Hans": "6e24ad50e3dcb8e2",
+          "writer:complaint:zh-Hans": "552f2394a7533863",
+          "writer:severity:zh-Hans": "bf1e7ff69099ab14",
+          "writer:rating_only:zh-Hans": "02b2b53a02b432f9",
+          "writer:rating_only_low:zh-Hans": "3a89d125d338d9d9",
+          "writer:positive:zh-Hant": "54130df51578490c",
+          "writer:complaint:zh-Hant": "68d8f31b4c451801",
+          "writer:severity:zh-Hant": "f99c6e7875ffcd7f",
+          "writer:rating_only:zh-Hant": "666c921de09906d5",
+          "writer:rating_only_low:zh-Hant": "ab4b118e0bb50a42"
+        },
+        "analyzer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.0,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "writer": {
+          "provider": "dashscope",
+          "model": "qwen3.7-plus",
+          "temperature": 0.7,
+          "max_tokens": 1200,
+          "extras": {
+            "enable_thinking": false
+          }
+        },
+        "checks": {
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "emoji_allowed": false,
+          "emoji_max": 0,
+          "contact_allowed": false
+        }
+      }
+    },
+    {
+      "name": "a location that is not linked to a client and has a layer of its own",
+      "location_id": 51,
+      "resolved": {
+        "voice": {
+          "reply_name": "",
+          "business_facts": [],
+          "sign_off": "See you soon",
+          "owner_name": "",
+          "emoji": {
+            "allowed": false,
+            "max": 0,
+            "preferred": []
+          },
+          "promos_allowed": false,
+          "contact_allowed": false,
+          "words_to_avoid": [
+            "sorry for any inconvenience",
+            "valued customer",
+            "we apologize for the inconvenience",
+            "per our policy",
+            "unfortunately you"
+          ],
+          "length": {
+            "en": {
+              "rating_only": {
+                "min": 30,
+                "max": 160
+              },
+              "positive": {
+                "min": 60,
+                "max": 420
+              },
+              "complaint": {
+                "min": 120,
+                "max": 650
+              },
+              "severity": {
+                "min": 120,
+                "max": 650
+              }
+            },
+            "es": {
+              "rating_only": {
+                "min": 30,
+                "max": 180
+              },
+              "positive": {
+                "min": 60,
+                "max": 450
+              },
+              "complaint": {
+                "min": 120,
+                "max": 700
+              },
+              "severity": {
+                "min": 120,
+                "max": 700
+              }
+            },
+            "zh": {
+              "rating_only": {
+                "min": 8,
+                "max": 60
+              },
+              "positive": {
+                "min": 20,
+                "max": 160
+              },
+              "complaint": {
+                "min": 40,
+                "max": 260
+              },
+              "severity": {
+                "min": 40,
+                "max": 260
+              }
+            }
+          },
+          "style_notes": [],
+          "example_replies": [],
+          "temperature": 0.7,
+          "base_style": ""
+        },
+        "localization": {
+          "reply_languages": [
+            "en",
+            "zh",
+            "es"
+          ],
+          "chinese_script": "match",
+          "chinese_region": "taiwan",
+          "english_variant": "us",
+          "fallback_language": "en"
+        },
+        "policy": {
+          "auto_post_positive": true,
+          "auto_post_rating_only": true,
+          "auto_post_min_stars": 4,
+          "auto_post_delay_min_minutes": 0,
+          "auto_post_delay_max_minutes": 0,
+          "auto_post_window_start": "",
+          "auto_post_window_end": ""
+        }
+      },
+      "fingerprint": null,
+      "fingerprint_inputs": null
+    }
+  ]
+}

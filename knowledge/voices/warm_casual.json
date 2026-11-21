@@ -1,0 +1,21 @@
+{
+  "key": "warm_casual",
+  "label": "Warm and casual",
+  "description": "Friendly and upbeat, like a host who remembers you. Short sentences, light exclamation marks, a little emoji.",
+  "voice": {
+    "emoji": {
+      "allowed": true,
+      "max": 2,
+      "preferred": [
+        "🤍",
+        "😊",
+        "✨"
+      ]
+    },
+    "style_notes": [
+      "Sound like a real person, not a template. Vary the opening; avoid starting every reply with \"Thank you so much\".",
+      "One to three short sentences for a 5-star review.",
+      "Echo one specific detail the reviewer mentioned."
+    ]
+  }
+}
