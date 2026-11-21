@@ -50,6 +50,7 @@
 #include <boost/asio/ssl/context.hpp>
 #include <boost/url/url.hpp>
 
+#include <array>
 #include <chrono>
 #include <optional>
 #include <string>
@@ -73,11 +74,18 @@ bool is_local_post_collection_url(const boost::urls::url& url);
 // https://mybusiness.googleapis.com/v4/accounts/{a}/locations/{l}/localPosts/{p}
 bool is_local_post_url(const boost::urls::url& url);
 
+// The fields of a local post that a PATCH's mask may name (D-099), by
+// Google's names. They are domain::kLocalPostEditFields, held here a second
+// time on purpose: the rule for what may go out does not follow a list that
+// other code widens, and a test fails when the two differ.
+inline constexpr std::array<std::string_view, 6> kLocalPostUpdateFields{"summary", "callToAction", "event",
+                                                                        "offer",   "media",        "languageCode"};
+
 // True for the only address a PATCH may go to, one local post with the
 // fields an edit changes (D-099):
 // https://mybusiness.googleapis.com/v4/accounts/{a}/locations/{l}/localPosts/{p}?updateMask=<names>
-// where <names> is one or more of summary, callToAction, event, offer, media
-// and languageCode, each at most once, joined by commas. It is the one
+// where <names> is one or more of kLocalPostUpdateFields, each at most once,
+// joined by commas. It is the one
 // address with a query that changes something, and the query is that one
 // parameter, written exactly so.
 bool is_local_post_update_url(const boost::urls::url& url);

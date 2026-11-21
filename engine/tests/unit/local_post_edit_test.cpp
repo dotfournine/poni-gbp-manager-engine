@@ -12,6 +12,7 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <format>
 #include <functional>
 
@@ -99,7 +100,9 @@ TEST(LocalPostEditMask, SeveralFieldsComeInTheOneOrderAndEachOnce) {
                                c.summary = "Open late on Saturdays.";
                            }),
                 ElementsAre("summary", "callToAction"));
-    // Every name a mask can hold is one of the six, and the outbound client takes each of them and no other.
+    // Every name a mask can hold is one of the six, and the outbound client takes each of them and no other:
+    // its own list, held apart on purpose, is the same six in the same order.
+    EXPECT_TRUE(std::ranges::equal(domain::kLocalPostEditFields, http::kLocalPostUpdateFields));
     for (const auto name : everything) EXPECT_TRUE(std::ranges::contains(domain::kLocalPostEditFields, name)) << name;
     for (const auto name : domain::kLocalPostEditFields) {
         const boost::urls::url address(std::format("https://mybusiness.googleapis.com/v4/accounts/1/locations/2/localPosts/3?updateMask={}", name));

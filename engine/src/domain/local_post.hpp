@@ -173,7 +173,7 @@ bool is_post_language_tag(std::string_view tag);
 // The fields of Google's LocalPost that an edit may change, by Google's
 // names, in the order a mask lists them. Nothing else is ever named in the
 // updateMask of the one PATCH the engine sends; the outbound client holds
-// the same six (http::is_local_post_update_url).
+// the same six (http::kLocalPostUpdateFields).
 inline constexpr std::array<std::string_view, 6> kLocalPostEditFields{"summary", "callToAction", "event",
                                                                       "offer",   "media",        "languageCode"};
 

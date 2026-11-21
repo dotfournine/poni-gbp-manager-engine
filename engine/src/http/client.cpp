@@ -164,25 +164,20 @@ bool has_gbp_shape(const boost::urls::url& url, const std::array<std::string_vie
     return written == url.buffer();
 }
 
-// The fields of a local post an edit may name (D-099), by Google's names:
-// domain::kLocalPostEditFields, held here a second time on purpose, so that
-// widening one list without the other fails a test.
-constexpr std::array<std::string_view, 6> kUpdateMaskFields{"summary", "callToAction", "event", "offer", "media", "languageCode"};
-
 // "updateMask=a,b" built again from the names in `query`, if that is all it
 // is: one parameter, one or more of the six names, each once. Nothing otherwise.
 std::optional<std::string> checked_update_mask(std::string_view query) {
     constexpr std::string_view key = "updateMask=";
     if (!query.starts_with(key)) return std::nullopt;
     std::string built(key);
-    std::array<bool, kUpdateMaskFields.size()> seen{};
+    std::array<bool, kLocalPostUpdateFields.size()> seen{};
     std::string_view rest = query.substr(key.size());
     for (bool first = true;; first = false) {
         const auto comma = rest.find(',');
         const auto name = rest.substr(0, comma);
-        const auto known = std::ranges::find(kUpdateMaskFields, name);
-        if (known == kUpdateMaskFields.end()) return std::nullopt;  // also an empty name: no mask, or a stray comma
-        auto& taken = seen[static_cast<std::size_t>(known - kUpdateMaskFields.begin())];
+        const auto known = std::ranges::find(kLocalPostUpdateFields, name);
+        if (known == kLocalPostUpdateFields.end()) return std::nullopt;  // also an empty name: no mask, or a stray comma
+        auto& taken = seen[static_cast<std::size_t>(known - kLocalPostUpdateFields.begin())];
         if (taken) return std::nullopt;
         taken = true;
         if (!first) built.push_back(',');
