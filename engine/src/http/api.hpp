@@ -4,6 +4,7 @@
 #pragma once
 
 #include "core/clock.hpp"
+#include "core/config.hpp"
 #include "db/database.hpp"
 #include "http/router.hpp"
 
@@ -25,6 +26,9 @@ struct ApiOptions {
     // The engine works against the local mock of Google, which has no posts
     // (D-088 point 13): the routes that would call Google about posts refuse.
     bool google_mock = false;
+    // The APNs environment the engine pushes to (D-097); nothing without the
+    // APNs settings, when push rules and devices are refused.
+    std::optional<core::ApnsEnvironment> push_environment;
 };
 
 } // namespace poni::http

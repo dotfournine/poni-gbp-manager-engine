@@ -112,6 +112,12 @@ services:
       # Reports (D-085): the public bucket shared report pages are put in.
       # Empty: nothing can be shared or sent.
       PONI_PUBLIC_BUCKET: ${PONI_PUBLIC_BUCKET:-}
+      # Push to the phone app (D-097), all five or none.
+      PONI_APNS_ENVIRONMENT: ${PONI_APNS_ENVIRONMENT:-}
+      PONI_APNS_KEY: ${PONI_APNS_KEY:-}
+      PONI_APNS_KEY_ID: ${PONI_APNS_KEY_ID:-}
+      PONI_APNS_TEAM_ID: ${PONI_APNS_TEAM_ID:-}
+      PONI_APNS_BUNDLE_ID: ${PONI_APNS_BUNDLE_ID:-}
     expose:
       - "8080"
     healthcheck:

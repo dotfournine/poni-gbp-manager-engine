@@ -26,6 +26,14 @@
 // digits, '.' and '-', carries a header that would change its method or its
 // host, or holds a line break in a header; a DELETE carries no body.
 //
+// To Apple's push service (D-097) the client sends one request and nothing
+// else, on either of its two hosts, over HTTP/2 (send_h2):
+//
+//   POST    https://api.push.apple.com/3/device/{token}     a notification to one device
+//
+// with the token in lower-case hex, and the address equal to the one built
+// from its parts, as for Google's writes.
+//
 // Against the local mock of Google (PONI_GOOGLE_MOCK_URL, D-087) the callers
 // still address Google; this client sends what the mock stands in for to the
 // mock instead, and refuses every other Google address. The rules above are
@@ -74,6 +82,15 @@ bool is_gbp_host(const boost::urls::url& url);
 // them. The ids the three write addresses take.
 bool is_plain_id(std::string_view id);
 
+// True when the address names one of Apple's two push hosts in any case,
+// with a trailing dot, a port or another scheme.
+bool is_apns_host(const boost::urls::url& url);
+
+// True for the only address the client sends to Apple:
+// https://api.push.apple.com/3/device/{token}, or the same on
+// api.sandbox.push.apple.com, the token as domain::is_device_token says.
+bool is_apns_device_url(const boost::urls::url& url);
+
 // The rule for a method and an address alone: why the client will not send
 // to it, or nothing.
 std::optional<std::string_view> why_refused(ClientMethod method, const boost::urls::url& url);
@@ -117,10 +134,19 @@ public:
     // std::invalid_argument for a request the client refuses to send. HTTP
     // error statuses are returned, not thrown.
     virtual boost::asio::awaitable<ClientResponse> send(ClientRequest request) = 0;
+
+    // HTTP/2, for Apple's push service only (D-097): the requests one after
+    // another on one connection to their one host, and their answers in the
+    // same order. Every request is checked as send() checks it and must be
+    // the POST to one device, and all are refused if one is not. Throws as
+    // send() does, also when the connection fails after some answers: then
+    // none is returned.
+    virtual boost::asio::awaitable<std::vector<ClientResponse>> send_h2(std::vector<ClientRequest> requests) = 0;
 };
 
-// One connection per request. Polling a handful of Google endpoints every few
-// minutes doesn't justify a connection pool yet.
+// One connection per request, or per send_h2. Polling a handful of Google
+// endpoints every few minutes doesn't justify a connection pool yet, nor do
+// a few pushes an hour.
 class NetClient final : public Client {
 public:
     // `tls` must outlive the client (core::make_tls_client_context()).
@@ -128,6 +154,7 @@ public:
     explicit NetClient(boost::asio::ssl::context& tls, std::optional<boost::urls::url> google_mock = std::nullopt)
         : tls_(tls), google_mock_(std::move(google_mock)) {}
     boost::asio::awaitable<ClientResponse> send(ClientRequest request) override;
+    boost::asio::awaitable<std::vector<ClientResponse>> send_h2(std::vector<ClientRequest> requests) override;
 
 private:
     boost::asio::ssl::context& tls_;

@@ -206,6 +206,21 @@ protected:
         user_ = value<std::int64_t>("SELECT id FROM users WHERE google_sub = 'sub-1'");
     }
 
+    // A session of the phone app for `email` (its user made once per address),
+    // named `token_hash`, as a sign-in of the app leaves one (D-095).
+    void add_app_session(const std::string& email, const std::string& token_hash) {
+        const auto now = db::to_timestamptz(clock_.now());
+        tx([&](pqxx::work& tx) {
+            tx.exec("INSERT INTO users (google_sub, email, name, created_at, last_login_at) VALUES ('sub-' || $1, $1, 'Staff', "
+                    "$2::timestamptz, $2::timestamptz) ON CONFLICT (google_sub) DO NOTHING",
+                    pqxx::params{email, now});
+            tx.exec("INSERT INTO sessions (token_hash, user_id, csrf_token, created_at, last_seen_at, expires_at, kind) "
+                    "SELECT $1, id, NULL, $2::timestamptz, $2::timestamptz, $2::timestamptz + interval '90 days', 'app' "
+                    "FROM users WHERE google_sub = 'sub-' || $3",
+                    pqxx::params{token_hash, now, email});
+        });
+    }
+
     // Stores a review in the mirror as the sync would. Returns its id.
     std::int64_t store_review(std::int64_t location, const gbp::Review& review, std::string_view source = repo::kSourcePoll) {
         return tx([&](pqxx::work& tx) {

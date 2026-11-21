@@ -25,7 +25,7 @@ class Notifications : public test::ReplyTest {
 protected:
     std::int64_t rule(const std::string& event_type, std::optional<std::int64_t> client_id, std::vector<std::string> recipients) {
         return as_test([&](pqxx::work& tx, audit::Writer& audit) {
-            return repo::create_rule(tx, audit, {.event_type = event_type, .client_id = client_id, .recipients = recipients}).value().id;
+            return repo::create_rule(tx, audit, {.event_type = event_type, .client_id = client_id, .recipients = recipients}, false).value().id;
         });
     }
 
@@ -300,7 +300,7 @@ TEST_F(Notifications, ARefusalAndTheLastFailedAttemptEndAsFailed) {
 TEST_F(Notifications, RulesTakeOnlyRealAddressesAndOneRulePerEventAndClient) {
     const auto create = [&](repo::NewRule rule) {
         return as_test([&](pqxx::work& tx, audit::Writer& audit) {
-            auto result = repo::create_rule(tx, audit, rule);
+            auto result = repo::create_rule(tx, audit, rule, false);
             if (!result) audit.nothing_changed();
             return result;
         });

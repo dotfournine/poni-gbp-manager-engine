@@ -1,4 +1,5 @@
 #include "core/config.hpp"
+#include "unit/test_key.hpp"
 #include "jobs/go_live.hpp"
 
 #include <gmock/gmock.h>
@@ -346,4 +347,60 @@ TEST(Config, AgainstTheGoogleMockNothingMayReachARealGoogleService) {
     EXPECT_TRUE(with("PONI_PUBLIC_BUCKET", "/tmp/poni-mock/public"));
     // Without the mock, the same settings are fine.
     EXPECT_TRUE(load_config(env_of({{"PONI_PUBSUB_SUBSCRIPTION", "projects/p/subscriptions/s"}}), std::nullopt));
+}
+
+// ---- the settings -------------------------------------------------------------------
+
+namespace {
+
+Environment apns_env(std::string environment = "sandbox") {
+    return {{"PONI_APNS_ENVIRONMENT", std::move(environment)},
+            {"PONI_APNS_KEY", poni::test::test_key().p8},
+            {"PONI_APNS_KEY_ID", "ABC123DEFG"},
+            {"PONI_APNS_TEAM_ID", "TEAM123456"},
+            {"PONI_APNS_BUNDLE_ID", "com.example.gbpmanager"}};
+}
+
+}  // namespace
+
+TEST(ApnsConfig, AllFiveOrNone) {
+    const auto none = load_config({}, std::nullopt);
+    ASSERT_TRUE(none);
+    EXPECT_FALSE(none->apns);
+
+    const auto all = load_config(apns_env("production"), std::nullopt);
+    ASSERT_TRUE(all) << all.error();
+    ASSERT_TRUE(all->apns);
+    EXPECT_EQ(all->apns->environment, ApnsEnvironment::production);
+    EXPECT_EQ(all->apns->key_id, "ABC123DEFG");
+    EXPECT_EQ(all->apns->bundle_id, "com.example.gbpmanager");
+
+    auto missing = apns_env();
+    missing.erase("PONI_APNS_TEAM_ID");
+    const auto refused = load_config(missing, std::nullopt);
+    ASSERT_FALSE(refused);
+    EXPECT_THAT(refused.error(), HasSubstr("PONI_APNS_TEAM_ID is missing"));
+}
+
+TEST(ApnsConfig, EachSettingIsChecked) {
+    const auto with = [](std::string key, std::string value) {
+        auto env = apns_env();
+        env[key] = std::move(value);
+        return load_config(env, std::nullopt);
+    };
+    EXPECT_THAT(with("PONI_APNS_ENVIRONMENT", "development").error(), HasSubstr("not production or sandbox"));
+    EXPECT_THAT(with("PONI_APNS_KEY", "bm90IGEga2V5").error(), HasSubstr("PONI_APNS_KEY"));
+    EXPECT_THAT(with("PONI_APNS_KEY_ID", "abc").error(), HasSubstr("PONI_APNS_KEY_ID"));
+    EXPECT_THAT(with("PONI_APNS_TEAM_ID", "team123456").error(), HasSubstr("PONI_APNS_TEAM_ID"));
+    EXPECT_THAT(with("PONI_APNS_BUNDLE_ID", "com.example\r\nx").error(), HasSubstr("PONI_APNS_BUNDLE_ID"));
+}
+
+TEST(ApnsConfig, AgainstTheGoogleMockPushGoesOnlyToBuildsRunFromXcode) {
+    auto env = apns_env("production");
+    env["PONI_GOOGLE_MOCK_URL"] = "http://127.0.0.1:8090";
+    const auto refused = load_config(env, std::nullopt);
+    ASSERT_FALSE(refused);
+    EXPECT_THAT(refused.error(), HasSubstr("must be sandbox"));
+    env["PONI_APNS_ENVIRONMENT"] = "sandbox";
+    EXPECT_TRUE(load_config(env, std::nullopt));
 }

@@ -41,8 +41,9 @@ protected:
         pipeline_.emplace(db(), clock_, llm_, queue(), jobs::AnalysisOptions{.delay_roll = [this] { return roll_; }});
         poster_.emplace(db(), clock_, gbp_, gbp_, jobs::PostingOptions{});
         tester_.emplace(db(), clock_, llm_);
-        notifier_.emplace(db(), clock_, jobs::NotifierOptions{.public_url = "http://localhost:5173"});
+        notifier_.emplace(db(), clock_, jobs::NotifierOptions{.public_url = "http://localhost:5173", .lifetimes = {}});
         notifier_->add_channel(channel_);
+        notifier_->set_push(push_);
         sync_.emplace(db(), clock_, gbp_, queue(), jobs::SyncOptions{});
         jobs::install(registry_, *sync_, nullptr);
         jobs::install(registry_, *pipeline_);
@@ -107,6 +108,7 @@ protected:
     // Where in its delay range an auto-post falls, in [0, 1).
     double roll_ = 0.0;
     FakeChannel channel_;
+    test::FakePushSender push_;
     std::optional<jobs::ReviewPipeline> pipeline_;
     std::optional<jobs::ReplyPoster> poster_;
     std::optional<jobs::GoLiveTester> tester_;

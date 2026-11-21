@@ -43,6 +43,25 @@ struct LlmProvider {
     LlmProtocol protocol = LlmProtocol::openai;
 };
 
+// Which of Apple's two push services an engine sends to (D-097). Builds of
+// the app from TestFlight and the App Store have tokens of `production`,
+// builds run from Xcode tokens of `sandbox`.
+enum class ApnsEnvironment { production, sandbox };
+std::string_view name(ApnsEnvironment environment);
+
+// Push to the phone app (D-097): one environment per engine and one token
+// key, an APNs auth key that is environment-specific and topic-specific.
+struct ApnsSettings {
+    ApnsEnvironment environment = ApnsEnvironment::sandbox;
+    // PONI_APNS_KEY: the key, as base64 the .p8 file holds. A secret.
+    Es256Key key;
+    // PONI_APNS_KEY_ID, PONI_APNS_TEAM_ID: ten letters and digits each.
+    std::string key_id;
+    std::string team_id;
+    // PONI_APNS_BUNDLE_ID: the app's bundle id, every push's topic.
+    std::string bundle_id;
+};
+
 struct Config {
     // libpq connection URL. The default is the local development database
     // from deploy/docker-compose.dev.yml.
@@ -163,6 +182,13 @@ struct Config {
     // with a slash in it is a local folder instead, for development. Empty:
     // no report can be shared or sent.
     std::string public_bucket;
+
+    // ---- push to the phone app (D-097) ----
+
+    // PONI_APNS_ENVIRONMENT, PONI_APNS_KEY, PONI_APNS_KEY_ID, PONI_APNS_TEAM_ID
+    // and PONI_APNS_BUNDLE_ID, all or none. None: nothing is pushed, and a
+    // push rule is refused.
+    std::optional<ApnsSettings> apns;
 };
 
 // The environment, by variable name.

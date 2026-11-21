@@ -65,6 +65,7 @@ const std::map<std::string, std::string> kRoutesWithBody = {
     {"POST /api/notification-rules", "event_type"},
     {"PATCH /api/notification-rules/{id}", "recipients"},
     {"POST /api/notifications/test", "recipient"},
+    {"POST /api/devices", "apns_token"},
     {"PATCH /api/system/settings", "posting_enabled"},
 };
 
@@ -89,6 +90,7 @@ const std::vector<std::string> kRoutesWithoutBody = {
     "POST /api/locations/{id}/local-posts/refresh",
     "POST /api/locations/{id}/local-post-ideas",
     "DELETE /api/notification-rules/{id}",
+    "DELETE /api/devices/{id}",
     "DELETE /api/report-schedules/{id}",
     "DELETE /api/local-posts/{id}",
 };

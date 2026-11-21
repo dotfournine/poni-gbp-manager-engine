@@ -15,6 +15,7 @@
 #include <gmock/gmock.h>
 
 #include <array>
+#include <format>
 
 using namespace poni;
 using google::ApiError;
@@ -566,4 +567,67 @@ TEST_F(WritePath, AGmailFailureSaysWhenItWasTheToken) {
     const auto lost = await(gmail_.send({"a@example.com", "s", "b"}));
     EXPECT_EQ(lost.error().kind, Kind::transient);
     EXPECT_THAT(lost.error().message, testing::StartsWith("network error: "));
+}
+
+// ---- Apple's push service: one POST, to one device (D-097) --------------------------------
+
+namespace {
+
+const std::string kDeviceToken(64, 'a');
+
+}  // namespace
+
+TEST(OutboundApns, OnlyAPostToOneDeviceIsSentToApple) {
+    for (const auto* host : {"api.push.apple.com", "api.sandbox.push.apple.com"}) {
+        const auto url = std::format("https://{}/3/device/{}", host, kDeviceToken);
+        EXPECT_TRUE(http::is_apns_device_url(boost::urls::url(url))) << url;
+        EXPECT_FALSE(http::why_refused(http::ClientMethod::post, boost::urls::url(url))) << url;
+        // Not even a read: the engine has nothing to ask Apple.
+        EXPECT_TRUE(http::why_refused(http::ClientMethod::get, boost::urls::url(url))) << url;
+        EXPECT_TRUE(http::why_refused(http::ClientMethod::put, boost::urls::url(url))) << url;
+        EXPECT_TRUE(http::why_refused(http::ClientMethod::del, boost::urls::url(url))) << url;
+    }
+}
+
+TEST(OutboundApns, TheAddressIsTakenOnlyAsTheEngineWritesIt) {
+    for (const auto& other : {std::format("https://api.push.apple.com/3/device/{}", std::string(64, 'A')),  // capitals
+                              std::format("https://api.push.apple.com/3/device/{}", std::string(63, 'a')),  // odd length
+                              std::format("https://api.push.apple.com/3/device/{}", std::string(62, 'a')),  // too short
+                              std::format("https://api.push.apple.com/3/device/{}g", std::string(63, 'a')),
+                              std::format("https://api.push.apple.com:443/3/device/{}", kDeviceToken),
+                              std::format("https://api.push.apple.com/3/device/{}?x=1", kDeviceToken),
+                              std::format("https://api.push.apple.com/3/device/{}/", kDeviceToken),
+                              std::format("https://api.push.apple.com/3/device/{}#x", kDeviceToken),
+                              std::format("https://API.push.apple.com/3/device/{}", kDeviceToken),
+                              std::format("https://api.push.apple.com./3/device/{}", kDeviceToken),
+                              std::format("https://user@api.push.apple.com/3/device/{}", kDeviceToken),
+                              std::format("http://api.push.apple.com/3/device/{}", kDeviceToken),
+                              std::format("https://api.push.apple.com/4/device/{}", kDeviceToken),
+                              std::format("https://api.push.apple.com/3/devices/{}", kDeviceToken),
+                              std::format("https://api.push.apple.com/3/device/%61{}", std::string(62, 'a')),
+                              std::format("https://api.push.apple.com/3/device/../device/{}", kDeviceToken),
+                              std::string("https://api.push.apple.com/3/broadcasts/apps/com.example")}) {
+        EXPECT_FALSE(http::is_apns_device_url(boost::urls::url(other))) << other;
+        EXPECT_TRUE(http::why_refused(http::ClientMethod::post, boost::urls::url(other))) << other;
+    }
+}
+
+TEST(OutboundApns, HttpTwoCarriesOnlyThatPostAndRefusesTheWholeBeforeOpeningAConnection) {
+    RefusingClient refusing;
+    const auto good = request_to(http::ClientMethod::post, std::format("https://api.sandbox.push.apple.com/3/device/{}", kDeviceToken));
+    const auto run = [&](std::vector<http::ClientRequest> requests) { return test::run(refusing.io, refusing.client.send_h2(std::move(requests))); };
+    // One bad request refuses them all.
+    EXPECT_THROW(run({good, request_to(http::ClientMethod::post, "https://api.sandbox.push.apple.com/3/device/XYZ")}), std::invalid_argument);
+    // Two hosts on one connection.
+    EXPECT_THROW(run({good, request_to(http::ClientMethod::post, std::format("https://api.push.apple.com/3/device/{}", kDeviceToken))}),
+                 std::invalid_argument);
+    // HTTP/2 to Google, whose rules are for HTTP/1.1 and the mock: not this way.
+    EXPECT_THROW(run({request_to(http::ClientMethod::post, "https://gmail.googleapis.com/gmail/v1/users/me/messages/send")}),
+                 std::invalid_argument);
+    // A GET has no business on this path either.
+    EXPECT_THROW(run({request_to(http::ClientMethod::get, "https://example.com/")}), std::invalid_argument);
+    auto with_header = good;
+    with_header.headers.emplace_back("X-HTTP-Method-Override", "DELETE");
+    EXPECT_THROW(run({with_header}), std::invalid_argument);
+    EXPECT_TRUE(run({}).empty());
 }

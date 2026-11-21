@@ -11,6 +11,7 @@
 #include "db/database.hpp"
 #include "db/repo_analysis.hpp"
 #include "db/repo_cases.hpp"
+#include "db/repo_devices.hpp"
 #include "db/repo_notifications.hpp"
 #include "db/repo_posting.hpp"
 #include "db/repo_reviews.hpp"
@@ -206,8 +207,9 @@ void add_reply_routes(Router& router, const Api& api, jobs::ReviewPipeline& pipe
                [api](const Request& request) -> asio::awaitable<Response> {
                    const auto rule = body_as<repo::NewRule>(request);
                    if (!rule) co_return rule.error();
-                   co_return respond(co_await api.change(request, [rule = *rule](pqxx::work& tx, audit::Writer& audit) {
-                       return repo::create_rule(tx, audit, rule);
+                   const bool push = api.options.push_environment.has_value();
+                   co_return respond(co_await api.change(request, [rule = *rule, push](pqxx::work& tx, audit::Writer& audit) {
+                       return repo::create_rule(tx, audit, rule, push);
                    }), 201);
                });
 
@@ -231,6 +233,32 @@ void add_reply_routes(Router& router, const Api& api, jobs::ReviewPipeline& pipe
                    if (!id) co_return not_found("notification rule");
                    co_return respond(co_await api.change(request, [id = *id](pqxx::work& tx, audit::Writer& audit) {
                        return repo::delete_rule(tx, audit, id);
+                   }), Response::no_content());
+               });
+
+    // ---- the phone app's devices, for push (D-097) ---------------------------------
+
+    router.add(verb::post, "/api/devices", {Access::user, "devices.register"},
+               [api](const Request& request) -> asio::awaitable<Response> {
+                   const auto device = body_as<repo::NewDevice>(request);
+                   if (!device) co_return device.error();
+                   // A device is its app session: a browser's session has no phone to tell.
+                   if (request.principal->kind != domain::SessionKind::app) {
+                       co_return invalid("Only the phone app registers a device, with its bearer token.");
+                   }
+                   co_return respond(co_await api.change(request, [device = *device, session = request.principal->session_token_hash,
+                                                                   environment = api.options.push_environment](pqxx::work& tx,
+                                                                                                               audit::Writer& audit) {
+                       return repo::register_device(tx, audit, session, device, environment);
+                   }), 201);
+               });
+
+    router.add(verb::delete_, "/api/devices/{id}", {Access::user, "devices.unregister"},
+               [api](const Request& request) -> asio::awaitable<Response> {
+                   const auto id = path_id(request);
+                   if (!id) co_return not_found("device");
+                   co_return respond(co_await api.change(request, [id = *id](pqxx::work& tx, audit::Writer& audit) {
+                       return repo::unregister_device(tx, audit, audit.user_id(), id);
                    }), Response::no_content());
                });
 

@@ -15,6 +15,12 @@ find_package(Boost CONFIG REQUIRED COMPONENTS asio beast describe json url)
 find_package(OpenSSL REQUIRED)
 find_package(libpqxx CONFIG REQUIRED)
 find_package(cctz CONFIG REQUIRED)
+# nghttp2's vcpkg port installs no CMake package: its header and library are found directly (D-097).
+find_path(NGHTTP2_INCLUDE_DIR nghttp2/nghttp2.h REQUIRED)
+find_library(NGHTTP2_LIBRARY NAMES nghttp2 REQUIRED)
+message(STATUS "nghttp2: ${NGHTTP2_LIBRARY}")
+add_library(nghttp2::nghttp2 UNKNOWN IMPORTED)
+set_target_properties(nghttp2::nghttp2 PROPERTIES IMPORTED_LOCATION "${NGHTTP2_LIBRARY}" INTERFACE_INCLUDE_DIRECTORIES "${NGHTTP2_INCLUDE_DIR}")
 
 # Warnings and definitions shared by the engine and its tests.
 add_library(poni_build_options INTERFACE)
@@ -40,6 +46,7 @@ add_library(poni_engine STATIC
   src/connectors/identity/google_provider.cpp
   src/connectors/llm/net_client.cpp
   src/connectors/llm/protocols.cpp
+  src/connectors/notify/apns.cpp
   src/connectors/notify/gmail.cpp
   src/connectors/pubsub/subscriber.cpp
   src/connectors/storage/store.cpp
@@ -59,6 +66,7 @@ add_library(poni_engine STATIC
   src/db/repo_google_target.cpp
   src/db/repo_knowledge.cpp
   src/db/repo_catalog.cpp
+  src/db/repo_devices.cpp
   src/db/repo_notifications.cpp
   src/db/repo_auto_posting.cpp
   src/db/repo_posting.cpp
@@ -76,6 +84,7 @@ add_library(poni_engine STATIC
   src/domain/post_help.cpp
   src/domain/posting_schedule.cpp
   src/domain/prompts.cpp
+  src/domain/push.cpp
   src/domain/report_post_prompts.cpp
   src/domain/reply_checks.cpp
   src/domain/reply_policy.cpp
@@ -96,6 +105,7 @@ add_library(poni_engine STATIC
   src/http/auth.cpp
   src/http/client.cpp
   src/http/connect.cpp
+  src/http/h2.cpp
   src/http/health.cpp
   src/http/router.cpp
   src/http/server.cpp
@@ -127,6 +137,7 @@ target_link_libraries(poni_engine
     libpqxx::pqxx
   PRIVATE
     cctz::cctz
+    nghttp2::nghttp2
 )
 
 add_executable(poni-gbp-engine src/main.cpp)

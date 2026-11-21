@@ -1,5 +1,6 @@
 // The core helpers: hashing, encoding and secrets at rest, JSON mapping errors, and the rate limiter.
 
+#include "unit/test_key.hpp"
 #include "core/crypto.hpp"
 #include "core/json.hpp"
 #include "core/rate_limiter.hpp"
@@ -143,4 +144,40 @@ TEST(RateLimiter, AcquireReturnsAtOnceWithinTheBurst) {
 TEST(Sha256, MatchesKnownVectors) {
     EXPECT_EQ(core::sha256_hex(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
     EXPECT_EQ(core::sha256_hex("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+}
+
+// ---- the APNs auth key (D-097) ----------------------------------------------------------
+
+TEST(Es256Key, TakesThePkcs8KeyAsADotP8FileHoldsItAndSigns) {
+    const auto& key = poni::test::test_key();
+    const auto plain = core::Es256Key::from_p8(key.p8);
+    ASSERT_TRUE(plain) << plain.error();
+    const auto signature = plain->sign("header.claims");
+    EXPECT_EQ(signature.size(), 64u);
+    EXPECT_TRUE(key.verifies("header.claims", signature));
+    EXPECT_FALSE(key.verifies("header.claimz", signature));
+
+    // The whole file on one line, as an env file can only hold it, and the file as it is.
+    std::string multi = "-----BEGIN PRIVATE KEY-----\n";
+    for (std::size_t i = 0; i < key.p8.size(); i += 64) multi += key.p8.substr(i, 64) + "\n";
+    multi += "-----END PRIVATE KEY-----\n";
+    EXPECT_TRUE(core::Es256Key::from_p8(multi));
+    EXPECT_TRUE(core::Es256Key::from_p8("-----BEGIN PRIVATE KEY-----" + key.p8 + "-----END PRIVATE KEY-----"));
+}
+
+TEST(Es256Key, RefusesWhatIsNotAP256Key) {
+    EXPECT_FALSE(core::Es256Key::from_p8(""));
+    EXPECT_FALSE(core::Es256Key::from_p8("not base64 !!"));
+    EXPECT_FALSE(core::Es256Key::from_p8(core::base64_encode("not a key")));
+    // An RSA key is a private key, but not one Apple gives.
+    EVP_PKEY* rsa = EVP_RSA_gen(2048);
+    PKCS8_PRIV_KEY_INFO* info = EVP_PKEY2PKCS8(rsa);
+    unsigned char* der = nullptr;
+    const int n = i2d_PKCS8_PRIV_KEY_INFO(info, &der);
+    const auto refused = core::Es256Key::from_p8(core::base64_encode(std::string_view(reinterpret_cast<const char*>(der), static_cast<std::size_t>(n))));
+    OPENSSL_free(der);
+    PKCS8_PRIV_KEY_INFO_free(info);
+    EVP_PKEY_free(rsa);
+    ASSERT_FALSE(refused);
+    EXPECT_NE(refused.error().find("P-256"), std::string::npos) << refused.error();
 }

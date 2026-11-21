@@ -295,7 +295,8 @@ asio::awaitable<void> ReviewPipeline::escalate(const repo::ReviewContext& contex
                         .review_id = context.review_id,
                         .subject = subject,
                         .body = body,
-                        .link_path = std::format("/#/escalations/{}/show", opened_case.id)},
+                        .link_path = std::format("/#/escalations/{}/show", opened_case.id),
+                        .escalation_id = opened_case.id},
                        now);
         }
         return opened_case;

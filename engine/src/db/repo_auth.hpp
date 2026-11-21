@@ -116,6 +116,13 @@ struct SessionUser {
 // used within its kind's idle limit and belongs to an active user. Also notes
 // that it was just used. The caller says the kind from how the token came (a
 // cookie: browser; a bearer token: app), so neither is taken for the other.
+// The condition, in SQL, that the session `s` of the user `u` has not
+// ended: of its kind, not expired, used within its kind's idle limit, of an
+// active user. The arguments are the numbers of the parameters that hold
+// now, now less the kind's idle limit, and the kind. The one place a
+// session's life is written in SQL, for find_session and for push.
+std::string live_session_sql(int now, int idle_cutoff, int kind);
+
 std::optional<SessionUser> find_session(pqxx::transaction_base& tx, std::string_view token_hash, domain::SessionKind kind,
                                         core::TimePoint now, const domain::SessionLifetimes& lifetimes);
 

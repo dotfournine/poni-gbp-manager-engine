@@ -9,6 +9,7 @@
 #include "connectors/gbp/performance.hpp"
 #include "connectors/gbp/reader.hpp"
 #include "connectors/gbp/writer.hpp"
+#include "connectors/notify/apns.hpp"
 #include "connectors/notify/channel.hpp"
 #include "connectors/identity/provider.hpp"
 #include "connectors/llm/client.hpp"
@@ -59,6 +60,33 @@ public:
         co_return std::move(*response);
     }
 
+    // As the real client: every request is checked first, and a failure
+    // anywhere returns nothing. The answers are taken in order, one each.
+    boost::asio::awaitable<std::vector<http::ClientResponse>> send_h2(std::vector<http::ClientRequest> batch) override {
+        for (const auto& request : batch) {
+            if (const auto refusal = http::why_refused(request)) {
+                refused.push_back(request);
+                throw std::invalid_argument(std::string(*refusal));
+            }
+        }
+        h2_batches.push_back(batch.size());
+        std::vector<http::ClientResponse> out;
+        bool failed = false;
+        for (auto& request : batch) {
+            requests.push_back(std::move(request));
+            if (responses_.empty()) {
+                out.push_back(http::ClientResponse{500, R"({"error":"the test scripted no response"})"});
+                continue;
+            }
+            auto response = std::move(responses_.front());
+            responses_.pop_front();
+            if (!response) failed = true;
+            else out.push_back(std::move(*response));
+        }
+        if (failed) throw boost::system::system_error(boost::asio::error::timed_out);
+        co_return out;
+    }
+
     std::string header(std::size_t request_index, std::string_view name) const {
         for (const auto& [key, value] : requests.at(request_index).headers) {
             if (key == name) return value;
@@ -69,6 +97,8 @@ public:
     std::vector<http::ClientRequest> requests;
     // Requests the outbound client's rules refused (http/client.hpp).
     std::vector<http::ClientRequest> refused;
+    // How many requests each send_h2 carried.
+    std::vector<std::size_t> h2_batches;
 
 private:
     std::deque<std::optional<http::ClientResponse>> responses_;  // nothing: no answer comes
@@ -641,6 +671,36 @@ public:
         }
         sent.push_back(std::move(message));
         co_return std::expected<void, notify::SendError>{};
+    }
+};
+
+// Apple's push service as the notifier sees it: it keeps every push and
+// answers each with the next scripted answer, or `accepted`.
+class FakePushSender final : public notify::PushSender {
+public:
+    std::vector<notify::Push> sent;
+    // One per push, in order, before the rest are accepted.
+    std::deque<notify::PushAnswer> answers;
+    // Errors handed out, one per call, before calls succeed.
+    std::deque<notify::SendError> failures;
+
+    boost::asio::awaitable<std::expected<std::vector<notify::PushAnswer>, notify::SendError>> send(std::vector<notify::Push> pushes) override {
+        if (!failures.empty()) {
+            auto failure = std::move(failures.front());
+            failures.pop_front();
+            co_return std::unexpected(std::move(failure));
+        }
+        std::vector<notify::PushAnswer> out;
+        for (auto& push : pushes) {
+            if (answers.empty()) {
+                out.push_back({});
+            } else {
+                out.push_back(std::move(answers.front()));
+                answers.pop_front();
+            }
+            sent.push_back(std::move(push));
+        }
+        co_return out;
     }
 };
 

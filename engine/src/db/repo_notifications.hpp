@@ -32,6 +32,10 @@ namespace poni::repo {
 
 inline constexpr std::string_view kDeliverNotificationKind = "notifications.deliver";
 inline constexpr std::string_view kEmailChannel = "email";
+// Push to the phone app (D-097): a rule's recipients are staff, each told on their devices.
+inline constexpr std::string_view kPushChannel = "push";
+// integration_status row of the last push to Apple.
+inline constexpr std::string_view kPushStatus = "push";
 // integration_status row of the sending account's token.
 inline constexpr std::string_view kEmailStatus = "email";
 // credentials row of the sending account (connectors/notify/gmail.hpp).
@@ -64,6 +68,9 @@ struct NotificationEvent {
     std::string body;
     // Where to look in the dashboard, e.g. "/#/escalations/12/show".
     std::string link_path;
+    // What a push opens in the app, beside the location and the review (D-097).
+    std::optional<std::int64_t> escalation_id = std::nullopt;
+    std::optional<std::int64_t> local_post_id = std::nullopt;
 };
 
 // Writes one delivery for every recipient of every enabled rule that matches
@@ -98,13 +105,21 @@ struct PendingDelivery {
     std::string subject;
     std::string body;
     std::string link_path;
-    // The switch in system_settings.
+    // The switch in system_settings, for email.
     bool sending_enabled = false;
+    // What a push is made of.
+    std::string event_type;
+    std::string event_key;
+    std::optional<std::int64_t> location_id;
+    std::optional<std::int64_t> review_id;
+    std::optional<std::int64_t> escalation_id;
+    std::optional<std::int64_t> local_post_id;
 };
 
 // The delivery if it is still pending; counts the attempt.
 std::optional<PendingDelivery> begin_delivery(pqxx::transaction_base& tx, std::int64_t id, core::TimePoint now);
-void mark_delivery_sent(pqxx::transaction_base& tx, std::int64_t id, core::TimePoint now);
+// `reason`: what to note beside a send, such as how many devices a push reached.
+void mark_delivery_sent(pqxx::transaction_base& tx, std::int64_t id, core::TimePoint now, std::optional<std::string> reason = std::nullopt);
 // `status` is "failed" or "not_sent"; "pending" keeps it for the next attempt and only notes the reason.
 void mark_delivery(pqxx::transaction_base& tx, std::int64_t id, std::string_view status, std::string_view reason,
                    core::TimePoint now);
@@ -114,11 +129,12 @@ void mark_delivery(pqxx::transaction_base& tx, std::int64_t id, std::string_view
 // The bodies of the POST and the PATCH of a rule, member for member.
 struct NewRule {
     std::string event_type;
+    std::optional<std::string> channel;      // nothing: email
     core::Nullable<std::int64_t> client_id;  // null or left out: every client
     std::vector<std::string> recipients;
     std::optional<bool> enabled;  // nothing: enabled
 };
-BOOST_DESCRIBE_STRUCT(NewRule, (), (event_type, client_id, recipients, enabled))
+BOOST_DESCRIBE_STRUCT(NewRule, (), (event_type, channel, client_id, recipients, enabled))
 struct RulePatch {
     std::optional<std::vector<std::string>> recipients;
     std::optional<bool> enabled;
@@ -131,7 +147,8 @@ bool valid_email(std::string_view address);
 
 model::NotificationRuleList list_rules(pqxx::transaction_base& tx);
 std::optional<model::NotificationRule> get_rule(pqxx::transaction_base& tx, std::int64_t id);
-Result<model::NotificationRule> create_rule(pqxx::transaction_base& tx, audit::Writer& audit, const NewRule& rule);
+// `push_configured`: the engine has the APNs settings; without them a push rule is refused.
+Result<model::NotificationRule> create_rule(pqxx::transaction_base& tx, audit::Writer& audit, const NewRule& rule, bool push_configured);
 Result<model::NotificationRule> update_rule(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const RulePatch& patch);
 Result<void> delete_rule(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id);
 

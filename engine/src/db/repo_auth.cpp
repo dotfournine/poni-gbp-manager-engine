@@ -139,15 +139,18 @@ void create_session(pqxx::transaction_base& tx, std::int64_t user_id, const NewS
         .no_rows();
 }
 
+std::string live_session_sql(int now, int idle_cutoff, int kind) {
+    return std::format("s.kind = ${2} AND s.expires_at > ${0}::timestamptz AND s.last_seen_at > ${1}::timestamptz AND u.status = 'active'",
+                       now, idle_cutoff, kind);
+}
+
 std::optional<SessionUser> find_session(pqxx::transaction_base& tx, std::string_view token_hash, domain::SessionKind kind,
                                         core::TimePoint now, const domain::SessionLifetimes& lifetimes) {
     const auto rows = tx.exec(
-        R"sql(
-        SELECT u.id, u.email, u.name, u.picture_url, s.csrf_token,
-               s.last_seen_at < $2::timestamptz - interval '60 seconds' AS stale
-          FROM sessions s JOIN users u ON u.id = s.user_id
-         WHERE s.token_hash = $1 AND s.kind = $4 AND s.expires_at > $2::timestamptz AND s.last_seen_at > $3::timestamptz
-           AND u.status = 'active')sql",
+        "SELECT u.id, u.email, u.name, u.picture_url, s.csrf_token, "
+        "       s.last_seen_at < $2::timestamptz - interval '60 seconds' AS stale "
+        "  FROM sessions s JOIN users u ON u.id = s.user_id "
+        " WHERE s.token_hash = $1 AND " + live_session_sql(2, 3, 4),
         pqxx::params{std::string(token_hash), to_timestamptz(now), to_timestamptz(now - lifetimes.of(kind).idle),
                      std::string(domain::name(kind))});
     if (rows.empty()) return std::nullopt;

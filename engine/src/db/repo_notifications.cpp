@@ -31,12 +31,14 @@ std::optional<std::int64_t> insert_delivery(pqxx::transaction_base& tx, const No
     const auto rows = tx.exec(
         R"sql(
         INSERT INTO notification_deliveries (event_type, event_key, client_id, location_id, review_id, rule_id, channel,
-                                             recipient, subject, body, link_path, status, status_reason, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::timestamptz, $14::timestamptz)
+                                             recipient, subject, body, link_path, status, status_reason, created_at, updated_at,
+                                             escalation_id, local_post_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::timestamptz, $14::timestamptz, $15, $16)
         ON CONFLICT (event_key, channel, recipient) DO NOTHING
         RETURNING id)sql",
         pqxx::params{event.type, event.key, event.client_id, event.location_id, event.review_id, rule_id, std::string(channel),
-                     std::string(recipient), event.subject, event.body, event.link_path, std::string(status), reason, now});
+                     std::string(recipient), event.subject, event.body, event.link_path, std::string(status), reason, now,
+                     event.escalation_id, event.local_post_id});
     if (rows.empty()) return std::nullopt;
     return rows[0][0].as<std::int64_t>();
 }
@@ -60,6 +62,7 @@ std::string rule_select() {
 
 boost::json::object rule_json(const model::NotificationRule& rule) {
     return {{"event_type", rule.event_type},
+            {"channel", rule.channel},
             {"client_id", rule.client_id ? boost::json::value(*rule.client_id) : boost::json::value(nullptr)},
             {"recipients", boost::json::value_from(rule.recipients)},
             {"enabled", rule.enabled}};
@@ -148,7 +151,8 @@ std::optional<PendingDelivery> begin_delivery(pqxx::transaction_base& tx, std::i
     const auto rows = tx.exec(
         "UPDATE notification_deliveries SET attempts = attempts + 1, updated_at = $2::timestamptz "
         "WHERE id = $1 AND status = 'pending' "
-        "RETURNING channel, recipient, subject, body, link_path, (SELECT email_sending_enabled FROM system_settings)",
+        "RETURNING channel, recipient, subject, body, link_path, (SELECT email_sending_enabled FROM system_settings), "
+        "event_type, event_key, location_id, review_id, escalation_id, local_post_id",
         pqxx::params{id, to_timestamptz(now)});
     if (rows.empty()) return std::nullopt;
     const auto row = rows[0];
@@ -158,13 +162,19 @@ std::optional<PendingDelivery> begin_delivery(pqxx::transaction_base& tx, std::i
                            .subject = row[2].as<std::string>(),
                            .body = row[3].as<std::string>(),
                            .link_path = row[4].as<std::string>(),
-                           .sending_enabled = row[5].as<bool>()};
+                           .sending_enabled = row[5].as<bool>(),
+                           .event_type = row[6].as<std::string>(),
+                           .event_key = row[7].as<std::string>(),
+                           .location_id = row[8].as<std::optional<std::int64_t>>(),
+                           .review_id = row[9].as<std::optional<std::int64_t>>(),
+                           .escalation_id = row[10].as<std::optional<std::int64_t>>(),
+                           .local_post_id = row[11].as<std::optional<std::int64_t>>()};
 }
 
-void mark_delivery_sent(pqxx::transaction_base& tx, std::int64_t id, core::TimePoint now) {
-    tx.exec("UPDATE notification_deliveries SET status = 'sent', status_reason = NULL, sent_at = $2::timestamptz, "
+void mark_delivery_sent(pqxx::transaction_base& tx, std::int64_t id, core::TimePoint now, std::optional<std::string> reason) {
+    tx.exec("UPDATE notification_deliveries SET status = 'sent', status_reason = $3, sent_at = $2::timestamptz, "
             "updated_at = $2::timestamptz WHERE id = $1 AND status = 'pending'",
-            pqxx::params{id, to_timestamptz(now)})
+            pqxx::params{id, to_timestamptz(now), reason})
         .no_rows();
 }
 
@@ -189,9 +199,20 @@ std::optional<model::NotificationRule> get_rule(pqxx::transaction_base& tx, std:
     return db::row_as<model::NotificationRule>(tx, rule_select() + " WHERE n.id = $1", pqxx::params{id});
 }
 
-Result<model::NotificationRule> create_rule(pqxx::transaction_base& tx, audit::Writer& audit, const NewRule& rule) {
+Result<model::NotificationRule> create_rule(pqxx::transaction_base& tx, audit::Writer& audit, const NewRule& rule, bool push_configured) {
     if (!std::ranges::contains(kEventTypes, std::string_view(rule.event_type)) || rule.event_type == kEventTest) {
         return invalid("\"event_type\" must be escalation, approval_needed, system_problem or client_report.");
+    }
+    const std::string channel = rule.channel.value_or(std::string(kEmailChannel));
+    if (channel != kEmailChannel && channel != kPushChannel) return invalid("\"channel\" must be email or push.");
+    if (channel == kPushChannel) {
+        // Drafts waiting and client reports stay email (D-097).
+        if (rule.event_type != kEventEscalation && rule.event_type != kEventSystemProblem) {
+            return invalid("A push rule is for escalation or system_problem only.");
+        }
+        if (!push_configured) {
+            return conflict("push_not_configured", "This engine has no APNs settings, so it can't push; ask whoever runs it.");
+        }
     }
     const auto& client_id = rule.client_id.value();
     if (rule.event_type == kEventClientReport && !client_id) {
@@ -207,11 +228,11 @@ Result<model::NotificationRule> create_rule(pqxx::transaction_base& tx, audit::W
     const auto now = to_timestamptz(audit.now());
     const auto rows = tx.exec(
         "INSERT INTO notification_rules (event_type, client_id, channel, recipients, enabled, created_at, updated_at) "
-        "VALUES ($1, $2, 'email', $3::jsonb, $4, $5::timestamptz, $5::timestamptz) "
+        "VALUES ($1, $2, $6, $3::jsonb, $4, $5::timestamptz, $5::timestamptz) "
         "ON CONFLICT (event_type, channel, coalesce(client_id, 0)) DO NOTHING RETURNING id",
-        pqxx::params{rule.event_type, client_id, db::json_list(*recipients), rule.enabled.value_or(true), now});
+        pqxx::params{rule.event_type, client_id, db::json_list(*recipients), rule.enabled.value_or(true), now, channel});
     if (rows.empty()) {
-        return conflict("rule_exists", "A rule for this event type and client already exists; change that one.");
+        return conflict("rule_exists", "A rule for this event type, channel and client already exists; change that one.");
     }
     auto created = *get_rule(tx, rows[0][0].as<std::int64_t>());
     audit.record("notification_rule.create", "notification_rule", created.id, {.after = rule_json(created)});

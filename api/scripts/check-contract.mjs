@@ -508,6 +508,14 @@ try {
       check(`DELETE ${path} (again)`, "/api/notification-rules/{id}", "DELETE", await call("DELETE", path));
     }
   }
+  // A push rule (D-097): made where the engine has the APNs settings, refused where it has none.
+  const pushRule = await call("POST", "/api/notification-rules", { body: { event_type: "system_problem", channel: "push", recipients: ["contract-check@example.com"] } });
+  check("POST /api/notification-rules (push)", "/api/notification-rules", "POST", pushRule);
+  if (pushRule.status === 201) {
+    check("DELETE the push rule", "/api/notification-rules/{id}", "DELETE", await call("DELETE", `/api/notification-rules/${pushRule.json.id}`));
+  } else {
+    expectStatus("POST /api/notification-rules (push, no APNs settings)", pushRule, 409, "push_not_configured");
+  }
   check("POST /api/notifications/test (bad address)", "/api/notifications/test", "POST", await call("POST", "/api/notifications/test", { body: { recipient: "nobody" } }));
   if (switches.json?.email_sending_enabled === false) {
     // Logged as not sent: no email leaves while sending is off.
@@ -622,6 +630,15 @@ try {
       fail("GET /api/session (bearer)", `expected a signed-in session without a CSRF token: ${appSession.text.slice(0, 200)}`);
     }
     check("GET /api/clients (bearer)", "/api/clients", "GET", await call("GET", "/api/clients", asApp));
+    // The app's device (D-097): registered where the engine pushes to sandbox, refused where it can't push.
+    const registration = { apns_token: "ab".repeat(32), environment: "sandbox", app_version: "contract-check" };
+    const device = await call("POST", "/api/devices", { ...asApp, body: registration });
+    check("POST /api/devices (bearer)", "/api/devices", "POST", device);
+    if (device.status === 201) {
+      check("DELETE /api/devices/{id}", "/api/devices/{id}", "DELETE", await call("DELETE", `/api/devices/${device.json.id}`, asApp));
+    }
+    expectStatus("DELETE /api/devices/{id} (none)", await call("DELETE", "/api/devices/999999999", asApp), 404, "not_found");
+    expectStatus("POST /api/devices (the dashboard)", await call("POST", "/api/devices", { body: registration }), 400, "invalid_request");
     // A changing request without a CSRF token reaches the handler, which refuses the body: nothing is written.
     expectStatus("POST /api/clients (bearer, no CSRF token, bad body)", await call("POST", "/api/clients", { ...asApp, body: { name: 5 } }), 400, "invalid_request");
     // A request with a bearer token stands on the token alone: the dashboard's good cookie beside it does not help.
