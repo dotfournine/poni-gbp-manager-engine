@@ -6,7 +6,7 @@ An item is removed when it ships. A change of direction is proposed to the owner
 
 ## Next: the phone app
 
-The app's requests are in the app repository (`poni-gbp-manager-ios/docs/design/engine-requests-app-v1.md`). Sign-in with a one-time code and PKCE, the bearer token, the developer sign-in that returns a token, and sign-out of a token are built (D-095, migration `0002_app_sign_in.sql`). Copying a post, deleting a draft and the list filters are built in the form D-094 settled; replacing a post in one step was declined there. Push is the one request left, settled by D-097.
+The app's requests are in the app repository (`poni-gbp-manager-ios/docs/design/engine-requests-app-v1.md`). Sign-in with a one-time code and PKCE, the bearer token, the developer sign-in that returns a token, and sign-out of a token are built (D-095, migration `0002_app_sign_in.sql`). Copying a post, deleting a draft and the list filters are built in the form D-094 settled; replacing a post in one step was declined there. The second round's list order, `google_state=none` and the link from a copy to its source are built (D-098). Push is settled by D-097; editing a post at Google in place is decided and waits for a trial.
 
 ### Push notifications to the phone app (APNs)
 
@@ -36,6 +36,16 @@ The app's requests are in the app repository (`poni-gbp-manager-ios/docs/design/
 **Done when:** the app's spec is rebuilt from this repository's `api/openapi.yaml`, with only push still merged in. The work is the app repository's; the engine's part is to tell it.
 
 **Touches:** D-092, D-094, D-095.
+
+### Editing a post at Google in place
+
+**What and why.** The app's request 1: a correction to a post keeps the post's id, its `google_name` and its history, needs a person's approval of the exact new content, and leaves the post at Google untouched until then. Today a person copies the post, which the copy remembers (D-098 point 3), removes the old one and approves the new one. The owner decided on 2026-11-21 to build it after a trial against Google, which runs on X Vision Media's own profile. The trial comes first and its results decide the design; the build is withdrawn only if the trial fails after its failures were reviewed and retried.
+
+**What it takes.** A PATCH in the outbound client and a fourth way of changing a profile (`http::why_refused` and the rule in `CLAUDE.md`), with D-088 point 3 and D-094 point 4 reversed in a decision entry of its own. The trial answers three things that can't be read from the documentation: which fields `updateMask` accepts, whether an edit sends a live post back to `PROCESSING` or can get it `REJECTED`, and whether a scheduled post that is not published yet can be edited and its time moved.
+
+**Done when:** the trial's results are written down; a person's approval of the exact new content of a post Google has sends one edit to that post, and nothing reaches Google before it; the post keeps its id, `google_name` and history; the write path's tests cover the new address, and the cases the trial found get tests of their own.
+
+**Touches:** D-061, D-088 points 3 and 6, D-094 point 4, D-098; the write-path rule and the local-post rules in `CLAUDE.md`; `tests/unit/write_path_test.cpp`.
 
 ## First deployment
 
@@ -126,8 +136,6 @@ The owner's steps, in this order, once the system is deployed. The engine switch
 - **A US-region DashScope key.** The local key is a cn-beijing workspace; D-010 makes the US region the primary.
 - **The 5-minute target for new reviews.** Google's API returns a new review about 5 minutes after it is written (once after 95 minutes) and notifies after 10 to 16 minutes. Suggested: count the target from the moment Google's API returns the review, which the 2-minute poll meets.
 - **Outbound POSTs to Google's other hosts.** Raised by the reviews of local posts: whether the outbound client should limit POSTs to the engine's known addresses on every Google host (OAuth token, Pub/Sub, Gmail, Cloud Storage), not only on `mybusiness.googleapis.com`. Today that is a rule for the calling code (`CLAUDE.md`, the three changes to a profile).
-- **Editing a post at Google in place** (the phone app's request 1, D-098 point 4). The app wants a correction to keep the post's id, its `google_name` and its history, to need a person's approval of the exact new content, and to leave the post at Google untouched until then. Today a person copies the post, which the copy now remembers (D-098 point 3), removes the old one and approves the new one. An edit would need a PATCH in the outbound client and a fourth way of changing a profile (`http::why_refused` and the rule in `CLAUDE.md`), D-088 point 3 and D-094 point 4 reversed, and a trial against Google, because three things can't be read from the documentation: which fields `updateMask` accepts, whether an edit sends a live post back to `PROCESSING` or can get it `REJECTED`, and whether a scheduled post that is not published yet can be edited and its time moved.
-- **Letting a `failed` post leave the list** (the phone app's request 6, D-098 point 4). What the code makes true (`repo::store_local_posts`): a `failed` send is adopted only by a listed post that no row has yet, created by Google's clock from `kLocalPostAdoptTolerance` (2 minutes) before the send started to `kLocalPostFailAfter` plus the tolerance (17 minutes) after, with the kind, text, event title and time to publish at that were sent. So once a complete read of the location's list, made after that window closed, held no such post, no later read adopts the send, provided Google lists a post by then; the code itself has no such moment and looks on every read. A post that turned up after its row was deleted would be stored as one made at Google, not lost. The question: allow `DELETE` for a `failed` post from that moment on (D-094 point 2 and the rule in `CLAUDE.md` would change), or leave it.
 
 ## After the MVP
 
