@@ -17,6 +17,7 @@
 #include <expected>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace poni::domain {
@@ -144,6 +145,12 @@ struct LocalPostCheckContext {
     // Why the post's uploaded photo can't be used, if it can't: decided by
     // the caller, which knows the upload and the bucket.
     std::optional<std::string> media_problem;
+    // The content is an edit of a post that is at Google (D-099). Its time to
+    // publish at and its repeat are the post's own, which an edit does not
+    // send and cannot change, so scheduled_in_future and recurrence_end pass:
+    // a post that was scheduled and is live has a time in the past. (The
+    // caller gives a media_problem only for an upload that is not the post's.)
+    bool edit_at_google = false;
 };
 
 // The checks an approval needs (D-088 point 10), on normalized content.
@@ -160,5 +167,53 @@ std::optional<std::string> contact_detail_in(std::string_view text);
 
 // A language tag such as "en", "es-419" or "zh-Hant", as the check "language" reads it.
 bool is_post_language_tag(std::string_view tag);
+
+// ---- an edit of a post that is at Google (D-099) ------------------------------------------
+
+// The fields of Google's LocalPost that an edit may change, by Google's
+// names, in the order a mask lists them. Nothing else is ever named in the
+// updateMask of the one PATCH the engine sends; the outbound client holds
+// the same six (http::is_local_post_update_url).
+inline constexpr std::array<std::string_view, 6> kLocalPostEditFields{"summary", "callToAction", "event",
+                                                                      "offer",   "media",        "languageCode"};
+
+// Why there is no mask for an edit.
+struct EditObstacle {
+    enum class Kind {
+        // The post, as the engine holds it, is not content a draft can hold
+        // (an alert, a button outside the six, an event without its dates):
+        // an edit, which is such content, could not say how to keep that
+        // part, so the post is not edited here at all.
+        not_editable,
+        // The edit differs from the post in a part an edit does not change.
+        // `member` names it: "topic_type", "scheduled_time" or "event.recurrence".
+        fixed_part,
+    };
+    Kind kind = Kind::not_editable;
+    std::string member;
+    // A sentence for the person who asked.
+    std::string message;
+};
+
+// What an edit changes at Google: the fields, out of kLocalPostEditFields
+// and in that order, in which `edit` differs from the post as Google has it
+// now. `at_google` is the post's content as the engine holds it (what
+// Google returned, and in `media_id` the upload the engine knows the post
+// carries); `edit` has been through normalize_local_post. The two are
+// compared as a draft would hold them, so space around a text is no
+// difference. An empty mask: the edit says what the post already says.
+//
+// "media" is named only when the two name different uploads: an edit with
+// an upload other than the post's, or with none where the post has one. A
+// post whose photo is Google's own copy has no upload, and an edit without
+// one leaves it alone.
+//
+// The kind of post, the time Google publishes it at and its repeat are not
+// among the six: an edit that differs there has no mask (fixed_part), and
+// neither has an edit of a post the engine cannot hold as a draft
+// (not_editable), so that no mask ever names a field whose content at
+// Google the engine could not write back.
+std::expected<std::vector<std::string_view>, EditObstacle> local_post_edit_mask(const LocalPostContent& at_google,
+                                                                              const LocalPostContent& edit);
 
 }  // namespace poni::domain

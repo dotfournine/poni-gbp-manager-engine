@@ -20,6 +20,7 @@ add_executable(poni_unit_tests
   unit/router_test.cpp
   unit/scheduler_test.cpp
   unit/local_post_copy_test.cpp
+  unit/local_post_edit_test.cpp
   unit/local_posts_connector_test.cpp
   unit/signin_test.cpp
   unit/tls_test.cpp

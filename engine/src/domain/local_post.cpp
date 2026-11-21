@@ -248,7 +248,8 @@ CheckReport run_local_post_checks(const LocalPostContent& content, const LocalPo
     }
     {
         const auto* recurrence = event && event->recurrence ? &*event->recurrence : nullptr;
-        if (!recurrence) {
+        if (!recurrence || context.edit_at_google) {
+            // An edit of a post at Google leaves its repeat as Google has it.
             add("recurrence_end", true);
         } else if (!recurrence->until) {
             add("recurrence_end", false, "a repeating post needs a day on which it ends");
@@ -258,7 +259,8 @@ CheckReport run_local_post_checks(const LocalPostContent& content, const LocalPo
                 "the repeat ends before the event starts, or has ended already");
         }
     }
-    add("scheduled_in_future", !content.scheduled_time || still_ahead(*content.scheduled_time, context.now), "the time to publish at is in the past");
+    add("scheduled_in_future", context.edit_at_google || !content.scheduled_time || still_ahead(*content.scheduled_time, context.now),
+        "the time to publish at is in the past");
     add("language", is_post_language_tag(content.language_code), "the language must be a tag such as en or zh-Hant");
     add("media_usable", !content.media_id || !context.media_problem, context.media_problem.value_or(""));
     return report;
@@ -270,6 +272,38 @@ std::optional<std::string> contact_detail_in(std::string_view text) {
     if (scan_for_email(folded)) return "an email address";
     if (scan_for_handle(folded)) return "a social handle";
     return std::nullopt;
+}
+
+std::expected<std::vector<std::string_view>, EditObstacle> local_post_edit_mask(const LocalPostContent& at_google,
+                                                                              const LocalPostContent& edit) {
+    using Kind = EditObstacle::Kind;
+    // The post as a draft would hold it. What a draft cannot hold has no place in an edit either.
+    const auto current = normalize_local_post(at_google);
+    if (!current) {
+        return std::unexpected(EditObstacle{
+            Kind::not_editable, {}, std::format("The post holds what a draft cannot hold, so it cannot be edited here. {}", current.error())});
+    }
+    const auto fixed = [](std::string_view member, std::string_view what) {
+        return std::unexpected(EditObstacle{
+            Kind::fixed_part, std::string(member),
+            std::format("\"{}\" is not the post's: an edit does not change {}. To change it, copy the post and remove it.", member, what)});
+    };
+    if (edit.topic_type != current->topic_type) return fixed("topic_type", "the kind of a post");
+    if (edit.scheduled_time != current->scheduled_time) return fixed("scheduled_time", "the time Google publishes a post at");
+    const auto repeat = [](const LocalPostContent& c) { return c.event ? c.event->recurrence : std::optional<LocalPostRecurrence>{}; };
+    if (repeat(edit) != repeat(*current)) return fixed("event.recurrence", "how a post repeats");
+
+    const std::array<bool, 6> differs{edit.summary != current->summary,
+                                      edit.call_to_action != current->call_to_action,
+                                      edit.event != current->event,
+                                      edit.offer != current->offer,
+                                      edit.media_id != current->media_id,
+                                      edit.language_code != current->language_code};
+    std::vector<std::string_view> mask;
+    for (std::size_t i = 0; i < differs.size(); ++i) {
+        if (differs[i]) mask.push_back(kLocalPostEditFields[i]);
+    }
+    return mask;
 }
 
 bool is_post_language_tag(std::string_view tag) {
