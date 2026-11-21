@@ -1013,6 +1013,13 @@ struct LocalPostMediaItem {
 };
 BOOST_DESCRIBE_STRUCT(LocalPostMediaItem, (), (format, url))
 
+// A post copied from another, as that post lists it (D-098).
+struct LocalPostCopy {
+    std::int64_t id = 0;
+    std::string status;
+};
+BOOST_DESCRIBE_STRUCT(LocalPostCopy, (), (id, status))
+
 // A post on a location's profile: a draft, a post the engine sent, or one
 // made in Google's own interface. The content fields are those of
 // domain::LocalPostContent, flat, as in the schema.
@@ -1044,6 +1051,10 @@ struct LocalPost {
     std::vector<LocalPostMediaItem> media;
     // The checks on the content as of its last change; empty for a post made at Google.
     std::vector<domain::CheckResult> checks;
+    // The post this post was copied from (kept whatever becomes of the copy), and the posts copied
+    // from this one, newest first. Not content: nothing approves, sends or removes by them (D-098).
+    std::optional<std::int64_t> copied_from_id;
+    std::vector<LocalPostCopy> copies;
 
     std::optional<std::string> created_by;  // emails
     std::optional<std::string> edited_by;
@@ -1074,7 +1085,7 @@ struct LocalPost {
 BOOST_DESCRIBE_STRUCT(LocalPost, (),
                       (id, location_id, location_title, client_id, client_name, origin, status, status_reason, google_state,
                        google_name, search_url, topic_type, summary, language_code, call_to_action, event, offer, media_id,
-                       scheduled_time, media, checks, created_by, edited_by, edited_at, decided_by, decided_at, sent_at,
+                       scheduled_time, media, checks, copied_from_id, copies, created_by, edited_by, edited_at, decided_by, decided_at, sent_at,
                        removal_requested_by, removal_requested_at, removed_at, google_created_at, synced_at,
                        created_at, updated_at))
 

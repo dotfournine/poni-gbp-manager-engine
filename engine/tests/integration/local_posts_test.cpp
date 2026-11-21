@@ -2,6 +2,7 @@
 // and refuses, and how the API shows a post.
 
 #include "api_fixture.hpp"
+#include "db/repo_local_posts.hpp"
 #include "domain/video_info.hpp"
 #include "video_bytes.hpp"
 
@@ -880,6 +881,7 @@ TEST_F(LocalPosts, ADraftOrARejectedPostIsDeletedAndTheAuditLogKeepsWhatItSaid) 
     EXPECT_EQ(before.at("created_by_user_id").as_int64(), user_);
     EXPECT_EQ(before.at("content").at("summary").as_string(), "Never sent.");
     EXPECT_EQ(before.at("content").at("media_id").as_int64(), media);
+    EXPECT_TRUE(before.at("copied_from_id").is_null()) << "a draft written new was copied from nothing";
     EXPECT_EQ(del(std::format("/api/local-posts/{}", a_draft)).status, 404u) << "deleting again finds nothing";
 
     const auto rejected = in_status("rejected", "Decided against.");
@@ -943,5 +945,160 @@ TEST_F(LocalPosts, TheListFiltersBySeveralStatusesAndGoogleStates) {
     EXPECT_EQ(sorted(ids("?google_state=live,")), sorted({live, removed})) << "a trailing comma adds an empty value, which is none";
     for (const auto* bad : {"?status=draft,posted", "?google_state=gone", "?status=Draft"}) {
         EXPECT_EQ(get(std::string("/api/local-posts") + bad, browser_).status, 400u) << bad;
+    }
+}
+
+// ---- the phone app's second round (D-098) ---------------------------------------------------------
+
+TEST_F(LocalPosts, TheListIsOldestFirstWithOrderAscAndPagesTheSameWayBack) {
+    const auto old_google = insert_local_post(buffet_, "origin, status, content, google_name, google_state, google_created_at",
+                                              "'google', 'sent', " + test::content_sql(test::standard("Summer night.")) +
+                                                  ", 'accounts/111/locations/9002/localPosts/1', 'live', '2026-08-28T22:40:31Z'");
+    // Two drafts written at the same moment: the id decides between them, in both directions.
+    const auto first = draft(spa_, "First.");
+    const auto same_time = draft(buffet_, "Same time.");
+    clock_.advance(1min);
+    const auto last = draft(spa_, "Last.");
+
+    const std::vector<std::int64_t> newest_first{last, same_time, first, old_google};
+    EXPECT_EQ(ids(""), newest_first) << "without `order`, as before";
+    EXPECT_EQ(ids("?order=desc"), newest_first);
+    const std::vector<std::int64_t> oldest_first(newest_first.rbegin(), newest_first.rend());
+    EXPECT_EQ(ids("?order=asc"), oldest_first);
+
+    // Page by page, each direction is the other one read backwards.
+    std::vector<std::int64_t> paged;
+    for (const auto* page : {"1", "2"}) {
+        const auto items = ids(std::format("?order=asc&per_page=2&page={}", page));
+        EXPECT_EQ(items.size(), 2u) << page;
+        paged.insert(paged.end(), items.begin(), items.end());
+    }
+    EXPECT_EQ(paged, oldest_first);
+    EXPECT_EQ(read("/api/local-posts?order=asc&per_page=2&page=2").at("total").as_int64(), 4);
+    EXPECT_EQ(ids("?order=asc&status=draft&location_id=" + std::to_string(spa_)), (std::vector<std::int64_t>{first, last}));
+
+    for (const auto* bad : {"?order=up", "?order=ASC", "?order=asc,desc"}) {
+        EXPECT_EQ(get(std::string("/api/local-posts") + bad, browser_).status, 400u) << bad;
+    }
+    EXPECT_EQ(ids("?order="), newest_first) << "an empty value is no value, as for reviews";
+}
+
+TEST_F(LocalPosts, GoogleStateNoneTakesThePostsThatHaveNoState) {
+    const auto a_draft = in_status("draft");
+    const auto rejected = in_status("rejected");
+    // Sent, and not yet read back from Google.
+    const auto not_read_back = in_status("sent");
+    exec(std::format("UPDATE local_posts SET google_state = NULL WHERE id = {}", not_read_back));
+    const auto live = in_status("sent");
+    const auto processing = in_status("sent");
+    exec(std::format("UPDATE local_posts SET google_state = 'processing' WHERE id = {}", processing));
+    const auto sorted = [](std::vector<std::int64_t> v) {
+        std::ranges::sort(v);
+        return v;
+    };
+
+    EXPECT_EQ(sorted(ids("?google_state=none")), sorted({a_draft, rejected, not_read_back}));
+    EXPECT_EQ(sorted(ids("?google_state=none,live")), sorted({a_draft, rejected, not_read_back, live})) << "both kinds";
+    EXPECT_EQ(sorted(ids("?google_state=live&google_state=none")), sorted({a_draft, rejected, not_read_back, live}));
+    EXPECT_EQ(ids("?google_state=none&status=sent"), (std::vector<std::int64_t>{not_read_back}));
+    EXPECT_EQ(sorted(ids("?google_state=none,live&status=sent")), sorted({not_read_back, live}));
+    EXPECT_EQ(sorted(ids("?google_state=none,processing&status=draft,sent")), sorted({a_draft, not_read_back, processing}));
+    EXPECT_EQ(read("/api/local-posts?google_state=none").at("total").as_int64(), 3);
+    EXPECT_EQ(sorted(ids("?google_state=live,processing")), sorted({live, processing})) << "without `none`, as before";
+
+    // `none` is a word of the filter: the posts it finds have no state.
+    for (const auto& item : read("/api/local-posts?google_state=none").at("items").as_array()) {
+        EXPECT_TRUE(item.at("google_state").is_null()) << item.at("id").as_int64();
+    }
+    for (const auto* bad : {"?google_state=None", "?google_state=null", "?status=none"}) {
+        EXPECT_EQ(get(std::string("/api/local-posts") + bad, browser_).status, 400u) << bad;
+    }
+}
+
+TEST_F(LocalPosts, ACopyNamesItsSourceAndTheSourceListsItsCopiesNewestFirst) {
+    const auto source = draft(spa_, "Fall specials start Monday.");
+    const auto copy_of = [&](std::int64_t id) {
+        const auto copied = post(std::format("/api/local-posts/{}/copy", id), "");
+        EXPECT_EQ(copied.status, 201u) << copied.body;
+        return json(copied);
+    };
+    const auto first = copy_of(source);
+    EXPECT_EQ(first.at("copied_from_id").as_int64(), source) << "the copy's answer says what it was copied from";
+    EXPECT_TRUE(first.at("copies").as_array().empty());
+    const auto first_id = first.at("id").as_int64();
+    clock_.advance(1min);
+    const auto second_id = copy_of(source).at("id").as_int64();
+
+    const auto copies = [&](std::int64_t id) {
+        std::vector<std::pair<std::int64_t, std::string>> out;
+        for (const auto& c : read(std::format("/api/local-posts/{}", id)).at("copies").as_array()) {
+            out.emplace_back(c.at("id").as_int64(), std::string(c.at("status").as_string()));
+            EXPECT_EQ(c.as_object().size(), 2u) << "an id and a status";
+        }
+        return out;
+    };
+    using Copies = std::vector<std::pair<std::int64_t, std::string>>;
+    EXPECT_EQ(copies(source), (Copies{{second_id, "draft"}, {first_id, "draft"}}));
+    EXPECT_TRUE(read(std::format("/api/local-posts/{}", source)).at("copied_from_id").is_null()) << "the source was written new";
+    EXPECT_EQ(read(std::format("/api/local-posts/{}", second_id)).at("copied_from_id").as_int64(), source);
+    // The list shows the same.
+    for (const auto& item : read("/api/local-posts").at("items").as_array()) {
+        if (item.at("id").as_int64() == source) EXPECT_EQ(item.at("copies").as_array().size(), 2u);
+    }
+
+    // The status in `copies` is the copy's as it is now; the source is untouched by what happens to a copy.
+    ASSERT_EQ(post(std::format("/api/local-posts/{}/reject", first_id), "").status, 200u);
+    EXPECT_EQ(copies(source), (Copies{{second_id, "draft"}, {first_id, "rejected"}}));
+    EXPECT_EQ(status_of(source), "draft");
+    EXPECT_EQ(read(std::format("/api/local-posts/{}", first_id)).at("copied_from_id").as_int64(), source)
+        << "a copy keeps its link whatever becomes of it";
+
+    // A copy that is deleted leaves its source's list.
+    ASSERT_EQ(del(std::format("/api/local-posts/{}", second_id)).status, 204u);
+    EXPECT_EQ(copies(source), (Copies{{first_id, "rejected"}}));
+    const auto deleted = read(std::format("/api/audit-log?object_type=local_post&object_id={}", second_id)).at("items").as_array();
+    ASSERT_FALSE(deleted.empty());
+    EXPECT_EQ(deleted[0].at("action").as_string(), "local_post.delete");
+    EXPECT_EQ(deleted[0].at("before").at("copied_from_id").as_int64(), source) << "the log keeps what a deleted copy corrected";
+    ASSERT_EQ(del(std::format("/api/local-posts/{}", first_id)).status, 204u);
+    EXPECT_TRUE(copies(source).empty());
+
+    // A post that was copied may be deleted while it is a draft; its copy keeps its content and loses the link.
+    const auto copy = copy_of(source).at("id").as_int64();
+    ASSERT_EQ(del(std::format("/api/local-posts/{}", source)).status, 204u);
+    const auto orphan = read(std::format("/api/local-posts/{}", copy));
+    EXPECT_TRUE(orphan.at("copied_from_id").is_null());
+    EXPECT_EQ(orphan.at("summary").as_string(), "Fall specials start Monday.");
+    EXPECT_EQ(orphan.at("status").as_string(), "draft");
+    EXPECT_EQ(count("jobs"), 0) << "nothing about the link goes to Google";
+}
+
+TEST_F(LocalPosts, ACopyOfACopyNamesTheCopyAndAPostAtGoogleListsItsCopies) {
+    const auto at_google = insert_local_post(buffet_, "origin, status, content, google_name, google_state",
+                                             "'google', 'sent', " + test::content_sql(test::standard("Made at Google.")) +
+                                                 ", 'accounts/111/locations/9002/localPosts/71', 'live'");
+    const auto copy = json(post(std::format("/api/local-posts/{}/copy", at_google), "")).at("id").as_int64();
+    const auto copy_of_copy = json(post(std::format("/api/local-posts/{}/copy", copy), ""));
+    EXPECT_EQ(copy_of_copy.at("copied_from_id").as_int64(), copy) << "the post copied, not the first of the line";
+    const auto source = read(std::format("/api/local-posts/{}", at_google));
+    ASSERT_EQ(source.at("copies").as_array().size(), 1u);
+    EXPECT_EQ(source.at("copies").as_array()[0].at("id").as_int64(), copy);
+    EXPECT_EQ(source.at("status").as_string(), "sent");
+    EXPECT_EQ(source.at("google_state").as_string(), "live") << "copying changes nothing about the post at Google";
+}
+
+TEST_F(LocalPosts, APostTheSyncFoundAndADraftWrittenNewHaveNoLinks) {
+    const auto made = test::make_local_post("111", "9002", "777", "Now open late on Fridays.");
+    await(db().tx([&](pqxx::work& tx) { repo::store_local_posts(tx, buffet_, {made}, clock_.now()); }));
+    const auto found = value<std::int64_t>("SELECT id FROM local_posts WHERE google_name = 'accounts/111/locations/9002/localPosts/777'");
+    const auto written = post(std::format("/api/locations/{}/local-posts", spa_), kStandard);
+    ASSERT_EQ(written.status, 201u) << written.body;
+    EXPECT_TRUE(json(written).at("copied_from_id").is_null());
+    EXPECT_TRUE(json(written).at("copies").as_array().empty());
+    for (const auto id : {found, json(written).at("id").as_int64()}) {
+        const auto shown = read(std::format("/api/local-posts/{}", id));
+        EXPECT_TRUE(shown.at("copied_from_id").is_null()) << id;
+        EXPECT_TRUE(shown.at("copies").is_array()) << id;
+        EXPECT_TRUE(shown.at("copies").as_array().empty()) << id;
     }
 }

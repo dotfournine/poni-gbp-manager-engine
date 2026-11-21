@@ -241,9 +241,13 @@ try {
     "?google_state=live,recurring",
     "?status=sent&google_state=scheduled",
     "?google_state=gone",
+    "?google_state=none",
+    "?google_state=none,live&status=draft,sent",
+    "?order=asc&per_page=2",
   ]) {
     check(`GET /api/local-posts${filter}`, "/api/local-posts", "GET", await call("GET", `/api/local-posts${filter}`));
   }
+  expectStatus("GET /api/local-posts?order=sideways", await call("GET", "/api/local-posts?order=sideways"), 400, "invalid_request");
   const localPosts = await call("GET", "/api/local-posts?per_page=100");
   for (const post of localPosts.json?.items ?? []) {
     check(`GET /api/local-posts/${post.id} (${post.origin})`, "/api/local-posts/{id}", "GET", await call("GET", `/api/local-posts/${post.id}`));
@@ -275,6 +279,8 @@ try {
       const copy = await call("POST", `${path}/copy`);
       check(`POST ${path}/copy`, "/api/local-posts/{id}/copy", "POST", copy);
       if (copy.status === 201) {
+        // The source now lists its copy (D-098).
+        check(`GET ${path} (copied)`, "/api/local-posts/{id}", "GET", await call("GET", path));
         check(`DELETE /api/local-posts/${copy.json.id} (the copy)`, "/api/local-posts/{id}", "DELETE", await call("DELETE", `/api/local-posts/${copy.json.id}`));
       }
       check(`DELETE ${path} (rejected)`, "/api/local-posts/{id}", "DELETE", await call("DELETE", path));
