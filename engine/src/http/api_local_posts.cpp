@@ -58,6 +58,13 @@ struct DraftRequestBody {
 };
 BOOST_DESCRIBE_STRUCT(DraftRequestBody, (), (topic_type, language_code, brief, summary, title))
 
+// LocalPostEditRequest: what the post should say, and the post's content as the person saw it.
+struct EditRequestBody {
+    domain::LocalPostContent content;
+    domain::LocalPostContent based_on;
+};
+BOOST_DESCRIBE_STRUCT(EditRequestBody, (), (content, based_on))
+
 // The limits of LocalPostDraftRequest, in code points.
 constexpr std::size_t kBriefMax = 2000;
 constexpr std::size_t kCurrentTextMax = 6000;
@@ -139,10 +146,10 @@ void add_local_post_routes(Router& router, const Api& api, storage::ObjectStore*
                    const auto id = path_id(request);
                    if (!id) co_return not_found("local post");
                    if (api.options.google_mock) co_return unavailable();
-                   const auto body = body_as<domain::LocalPostContent>(request);
+                   const auto body = body_as<EditRequestBody>(request);
                    if (!body) co_return body.error();
-                   co_return respond(co_await api.change(request, [id = *id, content = *body, media_base](pqxx::work& tx, audit::Writer& audit) {
-                       return repo::write_local_post_edit(tx, audit, id, content, media_base);
+                   co_return respond(co_await api.change(request, [id = *id, edit = *body, media_base](pqxx::work& tx, audit::Writer& audit) {
+                       return repo::write_local_post_edit(tx, audit, id, edit.content, edit.based_on, media_base);
                    }));
                });
 

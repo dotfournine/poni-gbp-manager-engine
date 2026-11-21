@@ -264,7 +264,7 @@ asio::awaitable<void> LocalPosts::edit(std::int64_t local_post_id, bool last_att
             unread = from_error(read.error());
         } else {
             request = co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) {
-                return repo::prepare_local_post_edit(tx, local_post_id, *read, now, options_.media_base);
+                return repo::prepare_local_post_edit(tx, local_post_id, claim.claimed_at, *read, now, options_.media_base);
             });
             if (request.outcome != repo::LocalPostEditRequest::Outcome::send) {
                 settled = true;
@@ -311,7 +311,7 @@ asio::awaitable<void> LocalPosts::edit(std::int64_t local_post_id, bool last_att
     try {
         if (updated) {
             co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) {
-                repo::local_post_edit_accepted(tx, local_post_id, request.content, request.mask, *updated, now);
+                repo::local_post_edit_accepted(tx, local_post_id, claim.claimed_at, request.content, request.mask, *updated, now);
             });
             // No text in the log: ids and field names only.
             log::info("local post edited", {{"local_post_id", local_post_id}, {"fields", static_cast<std::int64_t>(request.mask.size())}});
@@ -320,7 +320,7 @@ asio::awaitable<void> LocalPosts::edit(std::int64_t local_post_id, bool last_att
             const bool retry = unread->kind == Step::Kind::again && !last_attempt;
             const auto failure = unread->kind == Step::Kind::gone ? repo::LocalPostEditFailure::gone : repo::LocalPostEditFailure::unreadable;
             co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) {
-                repo::local_post_edit_not_made(tx, local_post_id, failure, unread->detail, retry, now);
+                repo::local_post_edit_not_made(tx, local_post_id, claim.claimed_at, failure, unread->detail, retry, now);
             });
             log::warn("local post edit not sent: the post could not be read", {{"local_post_id", local_post_id}, {"error", unread->detail}, {"will_retry", retry}});
             if (retry) retry_error = std::format("local post {}: the post could not be read before its edit: {}", local_post_id, unread->detail);
@@ -328,20 +328,20 @@ asio::awaitable<void> LocalPosts::edit(std::int64_t local_post_id, bool last_att
             // Nothing was sent either, and trying again is as safe.
             const bool retry = !last_attempt;
             co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) {
-                repo::local_post_edit_not_made(tx, local_post_id, repo::LocalPostEditFailure::internal, failed_here, retry, now);
+                repo::local_post_edit_not_made(tx, local_post_id, claim.claimed_at, repo::LocalPostEditFailure::internal, failed_here, retry, now);
             });
             if (retry) retry_error = std::format("local post {}: its edit could not be prepared", local_post_id);
         } else if (refused) {
             const bool retry = google::worth_retrying(refused->kind) && !last_attempt;
             co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) {
-                repo::local_post_edit_not_made(tx, local_post_id, repo::LocalPostEditFailure::refused, refused->message, retry, now);
+                repo::local_post_edit_not_made(tx, local_post_id, claim.claimed_at, repo::LocalPostEditFailure::refused, refused->message, retry, now);
             });
             log::warn("local post edit refused by Google", {{"local_post_id", local_post_id}, {"error", refused->message}, {"will_retry", retry}});
             // Nothing was changed, so another attempt is safe.
             if (retry) retry_error = std::format("local post {}: Google refused the edit: {}", local_post_id, refused->message);
         } else {
             co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) {
-                repo::local_post_edit_unknown(tx, local_post_id, unknown, now);
+                repo::local_post_edit_unknown(tx, local_post_id, claim.claimed_at, unknown, now);
             });
             log::warn("local post edit sent, outcome unknown; it is not sent again", {{"local_post_id", local_post_id}, {"error", unknown}});
         }
