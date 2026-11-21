@@ -296,36 +296,61 @@ try {
     check(`DELETE /api/local-posts/${atGoogle.id} (at Google)`, "/api/local-posts/{id}", "DELETE", refused);
     if (refused.status !== 409) fail(`DELETE /api/local-posts/${atGoogle.id}`, `expected a refusal for a post at Google, got ${refused.status}`);
   }
-  // An edit of that post (D-099): written, replaced and discarded, which touches nothing at Google. The check
-  // never changes a post there: it approves only to see the refusal, and only while the posting switch is off.
-  if (atGoogle) {
-    const path = `/api/local-posts/${atGoogle.id}/edit`;
-    const content = Object.fromEntries(["topic_type", "summary", "language_code", "call_to_action", "event", "offer", "media_id", "scheduled_time"].map((name) => [name, atGoogle[name]]));
+  // An edit of a post "at Google" (D-099): written, replaced and discarded, which touches nothing at Google.
+  // Only ever of the post contract-seed.sql adds, which belongs to the seed's own client under an account
+  // that does not exist: never of a real post, whatever database this runs against. The check never
+  // changes a post at Google: each approval is tried only right after reading that posting is off, and
+  // anything but the expected refusal is a failure. The edit is discarded on every way out.
+  const seededPost = (localPosts.json?.items ?? []).find(
+    (post) => post.status === "sent" && post.client_name === "Contract Check Spa" && post.google_name === "accounts/contract-account-1/locations/contract-location-1/localPosts/contract-post-1",
+  );
+  if (!seededPost) {
+    if (requireData) fail("PUT /api/local-posts/{id}/edit", "the seeded post at Google is missing; was the seed applied?");
+    else console.log("skip  the edit of a post at Google: this database has no seeded post, and the check edits no other");
+  } else {
+    const path = `/api/local-posts/${seededPost.id}/edit`;
+    const content = Object.fromEntries(["topic_type", "summary", "language_code", "call_to_action", "event", "offer", "media_id", "scheduled_time"].map((name) => [name, seededPost[name]]));
+    // An approval that is to be refused, and only while posting is off: read a moment before, every time.
+    const refusedApproval = async (name, body, code) => {
+      const switches = await call("GET", "/api/system/settings");
+      if (switches.json?.posting_enabled !== false) return console.log(`skip  ${name}: the posting switch is on in this database, and the check never changes a post at Google`);
+      const approval = await call("POST", `${path}/approve`, { body });
+      check(name, "/api/local-posts/{id}/edit/approve", "POST", approval);
+      if (approval.status !== 409 || approval.json?.error?.code !== code) fail(name, `expected the refusal ${code}, got ${approval.status} ${approval.json?.error?.code ?? ""}: the check must never change a post at Google`);
+    };
     const written = await call("PUT", path, { body: { ...content, summary: "Edited by check-contract.mjs." } });
-    check(`PUT ${path}`, "/api/local-posts/{id}/edit", "PUT", written);
-    // Against the Google mock the answer is the 409 `local_posts_unavailable`, and there is no edit to go on with.
-    if (written.status === 200) {
-      if (written.json.edit?.status !== "draft") fail(`PUT ${path}`, `the post does not show its edit as a draft: ${JSON.stringify(written.json.edit)}`);
-      check(`GET /api/local-posts/${atGoogle.id} (with an edit)`, "/api/local-posts/{id}", "GET", await call("GET", `/api/local-posts/${atGoogle.id}`));
-      check("GET /api/local-posts (one with an edit)", "/api/local-posts", "GET", await call("GET", "/api/local-posts?per_page=100"));
-      const replaced = await call("PUT", path, { body: { ...content, summary: "Edited by check-contract.mjs, then replaced." } });
-      check(`PUT ${path} (replaced)`, "/api/local-posts/{id}/edit", "PUT", replaced);
-      // An edit does not change when Google publishes a post: a 400 that names the member.
-      const moved = await call("PUT", path, { body: { ...content, scheduled_time: content.scheduled_time === null ? "2031-01-01T00:00:00Z" : null } });
-      check(`PUT ${path} (another time)`, "/api/local-posts/{id}/edit", "PUT", moved);
-      if (moved.status !== 400 || !moved.json?.error?.message?.includes("scheduled_time")) fail(`PUT ${path} (another time)`, `expected a 400 that names scheduled_time, got ${moved.status}: ${moved.text.slice(0, 200)}`);
-      check(`POST ${path}/approve (content changed)`, "/api/local-posts/{id}/edit/approve", "POST", await call("POST", `${path}/approve`, { body: written.json.edit.content }));
-      const postingSwitch = await call("GET", "/api/system/settings");
-      if (replaced.status === 200 && postingSwitch.json?.posting_enabled === false) {
-        const approval = await call("POST", `${path}/approve`, { body: replaced.json.edit.content });
-        check(`POST ${path}/approve (posting is off)`, "/api/local-posts/{id}/edit/approve", "POST", approval);
-        if (approval.status !== 409) fail(`POST ${path}/approve`, `expected a refusal while posting is off, got ${approval.status}: the check must never change a post at Google`);
-      } else {
-        console.log("skip  approve an edit: the posting switch is on in this database, and the check never changes a post at Google");
+    try {
+      check(`PUT ${path}`, "/api/local-posts/{id}/edit", "PUT", written);
+      // Against the Google mock the answer is the 409 `local_posts_unavailable`, and there is no edit to go on with.
+      if (written.status === 200) {
+        if (written.json.edit?.status !== "draft") fail(`PUT ${path}`, `the post does not show its edit as a draft: ${JSON.stringify(written.json.edit)}`);
+        if (JSON.stringify(written.json.edit?.fields) !== JSON.stringify(["summary"])) fail(`PUT ${path}`, `the edit does not say that it changes the summary alone: ${JSON.stringify(written.json.edit?.fields)}`);
+        check(`GET /api/local-posts/${seededPost.id} (with an edit)`, "/api/local-posts/{id}", "GET", await call("GET", `/api/local-posts/${seededPost.id}`));
+        check("GET /api/local-posts (one with an edit)", "/api/local-posts", "GET", await call("GET", "/api/local-posts?per_page=100"));
+        // An edit does not change when Google publishes a post: a 400 that names the member.
+        const moved = await call("PUT", path, { body: { ...content, scheduled_time: content.scheduled_time === null ? "2031-01-01T00:00:00Z" : null } });
+        check(`PUT ${path} (another time)`, "/api/local-posts/{id}/edit", "PUT", moved);
+        if (moved.status !== 400 || !moved.json?.error?.message?.includes("scheduled_time")) fail(`PUT ${path} (another time)`, `expected a 400 that names scheduled_time, got ${moved.status}: ${moved.text.slice(0, 200)}`);
+        const replaced = await call("PUT", path, { body: { ...content, summary: "Edited by check-contract.mjs, then replaced." } });
+        check(`PUT ${path} (replaced)`, "/api/local-posts/{id}/edit", "PUT", replaced);
+        if (replaced.status === 200) {
+          // The content of the edit that was replaced is not the stored edit any more; the stored one meets the switch.
+          await refusedApproval(`POST ${path}/approve (content changed)`, written.json.edit.content, "local_post_changed");
+          await refusedApproval(`POST ${path}/approve (posting is off)`, replaced.json.edit.content, "posting_disabled");
+        } else {
+          fail(`PUT ${path} (replaced)`, `expected 200, got ${replaced.status}: no approval is tried`);
+        }
       }
-      check(`DELETE ${path}`, "/api/local-posts/{id}/edit", "DELETE", await call("DELETE", path));
+    } finally {
+      // Whatever happened above, no edit stays behind. An edit the check wrote is a draft, which a discard takes.
+      const discarded = await call("DELETE", path);
+      if (written.status === 200) check(`DELETE ${path}`, "/api/local-posts/{id}/edit", "DELETE", discarded);
+      const after = await call("GET", `/api/local-posts/${seededPost.id}`);
+      if (after.status === 200 && after.json?.edit !== null) fail(`DELETE ${path}`, `the check left an edit behind: ${JSON.stringify(after.json.edit).slice(0, 200)}`);
+    }
+    if (written.status === 200) {
       check(`DELETE ${path} (again)`, "/api/local-posts/{id}/edit", "DELETE", await call("DELETE", path));
-      check(`GET /api/local-posts/${atGoogle.id} (the edit discarded)`, "/api/local-posts/{id}", "GET", await call("GET", `/api/local-posts/${atGoogle.id}`));
+      check(`GET /api/local-posts/${seededPost.id} (the edit discarded)`, "/api/local-posts/{id}", "GET", await call("GET", `/api/local-posts/${seededPost.id}`));
     }
   }
   check("PUT /api/local-posts/0/edit", "/api/local-posts/{id}/edit", "PUT", await call("PUT", "/api/local-posts/0/edit", { body: { topic_type: "standard", summary: "Only a check.", language_code: "en", call_to_action: null, event: null, offer: null, media_id: null, scheduled_time: null } }));

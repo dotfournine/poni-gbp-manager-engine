@@ -2195,9 +2195,16 @@ paths:
         has accepted the edit, its content.
 
         A post has at most one open edit. Sending this again replaces the
-        edit while it is a `draft`, whoever wrote it, and the edit then
-        names the person who sent it last; an edit that is `approved` or
-        `sending` is refused with `local_post_edit_not_open`.
+        edit while it is a `draft`, whoever wrote it, also with the content
+        it already has: the edit then names the person who sent it last and
+        is written against the post as it is at that moment. An edit that is
+        `approved` or `sending` is refused with `local_post_edit_not_open`.
+
+        An edit changes the fields in which its content differs from the
+        post's at the moment it was written, and it never writes any other
+        field at Google, whatever the rest of its content says:
+        `LocalPost.edit.fields` lists them. The rest of the content is the
+        post's own, sent along because the content travels whole.
 
         A post can have an edit when it is `sent`, has a `google_name`, has
         no removal requested and belongs to a location that is linked to an
@@ -2286,16 +2293,25 @@ paths:
         (`LocalPost.edit.content`); it must equal the stored edit, so nobody
         approves a change they haven't seen. The edit becomes `approved` and
         a job sends it at once: it reads the post from Google, and sends one
-        request that names exactly the parts in which the edit differs from
-        what Google has (the text, the button, the event, the offer, the
-        photo or video, the language). Refused while a posting switch is
-        off, while a check fails, and for an edit that changes nothing
+        request that names the fields the edit changes (`edit.fields`) and
+        Google does not have yet, and no other field. Refused while a
+        posting switch is off, while a check fails, and for an edit that
+        changes nothing or nothing Google does not have already
         (`local_post_edit_unchanged`).
+
+        A field the edit changes that was also changed at Google since the
+        edit was written stops it, here with `local_post_changed` and in the
+        job by returning the edit to `draft` with a reason that names the
+        field: the edit would write over a change its author never saw.
+        Nothing is sent. Sending the edit again (`PUT`), also unchanged,
+        writes it against the post as it is now; it can then be approved.
+        A field the edit does not change stays as Google has it.
 
         When Google accepts, the post takes what Google answered,
         `edited_by` and `edited_at` name the edit's author and the moment,
         and `edit` is null again. `google_state` then says what Google does
-        with the changed post.
+        with the changed post; the engine reads the post again 1, 5 and 15
+        minutes later.
 
         When Google refuses, the post is as it was and the edit is a
         `draft` again with Google's message in its `status_reason`. When
@@ -3444,8 +3460,9 @@ components:
         `approved` or `sending`). `local_post_edit_unchanged`: the edit says
         what the post already says, so there is nothing to send.
         `local_post_changed`, for an approval of an edit: the content sent
-        is not the stored edit, or the post's kind, time or repeat at Google
-        is no longer what the edit says.
+        is not the stored edit; or the post changed at Google since the edit
+        was written, in a field the edit changes or in its kind, time or
+        repeat (the message names it).
       content:
         application/json:
           schema:
@@ -5882,6 +5899,10 @@ components:
           approved edit was sent and Google did not confirm it, or the
           engine stopped while sending it. It is not sent again; the post
           may or may not have changed. `location_id`, `local_post_id`.
+        - `Google accepted an edit, but the post does not show it`: Google
+          answered an edit with a post that does not say what was sent in a
+          field the edit wrote. The post is as Google answered.
+          `location_id`, `local_post_id`.
 
         New problems are added to this list, and a client shows a subject
         it does not know as it is.
@@ -7118,6 +7139,12 @@ components:
         `status_reason`. `approved`: a person approved the content and the
         job has not started. `sending`: the request is being sent. An edit
         Google accepted is no longer there: the post has its content.
+    LocalPostEditField:
+      type: string
+      enum: [summary, call_to_action, event, offer, media, language_code]
+      description: |
+        A part of a post that an edit can change, by the name of its member
+        in `LocalPostContent` (`media` for `media_id`).
     LocalPostEdit:
       type: object
       description: |
@@ -7126,10 +7153,29 @@ components:
         person approved it and Google accepted it. Send `content` as it is
         to approve it.
       additionalProperties: false
-      required: [content, checks, status, status_reason, written_by, written_at, decided_by, decided_at]
+      required: [content, fields, media, checks, status, status_reason, written_by, written_at, decided_by, decided_at]
       properties:
         content:
           $ref: "#/components/schemas/LocalPostContent"
+        fields:
+          type: array
+          description: |
+            What the edit changes, and all it ever writes at Google: the
+            parts in which `content` differs from the post as it was when
+            the edit was written. Empty: the edit changes nothing and can't
+            be approved.
+          items:
+            $ref: "#/components/schemas/LocalPostEditField"
+        media:
+          type: array
+          description: |
+            What the post would show with the edit applied, for the person
+            who approves it: the edit's uploaded photo or video where the
+            edit changes the media (empty where it takes the upload away),
+            and what the post shows now (`LocalPost.media`) where it does
+            not.
+          items:
+            $ref: "#/components/schemas/LocalPostMediaItem"
         checks:
           type: array
           description: The checks on the edit's content as of its last change (see `PUT /api/local-posts/{id}/edit` for the three that differ from a draft's).
@@ -7142,7 +7188,8 @@ components:
           description: |
             Why the edit is a draft again, when it came back: Google's
             message for an edit it refused, that Google did not confirm it,
-            or why the approval was not carried out.
+            that the post changed at Google in a part the edit changes, or
+            why else the approval was not carried out.
         written_by:
           type: string
           description: The email of the person who wrote the edit, or replaced it last.
@@ -7151,7 +7198,7 @@ components:
           format: date-time
         decided_by:
           type: [string, "null"]
-          description: The email of the person who approved the edit last; null until someone has, and again after the edit was replaced.
+          description: The email of the person who approved the edit last; null until someone has, and again after the edit was sent anew.
         decided_at:
           type: [string, "null"]
           format: date-time
