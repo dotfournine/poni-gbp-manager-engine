@@ -2197,9 +2197,13 @@ paths:
         keeps its id, its `google_name`, its history and, until Google has
         accepted the edit, its content.
 
-        `based_on` must be the post's content as the engine holds it now. If
-        the post has changed since the client read it (the engine reads
-        Google every hour, and people change posts in Google's own
+        `based_on` is the post's content the form was built from, not one
+        loaded at the moment of saving: the engine cannot tell the two
+        apart, and a `content` written from an older post beside a fresh
+        `based_on` would make every field that changed in between a change
+        of this edit's. It must be the post's content as the engine holds it
+        now. If the post has changed since the client read it (the engine
+        reads Google every hour, and people change posts in Google's own
         interface), the answer is 409 `local_post_changed` and nothing is
         stored: load the post again and write the edit from what it says
         now.
