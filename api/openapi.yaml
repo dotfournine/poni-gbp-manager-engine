@@ -160,11 +160,14 @@ paths:
         nobody is signed in, `sign_in` says which ways of signing in the
         engine offers. Never fails for a missing or expired session. With a
         bearer token the answer is the same, and `csrf_token` is null: a
-        token needs none. A bearer token that is unknown or has ended, a
-        malformed `Authorization` header and no header at all are each
-        answered with a 200 and `authenticated: false`, never a 401: a
-        client signed in with a token treats `authenticated: false` as
-        signed out.
+        token needs none. A bearer token that is unknown or has ended, and
+        a header that begins with `Bearer` and has no token after it, are
+        answered with a 200 and `authenticated: false`, never a 401, and so
+        is a request with no header at all and no session cookie. A header
+        with another scheme is not the app's: the request is judged by its
+        cookie, so a browser's valid cookie still gives `authenticated:
+        true`. A client signed in with a token treats `authenticated: false`
+        as signed out.
       tags: [session]
       security: []
       responses:
@@ -2404,14 +2407,20 @@ paths:
       description: |
         Queues the read that otherwise runs once an hour: the location's
         posts are listed at Google and stored, so states, posts made at
-        Google and removals show up. The answer comes before the read. A read
-        has ended when `Location.local_posts_synced_at` (it succeeded) or
-        `Location.local_posts_sync_error_at` (it failed) is newer than the
-        request: read both before asking and compare, the engine's clock
-        being the one that wrote them. Every read that fails moves
-        `local_posts_sync_error_at`, also when its message is the one
-        before. A read that fails is tried again after a delay, up to three
-        reads in all, so a failure may still be followed by a success.
+        Google and removals show up. The answer comes before the read. To
+        see that a read has ended, read `Location.local_posts_synced_at` and
+        `Location.local_posts_sync_error_at` before asking and again later:
+        a read that succeeded moved the first, one that failed moved the
+        second (the engine's clock wrote both, so compare the two values,
+        not a time of the client's). A read already under way may move
+        either too. A read that fails is tried again after a delay, up to
+        three reads in all, so a failure may still be followed by a success.
+        Neither moves when the location stopped being synced in between (it
+        was unlinked, its client archived, or access lost), so a client
+        stops waiting after a time of its own choosing. Posts that
+        Google no longer has are marked removed after
+        `local_posts_synced_at` has moved, one by one, so a removal can
+        show up a moment later.
       tags: [local-posts]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -2598,13 +2607,16 @@ paths:
           `review_id` and `severity_flags`, the ids of the flags raised.
           `escalation.assign` is done by the person who assigned it (the
           `actor`); `before.assignee_id` and `after.assignee_id` are user
-          ids (`GET /api/users`), and `after.assignee_id` is null when the
-          assignment was lifted. `escalation.close` is done by the person
+          ids, and `after.assignee_id` is null when the assignment was
+          lifted. `GET /api/users` lists active users only, so the id of a
+          person who was disabled since does not resolve there: show the
+          id, or the `actor`'s address where it is the same person. `escalation.close` is done by the person
           who closed it; its `after` holds `status`, `reason` and `note`.
         - What was sent: `GET /api/notification-deliveries?escalation_id={id}`,
-          one row per recipient and channel, the emails and the pushes.
-          Deliveries written before migration 0003, which added the id,
-          carry none.
+          one row per recipient and channel, the emails and the pushes, or
+          a single row with an empty `recipient` and the status `not_sent`
+          when no rule names a recipient. Deliveries written before push was
+          added carry no `escalation_id`.
       tags: [escalations]
       responses:
         "200":
@@ -3070,9 +3082,10 @@ components:
         header and from nowhere else. A request with this header is the
         token's alone: a cookie sent beside it is not looked at, and a token
         that is unknown or has ended is a 401 on every route that needs a
-        session. `GET /api/session` is the one route that needs none: it
-        answers such a token with a 200 and `authenticated: false`. A token
-        needs no CSRF token.
+        session. A route that needs none (`GET /api/session`, the sign-in
+        routes, `GET /api/health`) does not refuse an unknown token, and
+        `GET /api/session` among them answers it with a 200 and
+        `authenticated: false`. A token needs no CSRF token.
 
   parameters:
     Id:
@@ -3638,22 +3651,21 @@ components:
           description: |
             When the last read of the local posts failed; null after a
             success and before the first failure. A read that fails again
-            with the same message moves this time and nothing else, so a
-            client that waits for a read it asked for
-            (`POST /api/locations/{id}/local-posts/refresh`) watches this
-            field and `local_posts_synced_at`.
+            with the same message moves this time and nothing else, which is
+            why it is here: see `POST /api/locations/{id}/local-posts/refresh`
+            for how to tell that a read has ended.
         time_zone:
           type: [string, "null"]
           description: |
             The location's time zone, an IANA name such as
             `America/New_York`. It is the same value as
-            `AutoPosting.time_zone`: a location has one time zone, for the
-            posting window of its replies and for the default of a report's
-            period. Google gives none, so it is null until a person enters
-            it, and it is entered in one place only,
+            `AutoPosting.time_zone`, where the posting window uses it, and
+            the only one a location has. Google gives none, so it is null
+            until a person enters it, in one place only,
             `PATCH /api/locations/{id}/auto-posting`; `LocationUpdate` does
-            not take it. It does not change how times are written: every
-            time in the API stays UTC, `scheduled_time` and
+            not take it. A report takes the zone of the client's
+            location with the lowest id that has one (`ReportCreate.time_zone`). It does not change how
+            date-times are written: they stay UTC, `scheduled_time` and
             `recurrence.until` of a local post included.
     LocationUpdate:
       type: object
@@ -4367,10 +4379,12 @@ components:
             Why the policy did not send the draft to auto-post, written once
             when the draft is made and never changed after. Empty for a
             draft the policy routed to `auto_post`, also when it then did not
-            get posted automatically: that is in `status_reason` (prose for
-            people, beginning "Not posted automatically."; where only a
-            switch that is off stops it, nothing is written until the
-            posting job's check does), and a pause is on the location
+            get posted automatically: that is in `status_reason`, prose for
+            people with no fixed form (it often begins "Not posted
+            automatically.", but a refused or unconfirmed reply and a review
+            that could not be read say other things), and it is null when
+            only a switch or the location's auto-posting configuration kept
+            the draft from being scheduled. A pause is on the location
             (`AutoPosting.paused`, `pause_reason`), never among the reasons.
             The values, in this order when several apply, in the engine's
             wording:
@@ -5655,10 +5669,8 @@ components:
         - `Google rejected a post`: Google took a local post and now shows
           it as rejected. `location_id`, `local_post_id`.
 
-        Only `Lost access to a location` and the pause at one location
-        carry a client: a rule that names a client is told of those two
-        kinds and of no other system problem. New problems are added to
-        this list, and a client shows a subject it does not know as it is.
+        New problems are added to this list, and a client shows a subject
+        it does not know as it is.
     DeliveryStatus:
       type: string
       enum: [pending, sent, failed, not_sent]
@@ -6003,8 +6015,7 @@ components:
           type: [string, "null"]
           description: |
             IANA name, for example `America/New_York`. Needed for a posting
-            window. The same value as `Location.time_zone`: a location has
-            one time zone, set here.
+            window. The same value as `Location.time_zone`, set here.
         delay_min_minutes:
           type: integer
         delay_max_minutes:
@@ -6493,10 +6504,11 @@ components:
           format: int64
           description: |
             Reply drafts with the status `draft`, waiting for a person. It is
-            the `total` of `GET /api/reviews?draft_status=draft`: a review
-            has at most one draft in `draft`, and a review that was removed
-            or marked as needing no reply has none, so the two count the
-            same reviews.
+            the `total` of `GET /api/reviews?draft_status=draft`: that list
+            shows the reviews that are not removed by default and takes each
+            review's newest draft, a review has at most one live draft (which
+            is its newest), and the drafts of a removed review are
+            cancelled, so the two count the same drafts.
         in_flight:
           type: integer
           format: int64
@@ -6676,7 +6688,7 @@ components:
         time_zone:
           type: string
           maxLength: 64
-          description: An IANA name. Without one, the time zone of the client's first location that has one, else UTC.
+          description: An IANA name. Without one, the time zone of the client's location with the lowest id that has one, else UTC.
     ReportShareLink:
       type: object
       description: |
