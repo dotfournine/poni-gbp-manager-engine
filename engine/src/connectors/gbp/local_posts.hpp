@@ -144,15 +144,15 @@ boost::json::object create_body(const domain::LocalPostContent& content, const s
 
 // The body of an update of the post `at_google` (as Google returned it a
 // moment ago) to what `edit` says, in the fields `mask` names and in no
-// other (domain::local_post_edit_mask). Each field is written whole, as
+// other (domain::local_post_edit_request). Each field is written whole, as
 // Google replaces it whole; a field named in the mask and left out of the
 // body is cleared at Google (the button taken away, an offer without its
 // three parts). Two things are Google's own and go back as they came:
 //   - an event's repeat (`recurrenceInfo`), which an edit does not change,
 //     with its weekdays or day of the month as Google holds them;
-//   - an event's schedule where the edit's days and times are the post's:
-//     Google leaves a time out that the engine reads as 00:00, and writing
-//     00:00 back could give a time to an event that had none.
+//   - the days and times of an event's schedule that the edit does not
+//     change: Google leaves a time out that the engine reads as 00:00, and
+//     writing 00:00 back could give a time to an event that had none.
 // `media`: the edit's upload, when "media" is in the mask and the edit has
 // one; without it "media" is sent empty, which takes the post's media away.
 boost::json::object update_body(const LocalPost& at_google, const domain::LocalPostContent& edit,
@@ -218,6 +218,11 @@ public:
     virtual boost::asio::awaitable<Result<LocalPost>> update_local_post(LocalPostName name, std::vector<std::string_view> mask,
                                                                         boost::json::object body) = 0;
 };
+
+// The names an update's mask may hold are kept twice, by the rule for what
+// may go out and by the code that works a mask out, so that widening the
+// second does not widen the first. They are the same six, in the same order.
+static_assert(domain::kLocalPostEditFields == http::kLocalPostUpdateFields);
 
 // Rate limiter key for everything about local posts. Google publishes no
 // quota for v4 posts; its limit for edits of one profile is 10 a minute.

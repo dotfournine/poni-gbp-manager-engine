@@ -147,9 +147,20 @@ boost::json::object update_body(const LocalPost& at_google, const domain::LocalP
                 event = held->as_object();
             }
             event["title"] = edit.event->title;
+            // Of the schedule, only the days and times the edit changes: Google leaves a time out that
+            // the engine reads as 00:00, and writing 00:00 back would give a time to an event that had none.
             const auto current = to_content(at_google);
-            if (!current.event || current.event->schedule != edit.event->schedule || !event.contains("schedule")) {
+            auto* held_schedule = event.if_contains("schedule");
+            if (!current.event || !held_schedule || !held_schedule->is_object()) {
                 event["schedule"] = schedule_object(edit.event->schedule);
+            } else {
+                auto& schedule = held_schedule->as_object();
+                const auto& was = current.event->schedule;
+                const auto& is = edit.event->schedule;
+                if (is.start_date != was.start_date) schedule["startDate"] = date_object(is.start_date);
+                if (is.start_time != was.start_time) schedule["startTime"] = time_object(is.start_time);
+                if (is.end_date != was.end_date) schedule["endDate"] = date_object(is.end_date);
+                if (is.end_time != was.end_time) schedule["endTime"] = time_object(is.end_time);
             }
             body["event"] = std::move(event);
         } else if (field == "offer") {

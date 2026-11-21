@@ -77,7 +77,8 @@ bool is_local_post_url(const boost::urls::url& url);
 // The fields of a local post that a PATCH's mask may name (D-099), by
 // Google's names. They are domain::kLocalPostEditFields, held here a second
 // time on purpose: the rule for what may go out does not follow a list that
-// other code widens, and a test fails when the two differ.
+// other code widens. A static_assert holds the two equal
+// (connectors/gbp/local_posts.hpp).
 inline constexpr std::array<std::string_view, 6> kLocalPostUpdateFields{"summary", "callToAction", "event",
                                                                         "offer",   "media",        "languageCode"};
 

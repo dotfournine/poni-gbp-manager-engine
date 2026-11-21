@@ -520,10 +520,10 @@ TEST_F(LocalPostsConnector, AnEventGoesBackWithItsRepeatAndItsUnchangedTimesAsGo
                             .as_object())
         << "the weekdays the engine does not hold, and the times as Google wrote them, are sent back as they came";
 
-    // New days and times are the edit's; the repeat still is not.
+    // A new time is the edit's, and only that part of the schedule is written anew; the repeat still is not.
     const auto moved = body_for(repeating, edit_of(repeating, [](auto& c) { c.event->schedule.end_time = "21:30"; }));
     EXPECT_EQ(moved.at("event").at("schedule"),
-              boost::json::parse(R"({"startDate": {"year": 2026, "month": 12, "day": 19}, "startTime": {"hours": 18, "minutes": 0},
+              boost::json::parse(R"({"startDate": {"year": 2026, "month": 12, "day": 19}, "startTime": {"hours": 18},
                                      "endDate": {"year": 2026, "month": 12, "day": 19}, "endTime": {"hours": 21, "minutes": 30}})"));
     EXPECT_EQ(moved.at("event").at("recurrenceInfo"), repeating.raw.at("event").at("recurrenceInfo"));
     EXPECT_EQ(moved.at("event").at("title").as_string(), "Friday live music");
@@ -534,6 +534,16 @@ TEST_F(LocalPostsConnector, AnEventGoesBackWithItsRepeatAndItsUnchangedTimesAsGo
     EXPECT_EQ(renamed.at("event").at("schedule"), offer.raw.at("event").at("schedule"));
     EXPECT_EQ(renamed.at("event").at("schedule").at("startTime"), boost::json::object{});
     EXPECT_FALSE(renamed.at("event").as_object().contains("recurrenceInfo")) << "nor a repeat";
+    // Its end moves to another day: the start, which Google holds without a time, still gets none.
+    const auto longer = body_for(offer, edit_of(offer, [](auto& c) { c.event->schedule.end_date = "2026-09-13"; }));
+    EXPECT_EQ(longer.at("event").at("schedule"),
+              boost::json::parse(R"({"startDate": {"year": 2026, "month": 8, "day": 28}, "startTime": {},
+                                     "endDate": {"year": 2026, "month": 9, "day": 13}, "endTime": {"hours": 22}})"));
+    EXPECT_EQ(longer.at("event").at("title").as_string(), "Weekend special");
+    // A time the person sets is written, also 00:00 where Google held none: that is what they asked for.
+    const auto at_noon = body_for(offer, edit_of(offer, [](auto& c) { c.event->schedule.start_time = "12:00"; }));
+    EXPECT_EQ(at_noon.at("event").at("schedule").at("startTime"), boost::json::parse(R"({"hours": 12, "minutes": 0})"));
+    EXPECT_EQ(at_noon.at("event").at("schedule").at("endTime"), boost::json::parse(R"({"hours": 22})"));
     // An offer's three parts are written whole, and one that says nothing is left out, which clears it.
     EXPECT_EQ(body_for(offer, edit_of(offer, [](auto& c) { c.offer->coupon_code = "WEEKEND"; })),
               boost::json::parse(R"({"offer": {"couponCode": "WEEKEND"}})").as_object());
