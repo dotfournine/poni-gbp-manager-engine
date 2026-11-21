@@ -5874,10 +5874,10 @@ components:
         - `Google rejected a post`: Google took a local post and now shows
           it as rejected. `location_id`, `local_post_id`.
         - `A post could not be edited`: an approved edit of a post at Google
-          was not made, for certain: Google refused it, or the post could
-          not be read from Google first and the job is out of attempts. The
-          post is as it was and the edit is a draft again. `location_id`,
-          `local_post_id`.
+          was not made, for certain: Google refused it, Google does not find
+          the post, or the post could not be read from Google before the
+          edit. The post is as it was and the edit is a draft again.
+          `location_id`, `local_post_id`.
         - `An edit of a post may or may not have reached Google`: an
           approved edit was sent and Google did not confirm it, or the
           engine stopped while sending it. It is not sent again; the post
