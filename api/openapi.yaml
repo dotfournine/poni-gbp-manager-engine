@@ -1984,8 +1984,13 @@ paths:
       operationId: listLocalPosts
       summary: List local posts
       description: |
-        The posts of every location, newest first: drafts, posts the engine
-        sent, and posts made in Google's own interface, which the sync finds.
+        The posts of every location: drafts, posts the engine sent, and
+        posts made in Google's own interface, which the sync finds.
+
+        They are ordered by one key: the time Google created the post, or,
+        for a post Google does not have, the time the draft was written;
+        then by `id`. Newest first unless `order=asc`, which reverses both,
+        so that paging is stable either way.
       tags: [local-posts]
       parameters:
         - name: client_id
@@ -2013,13 +2018,23 @@ paths:
           in: query
           description: |
             Google's states to include, for example `google_state=live,recurring`.
-            A post Google has not read back yet has none and is left out by this filter.
+            `none` takes the posts that have no state: drafts, and posts Google
+            has not been read back for yet, as `google_state=none,processing`
+            does together with the posts Google is still taking in. `none` is a
+            word of this filter only; a post's `google_state` is then null.
           style: form
           explode: false
           schema:
             type: array
             items:
-              $ref: "#/components/schemas/LocalPostGoogleState"
+              $ref: "#/components/schemas/LocalPostGoogleStateFilter"
+        - name: order
+          in: query
+          description: "`desc`: newest first. `asc`: oldest first. The key is in the description above."
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: desc
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PerPage"
       responses:
@@ -2100,6 +2115,8 @@ paths:
         `local_post_not_open`, `failed` included: a send that was given up
         is still adopted when the post turns up at Google. A post that is at
         Google is removed there instead (`POST /api/local-posts/{id}/remove`).
+        A copy that is deleted leaves its source's `copies`; the copies of a
+        post that is deleted keep their content and get `copied_from_id: null`.
       tags: [local-posts]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -2136,6 +2153,9 @@ paths:
         and no video: the engine fetches nothing from Google, and the reason
         says to upload the file again. The checks run on the copy as on any
         draft.
+
+        The copy's `copied_from_id` names the post it was copied from, and
+        that post lists the copy in its `copies` (D-098).
       tags: [local-posts]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -6570,6 +6590,23 @@ components:
         `scheduled_time`. `live`: it is shown. `recurring`: a repeating
         post that is shown. `rejected`: Google refused it for its content;
         Google does not say why.
+    LocalPostGoogleStateFilter:
+      type: string
+      enum: [processing, scheduled, live, recurring, rejected, none]
+      description: |
+        A value of the list's `google_state` filter: one of Google's states
+        (`LocalPostGoogleState`), or `none` for a post that has no state.
+    LocalPostCopy:
+      type: object
+      description: A post copied from another post, as that post lists it.
+      additionalProperties: false
+      required: [id, status]
+      properties:
+        id:
+          type: integer
+          format: int64
+        status:
+          $ref: "#/components/schemas/LocalPostStatus"
     LocalPostOrigin:
       type: string
       enum: [system, google]
@@ -6745,6 +6782,8 @@ components:
         - scheduled_time
         - media
         - checks
+        - copied_from_id
+        - copies
         - created_by
         - edited_by
         - edited_at
@@ -6828,6 +6867,20 @@ components:
           description: The checks on the content of a post written here, as of its last change; empty for a post made at Google.
           items:
             $ref: "#/components/schemas/CheckResult"
+        copied_from_id:
+          type: [integer, "null"]
+          format: int64
+          description: |
+            The post this draft was copied from (`POST /api/local-posts/{id}/copy`, D-098).
+            Null for any other post, and null again when that post was deleted. The link
+            is not content: it is not approved and changes nothing about either post.
+        copies:
+          type: array
+          description: |
+            The posts copied from this one, newest first, each with its status as it
+            is now; empty when there are none. A copy that is deleted leaves the list.
+          items:
+            $ref: "#/components/schemas/LocalPostCopy"
         created_by:
           type: [string, "null"]
           description: The email of the person who wrote the draft; null for a post made at Google.
