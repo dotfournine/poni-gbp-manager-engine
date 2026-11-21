@@ -11,11 +11,9 @@
 --
 -- content and approved_content are domain::LocalPostContent as the engine
 -- writes it, as on local_posts; the approval and the claim compare the two.
-
--- A number for each claim of an edit by the job that sends it, never used
--- twice: the job's bookkeeping names the claim it belongs to, so that a run
--- that comes back late cannot settle an edit another run has since claimed.
-CREATE SEQUENCE local_post_edit_claims;
+-- base_content is the post's own content at the moment the edit was written:
+-- an edit changes the fields in which its content differs from its base, and
+-- no other field is ever written to Google for it.
 
 CREATE TABLE local_post_edits (
     -- Only posts that Google has get an edit, and none of those is ever
@@ -26,6 +24,11 @@ CREATE TABLE local_post_edits (
     status           text        NOT NULL CHECK (status IN ('draft', 'approved', 'sending')),
     status_reason    text,
     content          jsonb       NOT NULL,
+    base_content     jsonb       NOT NULL,
+    -- The fields the edit changes, by the API's names: where content differs
+    -- from base_content. Written with the two, for the API to show; what is
+    -- sent is worked out again from the two.
+    fields           jsonb       NOT NULL DEFAULT '[]',
     checks           jsonb       NOT NULL DEFAULT '[]',
     -- Who wrote the edit, or replaced it last.
     written_by       bigint      NOT NULL REFERENCES users (id),
@@ -34,7 +37,6 @@ CREATE TABLE local_post_edits (
     decided_at       timestamptz,
     approved_content jsonb,
     send_started_at  timestamptz,
-    claim            bigint,
     -- Which upload the edit names, held to a file that was uploaded.
     media_id         bigint      GENERATED ALWAYS AS ((content->>'media_id')::bigint) STORED
                                  REFERENCES local_post_media (id),
@@ -42,7 +44,7 @@ CREATE TABLE local_post_edits (
     CONSTRAINT local_post_edits_approval_check
         CHECK ((status IN ('approved', 'sending')) <= (decided_by IS NOT NULL AND decided_at IS NOT NULL AND approved_content IS NOT NULL)),
     CONSTRAINT local_post_edits_sending_check
-        CHECK ((status = 'sending') <= (send_started_at IS NOT NULL AND claim IS NOT NULL)),
+        CHECK ((status = 'sending') <= (send_started_at IS NOT NULL)),
     -- An edit is content a draft can hold: no alert.
     CONSTRAINT local_post_edits_content_check CHECK (
         coalesce(content->>'topic_type', '') IN ('standard', 'event', 'offer')

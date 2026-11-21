@@ -134,8 +134,8 @@ protected:
     repo::LocalPostEditClaim claim(std::int64_t id) {
         return tx([&](pqxx::work& tx) { return repo::claim_local_post_edit(tx, id, clock_.now(), test::kMediaBase); });
     }
-    repo::LocalPostEditRequest prepare(std::int64_t id, std::int64_t claim, const gbp::LocalPost& read) {
-        return tx([&](pqxx::work& tx) { return repo::prepare_local_post_edit(tx, id, claim, read, clock_.now(), test::kMediaBase); });
+    repo::LocalPostEditRequest prepare(std::int64_t id, const gbp::LocalPost& read) {
+        return tx([&](pqxx::work& tx) { return repo::prepare_local_post_edit(tx, id, read, clock_.now(), test::kMediaBase); });
     }
     gbp::LocalPost read_from_google(std::int64_t id) { return *google_.find(post(id, "google_name")); }
 
@@ -192,6 +192,8 @@ TEST_F(LocalPostsEdit, ACorrectionOfAPostThatWasScheduledAndIsLiveStaysTheSamePo
     ASSERT_TRUE(written->edit);
     EXPECT_EQ(written->edit->status, "draft");
     EXPECT_EQ(written->edit->content.summary, "Lunch special: two courses for $16.");
+    EXPECT_THAT(written->edit->fields, ElementsAre("summary")) << "what the edit changes, and all it will ever write";
+    EXPECT_TRUE(written->edit->media.empty());
     EXPECT_EQ(written->edit->written_by, "staff@xvisionmediaus.com");
     EXPECT_FALSE(written->edit->decided_by);
     EXPECT_EQ(written->edit->checks.size(), 12u);
@@ -253,7 +255,8 @@ TEST_F(LocalPostsEdit, ACorrectionOfAPostThatWasScheduledAndIsLiveStaysTheSamePo
     EXPECT_EQ(audit_entry(id, "local_post.edit_applied", "after->'approved_content'->>'summary'"), "Lunch special: two courses for $16.");
     EXPECT_EQ(audit_entry(id, "local_post.edit_applied", "after->>'approved_by_user_id'"), std::to_string(user_));
     EXPECT_EQ(audit_entry(id, "local_post.edit_applied", "after->>'written_by_user_id'"), std::to_string(user_));
-    EXPECT_EQ(audit_entry(id, "local_post.edit_applied", "after->'fields'"), R"(["summary"])");
+    EXPECT_EQ(audit_entry(id, "local_post.edit_applied", "after->'mask'"), R"(["summary"])");
+    EXPECT_EQ(audit_entry(id, "local_post.edit_applied", "after->'not_shown'"), "[]");
 
     // The next read brings nothing else, and nothing is sent again.
     clock_.advance(1h);
@@ -318,24 +321,128 @@ TEST_F(LocalPostsEdit, EachFieldAnEditMayChangeIsSentUnderItsOwnNameAndNoOther) 
     EXPECT_EQ(google_.creates.size(), cases.size()) << "one create per post, and no other";
 }
 
-TEST_F(LocalPostsEdit, TheMaskIsWorkedOutAgainstThePostAsGoogleHasItWhenTheEditIsSent) {
+TEST_F(LocalPostsEdit, AnEditNeverWritesAFieldItsAuthorDidNotChange) {
     auto content = standard("Open late on Fridays.");
     content.call_to_action = domain::LocalPostCallToAction{.action_type = "book", .url = "https://example.com/book"};
     const auto id = sent(spa_, content);
-    approved_edit(id, [](auto& c) { c.summary = "Open late on Saturdays."; });
-    EXPECT_EQ(audit_entry(id, "local_post.edit_approve", "after->'fields'"), R"(["summary"])") << "as the engine saw the post at the approval";
+    // Staff change the text. The button's link travels along, because the content is sent whole.
+    const auto written = write(id, [](auto& c) { c.summary = "Open late on Saturdays."; });
+    ASSERT_TRUE(written) << written.error().message;
+    EXPECT_THAT(written->edit->fields, ElementsAre("summary"));
 
-    // Before the job runs, someone changes the button in Google's own interface. The approval was for the
-    // whole content the person read, button included: that content is what Google is given, field for field.
+    // The client then changes the link in Google's own interface, and the read brings it.
     at_google_change(id, [](auto& p) { p.callToAction->url = "https://example.com/elsewhere"; });
+    sync(spa_);
+    EXPECT_THAT(shown(id).edit->fields, ElementsAre("summary")) << "what an edit changes is what its author changed, whatever the post does";
+    clock_.advance(1s);
+    const auto approved = approve(id);
+    ASSERT_TRUE(approved) << approved.error().code << ": " << approved.error().message;
+    run_jobs();
+    ASSERT_EQ(google_.updates.size(), 1u);
+    EXPECT_THAT(google_.updates[0].mask, ElementsAre("summary")) << "the button is not named: the old link is not written back";
+    EXPECT_EQ(google_.updates[0].body, boost::json::parse(R"({"summary": "Open late on Saturdays."})").as_object());
+    EXPECT_EQ(google_.find(name_of(kSpaPosts, 7001))->callToAction->url, "https://example.com/elsewhere");
+    EXPECT_EQ(post(id, "(content#>>'{call_to_action,url}')"), "https://example.com/elsewhere") << "the client's link stays";
+    EXPECT_EQ(summary(id), "Open late on Saturdays.");
+    EXPECT_FALSE(has_edit(id));
+
+    // The same when the link changes between the approval and the job: the job reads the post first, and
+    // still names only what the edit changes.
+    approved_edit(id, [](auto& c) { c.summary = "Open late on Sundays."; });
+    at_google_change(id, [](auto& p) {
+        p.callToAction->url = "https://example.com/somewhere-new";
+        p.languageCode = "en-US";
+    });
+    run_jobs();
+    ASSERT_EQ(google_.updates.size(), 2u);
+    EXPECT_THAT(google_.updates[1].mask, ElementsAre("summary"));
+    EXPECT_EQ(post(id, "(content#>>'{call_to_action,url}')"), "https://example.com/somewhere-new");
+    EXPECT_EQ(post(id, "(content->>'language_code')"), "en-US");
+    EXPECT_EQ(summary(id), "Open late on Sundays.");
+    EXPECT_EQ(problems(), 0);
+}
+
+TEST_F(LocalPostsEdit, AFieldChangedOnBothSidesStopsTheEditAndNamesTheField) {
+    auto content = standard("Open late on Fridays.");
+    content.call_to_action = domain::LocalPostCallToAction{.action_type = "book", .url = "https://example.com/book"};
+    const auto id = sent(spa_, content);
+    const auto written = write(id, [](auto& c) {
+        c.summary = "Open late on Saturdays.";
+        c.call_to_action->url = "https://example.com/reserve";
+    });
+    ASSERT_TRUE(written);
+    EXPECT_THAT(written->edit->fields, ElementsAre("summary", "call_to_action"));
+    const auto edit_content = written->edit->content;
+
+    // The link is changed at Google too. The edit would write over a change its author never saw.
+    at_google_change(id, [](auto& p) { p.callToAction->url = "https://example.com/elsewhere"; });
+    sync(spa_);
+    const auto refused = approve(id);
+    ASSERT_FALSE(refused);
+    EXPECT_EQ(refused.error().code, "local_post_changed");
+    EXPECT_THAT(refused.error().message, HasSubstr("changed at Google"));
+    EXPECT_THAT(refused.error().message, HasSubstr("\"call_to_action\""));
+    EXPECT_EQ(edit(id, "status"), "draft");
+    EXPECT_EQ(count("jobs WHERE kind = 'local_posts.edit'"), 0);
+
+    // The same in the job, when it changes after the approval. (The edit is saved again first, which writes
+    // it against the post as it is now.)
+    clock_.advance(1s);
+    ASSERT_TRUE(write(id, edit_content));
+    ASSERT_TRUE(approve(id));
+    at_google_change(id, [](auto& p) { p.callToAction->url = "https://example.com/third"; });
+    run_jobs();
+    EXPECT_TRUE(google_.updates.empty()) << "nothing is sent, not even the text";
+    EXPECT_EQ(edit(id, "status"), "draft");
+    EXPECT_THAT(edit(id, "status_reason"), HasSubstr("The post changed at Google after the edit was written"));
+    EXPECT_THAT(edit(id, "status_reason"), HasSubstr("\"call_to_action\""));
+    EXPECT_THAT(edit(id, "status_reason"), HasSubstr("Nothing is sent"));
+    EXPECT_EQ(post(id, "(content#>>'{call_to_action,url}')"), "https://example.com/third") << "the row has what was read";
+    EXPECT_EQ(summary(id), "Open late on Fridays.");
+    EXPECT_EQ(audited("local_post.edit_cancelled"), 1);
+    EXPECT_EQ(problems(), 0);
+
+    // Google coming to hold the edit's own value is no conflict: there is nothing left to write in that field.
+    clock_.advance(1s);
+    ASSERT_TRUE(write(id, edit_content));
+    ASSERT_TRUE(approve(id));
+    at_google_change(id, [](auto& p) { p.callToAction->url = "https://example.com/reserve"; });
+    run_jobs();
+    ASSERT_EQ(google_.updates.size(), 1u);
+    EXPECT_THAT(google_.updates[0].mask, ElementsAre("summary"));
+    EXPECT_FALSE(has_edit(id));
+    EXPECT_EQ(summary(id), "Open late on Saturdays.");
+}
+
+TEST_F(LocalPostsEdit, SavingTheEditAgainUnchangedWritesItAgainstThePostAsItIsNow) {
+    auto content = standard("Open late on Fridays.");
+    content.call_to_action = domain::LocalPostCallToAction{.action_type = "book", .url = "https://example.com/book"};
+    const auto id = sent(spa_, content);
+    const auto written = write(id, [](auto& c) { c.call_to_action->url = "https://example.com/reserve"; });
+    ASSERT_TRUE(written);
+    const auto edit_content = written->edit->content;
+    at_google_change(id, [](auto& p) {
+        p.callToAction->url = "https://example.com/elsewhere";
+        p.summary = "Open late on Fridays and Saturdays.";
+    });
+    sync(spa_);
+    ASSERT_EQ(approve(id).error().code, "local_post_changed");
+
+    // A person looks at the post as it is now and says: send it. The same content, saved again.
+    clock_.advance(1min);
+    const auto again = write(id, edit_content);
+    ASSERT_TRUE(again) << again.error().message;
+    EXPECT_EQ(again->edit->content, edit_content);
+    EXPECT_EQ(again->edit->written_at, now_text());
+    // What it changes is now said against the post as it is: the link, and the text it still carries from before.
+    EXPECT_THAT(again->edit->fields, ElementsAre("summary", "call_to_action"));
+    EXPECT_EQ(audited("local_post.edit_write"), 2) << "every save is a save";
+    ASSERT_TRUE(approve(id));
     run_jobs();
     ASSERT_EQ(google_.updates.size(), 1u);
     EXPECT_THAT(google_.updates[0].mask, ElementsAre("summary", "callToAction"));
-    EXPECT_EQ(google_.updates[0].body.at("callToAction"), boost::json::parse(R"({"actionType": "BOOK", "url": "https://example.com/book"})"));
-    EXPECT_EQ(post(id, "(content#>>'{call_to_action,url}')"), "https://example.com/book") << "the row is what Google answered";
-    EXPECT_EQ(summary(id), "Open late on Saturdays.");
-    // The entry keeps what Google had a moment before, which is not what the row had held.
-    EXPECT_EQ(audit_entry(id, "local_post.edit_applied", "before->'content'#>>'{call_to_action,url}'"), "https://example.com/elsewhere");
+    EXPECT_EQ(post(id, "(content#>>'{call_to_action,url}')"), "https://example.com/reserve");
+    EXPECT_EQ(summary(id), "Open late on Fridays.") << "which the person saw named among the fields, and approved";
 }
 
 // ---- the photo or video ---------------------------------------------------------------------
@@ -385,8 +492,26 @@ TEST_F(LocalPostsEdit, AnotherUploadReplacesThePostsAndTakingItAwayEmptiesTheMed
     EXPECT_THAT(google_.updates[0].mask, ElementsAre("summary"));
     EXPECT_EQ(post(id, "media_id"), std::to_string(*content.media_id));
 
+    // The person who approves sees what they approve: the edit shows the upload it brings, and where it
+    // leaves the media alone, what the post shows now.
+    const auto text_again = write(id, [](auto& c) { c.summary = "A look at both new rooms."; });
+    ASSERT_TRUE(text_again);
+    EXPECT_EQ(boost::json::value_from(text_again->edit->media), boost::json::value_from(text_again->media)) << "Google's copy, untouched";
+    ASSERT_EQ(text_again->edit->media.size(), 1u);
     const auto video = insert_upload({.object = "p/walk.mp4", .format = "video", .content_type = "video/mp4", .bytes = 9000000,
                                       .width = 1080, .height = 1920, .duration_ms = "12500"});
+    const auto with_video = write(id, [&](auto& c) { c.media_id = video; });
+    ASSERT_TRUE(with_video);
+    EXPECT_THAT(with_video->edit->fields, ElementsAre("media"));
+    ASSERT_EQ(with_video->edit->media.size(), 1u);
+    EXPECT_EQ(with_video->edit->media[0].format, "video");
+    EXPECT_EQ(with_video->edit->media[0].url, "https://storage.googleapis.com/poni-public-test/p/walk.mp4");
+    EXPECT_THAT(with_video->media[0].url, HasSubstr("googleusercontent.com")) << "the post itself still shows what Google has";
+    const auto without = write(id, [](auto& c) { c.media_id.reset(); });
+    ASSERT_TRUE(without);
+    EXPECT_THAT(without->edit->fields, ElementsAre("media"));
+    EXPECT_TRUE(without->edit->media.empty()) << "the upload taken away: the post would show nothing";
+
     edit_and_send(id, [&](auto& c) { c.media_id = video; });
     ASSERT_EQ(google_.updates.size(), 2u);
     EXPECT_THAT(google_.updates[1].mask, ElementsAre("media"));
@@ -471,7 +596,7 @@ TEST_F(LocalPostsEdit, WhenGoogleAlreadyHasTheContentTheEditIsDoneWithoutAReques
     EXPECT_EQ(summary(id), "Open late on Saturdays.") << "the row took what was read";
     EXPECT_EQ(post(id, "edited_by"), std::to_string(user_));
     EXPECT_EQ(audit_entry(id, "local_post.edit_applied", "after->>'sent'"), "false");
-    EXPECT_EQ(audit_entry(id, "local_post.edit_applied", "after->'fields'"), "[]");
+    EXPECT_EQ(audit_entry(id, "local_post.edit_applied", "after->'mask'"), "[]");
     EXPECT_EQ(problems(), 0);
 }
 
@@ -743,6 +868,129 @@ TEST_F(LocalPostsEdit, AnAnswerAboutAnotherPostIsNoAnswerAboutThisOne) {
     }
 }
 
+// ---- what Google does with an edit it took --------------------------------------------------------
+
+TEST_F(LocalPostsEdit, ThePostIsReadAgainAfterAnEditThatReachedGoogleOrMayHave) {
+    const auto id = at_google(kSpaPosts, 1, "Open late on Fridays.");
+    const auto reads_queued = [&] { return count("jobs WHERE kind = 'local_posts.sync' AND status = 'queued'"); };
+    ASSERT_EQ(reads_queued(), 0);
+    // Nobody knows what Google does with a live post that was edited. Say it takes it in again.
+    google_.state_after_update = "PROCESSING";
+    edit_and_send(id, [](auto& c) { c.summary = "Open late on Saturdays."; });
+    EXPECT_EQ(post(id, "google_state"), "processing") << "the answer's state is on the row";
+    EXPECT_EQ(reads_queued(), 3) << "1, 5 and 15 minutes on, as after a send";
+
+    // A list that was read a moment before the edit and stored a moment after it puts the old text on the row.
+    exec(std::format("UPDATE local_posts SET content = jsonb_set(content, '{{summary}}', '\"Open late on Fridays.\"') WHERE id = {}", id));
+    at_google_change(id, [](auto& p) { p.state = "LIVE"; });
+    clock_.advance(1min);
+    run_jobs();
+    EXPECT_EQ(summary(id), "Open late on Saturdays.") << "the first read after the edit puts it right";
+    EXPECT_EQ(post(id, "google_state"), "live");
+    EXPECT_EQ(reads_queued(), 2);
+
+    // A second edit of the same post gets reads of its own, and so does one Google did not confirm.
+    clock_.advance(20min);
+    run_jobs();
+    ASSERT_EQ(reads_queued(), 0);
+    edit_and_send(id, [](auto& c) { c.summary = "Open late on Sundays."; });
+    EXPECT_EQ(reads_queued(), 3);
+    google_.update_times_out = true;
+    google_.timeout_after_updating = true;
+    edit_and_send(id, [](auto& c) { c.summary = "Open late every day."; });
+    ASSERT_EQ(edit(id, "status"), "draft");
+    EXPECT_EQ(reads_queued(), 6);
+    EXPECT_EQ(summary(id), "Open late on Sundays.") << "not changed by guesswork";
+    clock_.advance(1min);
+    run_jobs();
+    EXPECT_EQ(summary(id), "Open late every day.") << "a minute on, the read shows that it arrived";
+    EXPECT_TRUE(has_edit(id)) << "and still leaves the edit to the person";
+    EXPECT_EQ(google_.updates.size(), 3u);
+
+    // An edit that needed no request has just been read, and queues nothing.
+    clock_.advance(20min);
+    run_jobs();
+    ASSERT_TRUE(discard(id));
+    approved_edit(id, [](auto& c) { c.summary = "Open late on Mondays."; });
+    at_google_change(id, [](auto& p) { p.summary = "Open late on Mondays."; });
+    run_jobs();
+    EXPECT_FALSE(has_edit(id));
+    EXPECT_EQ(reads_queued(), 0);
+}
+
+TEST_F(LocalPostsEdit, AnEditGoogleAcceptedButDoesNotShowIsSettledAndStaffAreTold) {
+    // Nobody can rule out that Google takes a field in the mask and leaves it as it was.
+    auto made = make_local_post("111", kSpaPosts, "1", "Open late on Fridays.");
+    made.callToAction = gbp::CallToAction{.actionType = "BOOK", .url = "https://example.com/book"};
+    const auto id = at_google(kSpaPosts, made);
+    google_.ignored_in_updates.insert("callToAction");
+    edit_and_send(id, [](auto& c) {
+        c.summary = "Open late on Saturdays.";
+        c.call_to_action->url = "https://example.com/reserve";
+    });
+    ASSERT_EQ(google_.updates.size(), 1u);
+    EXPECT_THAT(google_.updates[0].mask, ElementsAre("summary", "callToAction"));
+    // Settled as an accepted edit is: the row is what Google answered, and the edit is done.
+    EXPECT_FALSE(has_edit(id));
+    EXPECT_EQ(summary(id), "Open late on Saturdays.");
+    EXPECT_EQ(post(id, "(content#>>'{call_to_action,url}')"), "https://example.com/book") << "the row says what Google says, not what was sent";
+    EXPECT_EQ(post(id, "edited_by"), std::to_string(user_));
+    EXPECT_EQ(audit_entry(id, "local_post.edit_applied", "after->'not_shown'"), R"(["call_to_action"])");
+    ASSERT_EQ(problems(), 1);
+    EXPECT_EQ(last_subject(), "Google accepted an edit, but the post does not show it");
+    EXPECT_THAT(value<std::string>("SELECT body FROM notification_deliveries ORDER BY id DESC LIMIT 1"), HasSubstr("call_to_action"));
+    EXPECT_EQ(value<std::string>("SELECT local_post_id::text FROM notification_deliveries ORDER BY id DESC LIMIT 1"), std::to_string(id));
+
+    // Nothing is sent again for it; a person who still wants the link writes a new edit.
+    run_edit(id);
+    clock_.advance(1h);
+    await(local_posts_->enqueue_due());
+    run_jobs();
+    EXPECT_EQ(google_.updates.size(), 1u);
+    EXPECT_EQ(problems(), 1);
+
+    // An answer that shows everything that was sent tells nobody anything.
+    google_.ignored_in_updates.clear();
+    edit_and_send(id, [](auto& c) { c.call_to_action->url = "https://example.com/reserve"; });
+    EXPECT_EQ(post(id, "(content#>>'{call_to_action,url}')"), "https://example.com/reserve");
+    EXPECT_EQ(problems(), 1);
+}
+
+TEST_F(LocalPostsEdit, EveryRejectionByGoogleIsToldAlsoTheOneAfterAnEdit) {
+    const auto id = at_google(kSpaPosts, 1, "Open late on Fridays.");
+    at_google_change(id, [](auto& p) { p.state = "REJECTED"; });
+    clock_.advance(1h);
+    sync(spa_);
+    ASSERT_EQ(problems(), 1);
+    EXPECT_EQ(last_subject(), "Google rejected a post");
+    EXPECT_THAT(value<std::string>("SELECT body FROM notification_deliveries ORDER BY id DESC LIMIT 1"), HasSubstr("Edit the post, or remove it"));
+    clock_.advance(1h);
+    sync(spa_);
+    EXPECT_EQ(problems(), 1) << "once for each time it happens, not for each read";
+
+    // An edit brings the post back, and Google rejects it again: that is news, and staff hear of it.
+    google_.state_after_update = "LIVE";
+    edit_and_send(id, [](auto& c) { c.summary = "Open late on Fridays, by appointment."; });
+    ASSERT_EQ(post(id, "google_state"), "live");
+    at_google_change(id, [](auto& p) { p.state = "REJECTED"; });
+    clock_.advance(1min);
+    run_jobs();
+    EXPECT_EQ(post(id, "google_state"), "rejected");
+    EXPECT_EQ(problems(), 2);
+    EXPECT_EQ(last_subject(), "Google rejected a post");
+
+    // Or the answer to the edit itself says so.
+    at_google_change(id, [](auto& p) { p.state = "LIVE"; });
+    clock_.advance(20min);
+    run_jobs();
+    ASSERT_EQ(post(id, "google_state"), "live");
+    google_.state_after_update = "REJECTED";
+    edit_and_send(id, [](auto& c) { c.summary = "Open late on Fridays, walk-ins welcome."; });
+    EXPECT_EQ(post(id, "google_state"), "rejected");
+    EXPECT_EQ(problems(), 3);
+    EXPECT_EQ(audited("local_post.rejected_by_google"), 3);
+}
+
 // ---- never twice, and never without a person ---------------------------------------------------
 
 TEST_F(LocalPostsEdit, RunningTheEditJobAgainSendsNothing) {
@@ -796,11 +1044,12 @@ TEST_F(LocalPostsEdit, AnEditNobodyApprovedIsNeverSent) {
                                   "WHERE local_post_id = {}",
                                   user_, id)),
                  pqxx::check_violation)
-        << "an edit that was claimed says when, and under which claim";
+        << "an edit that was claimed says when";
     EXPECT_THROW(exec(std::format("UPDATE local_post_edits SET content = jsonb_set(content, '{{topic_type}}', '\"alert\"') WHERE local_post_id = {}", id)),
                  pqxx::check_violation);
-    EXPECT_THROW(exec(std::format("INSERT INTO local_post_edits (local_post_id, status, content, written_by, written_at) "
-                                  "SELECT local_post_id, 'draft', content, written_by, written_at FROM local_post_edits WHERE local_post_id = {}",
+    EXPECT_THROW(exec(std::format("INSERT INTO local_post_edits (local_post_id, status, content, base_content, written_by, written_at) "
+                                  "SELECT local_post_id, 'draft', content, base_content, written_by, written_at FROM local_post_edits "
+                                  "WHERE local_post_id = {}",
                                   id)),
                  pqxx::unique_violation)
         << "one open edit per post";
@@ -862,7 +1111,7 @@ TEST_F(LocalPostsEdit, TwoWorkersThatReachTheClaimTogetherSendOnce) {
     ASSERT_EQ(mine.outcome, Claim::claimed);
     EXPECT_EQ(mine.name.str(), name_of(kSpaPosts, 1));
     EXPECT_EQ(theirs.outcome, Claim::not_approved);
-    EXPECT_THAT(theirs.detail, HasSubstr("another run"));
+    EXPECT_THAT(theirs.detail, HasSubstr("being sent already"));
     EXPECT_EQ(edit(id, "status"), "sending") << "the second leaves the first one's claim alone";
     EXPECT_EQ(problems(), 0);
 }
@@ -1218,14 +1467,16 @@ TEST_F(LocalPostsEdit, TheReadOverwritesThePostAndLeavesItsEditAlone) {
     EXPECT_EQ(summary(id), "Open late on Fridays, and now on Saturdays.");
     EXPECT_EQ(post(id, "google_state"), "rejected");
     EXPECT_EQ(edit(id, "content"), before);
+    EXPECT_EQ(edit(id, "base_content->>'summary'"), "Open late on Fridays.") << "nor what it was written against";
     EXPECT_EQ(edit(id, "status"), "draft");
     EXPECT_EQ(edit(id, "status_reason"), "");
-    // The edit as it was written is still what a person approves: the whole content, old text included.
+    // The edit changes the language, and that is all it writes: the text Google has now stays.
     ASSERT_TRUE(approve(id));
     run_jobs();
     ASSERT_EQ(google_.updates.size(), 1u);
-    EXPECT_THAT(google_.updates[0].mask, ElementsAre("summary", "languageCode"));
-    EXPECT_EQ(summary(id), "Open late on Fridays.");
+    EXPECT_THAT(google_.updates[0].mask, ElementsAre("languageCode"));
+    EXPECT_EQ(summary(id), "Open late on Fridays, and now on Saturdays.");
+    EXPECT_EQ(post(id, "(content->>'language_code')"), "es");
 }
 
 // ---- two people ---------------------------------------------------------------------------------
@@ -1254,11 +1505,14 @@ TEST_F(LocalPostsEdit, ASecondPersonSeesTheOpenEditReplacesADraftAndWaitsForOneT
     EXPECT_EQ(audit_entry(id, "local_post.edit_write", "before->>'written_by_user_id'"), std::to_string(user_));
     EXPECT_EQ(audit_entry(id, "local_post.edit_write", "actor"), "second@xvisionmediaus.com");
 
-    // The same content sent again changes nothing and leaves no entry.
+    // The same content sent again is written again all the same: the edit names who sent it last, and when.
+    clock_.advance(1min);
     const auto entries = audited("local_post.edit_write");
     ASSERT_TRUE(write(id, [](auto& c) { c.summary = "  Open late on Sundays. "; }));
-    EXPECT_EQ(audited("local_post.edit_write"), entries);
-    EXPECT_EQ(shown(id).edit->written_by, "second@xvisionmediaus.com");
+    EXPECT_EQ(audited("local_post.edit_write"), entries + 1);
+    EXPECT_EQ(shown(id).edit->written_by, "staff@xvisionmediaus.com");
+    EXPECT_EQ(shown(id).edit->written_at, now_text());
+    EXPECT_EQ(shown(id).edit->content.summary, "Open late on Sundays.");
 
     // The first person approves what the second wrote. From then on it cannot be replaced or discarded.
     ASSERT_TRUE(approve(id));
@@ -1397,7 +1651,8 @@ TEST_F(LocalPostsEdit, APostThatCannotBeReadFirstIsNotWrittenTo) {
     google_.client_refuses = true;
     run_edit(id, true);
     EXPECT_EQ(edit(id, "status"), "draft");
-    EXPECT_THAT(edit(id, "status_reason"), HasSubstr("the engine could not prepare the request"));
+    EXPECT_THAT(edit(id, "status_reason"), HasSubstr("The engine could not prepare the edit")) << "not told as a failure of Google's";
+    EXPECT_THAT(edit(id, "status_reason"), Not(HasSubstr("read from Google")));
     EXPECT_THAT(edit(id, "status_reason"), Not(HasSubstr("outbound client")));
     EXPECT_TRUE(google_.updates.empty());
 }
@@ -1514,7 +1769,7 @@ TEST_F(LocalPostsEdit, ARemovalAskedForWhileAnEditIsBeingSentIsNotHeldUpByIt) {
     ASSERT_EQ(claimed.outcome, Claim::claimed);
     ASSERT_TRUE(request_removal(id)) << "never blocked, also while the edit is being sent";
     EXPECT_EQ(edit(id, "status"), "sending") << "the request does not reach into a run that is under way";
-    const auto request = prepare(id, claimed.claim, read_from_google(id));
+    const auto request = prepare(id, read_from_google(id));
     EXPECT_EQ(request.outcome, repo::LocalPostEditRequest::Outcome::settled);
     EXPECT_TRUE(request.mask.empty());
     EXPECT_EQ(edit(id, "status"), "draft");
@@ -1530,12 +1785,12 @@ TEST_F(LocalPostsEdit, ARemovalAskedForWhileAnEditIsBeingSentIsNotHeldUpByIt) {
     approved_edit(other, [](auto& c) { c.summary = "Also by mistake, corrected."; });
     const auto second = claim(other);
     ASSERT_EQ(second.outcome, Claim::claimed);
-    const auto to_send = prepare(other, second.claim, read_from_google(other));
+    const auto to_send = prepare(other, read_from_google(other));
     ASSERT_EQ(to_send.outcome, repo::LocalPostEditRequest::Outcome::send);
     ASSERT_TRUE(request_removal(other));
     const auto answer = await(google_.update_local_post(second.name, to_send.mask, to_send.body));
     ASSERT_TRUE(answer);
-    tx([&](pqxx::work& tx) { repo::local_post_edit_accepted(tx, other, second.claim, to_send.content, to_send.mask, *answer, clock_.now()); });
+    tx([&](pqxx::work& tx) { repo::local_post_edit_accepted(tx, other, to_send.content, to_send.mask, *answer, clock_.now()); });
     EXPECT_FALSE(has_edit(other));
     EXPECT_NE(post(other, "removal_requested_at"), "") << "the request stands";
     run_jobs();
@@ -1547,47 +1802,45 @@ TEST_F(LocalPostsEdit, ARemovalAskedForWhileAnEditIsBeingSentIsNotHeldUpByIt) {
 
 // ---- an engine that stopped, a job that died ---------------------------------------------------------
 
-TEST_F(LocalPostsEdit, AnEditLeftAsBeingSentIsGivenBackAsNotConfirmedAndNeverSentAgain) {
+TEST_F(LocalPostsEdit, AnEditFoundBeingSentIsNeverSentAndIsGivenBackOnlyWhenNoJobIsLeftForIt) {
     const auto id = at_google(kSpaPosts, 1, "Open late on Fridays.");
     approved_edit(id, [](auto& c) { c.summary = "Open late on Saturdays."; });
-    // The engine stops between the claim and the bookkeeping: whether the request went out, nobody knows.
+    // A run of the job has claimed the edit and is on its way to the request (a slow token, a paused
+    // limiter), or the engine stopped there: from the outside the two look the same.
     ASSERT_EQ(claim(id).outcome, Claim::claimed);
     ASSERT_EQ(edit(id, "status"), "sending");
 
-    // A run of the job a moment later finds it being sent, and sends nothing.
+    // Another run finds it being sent. It sends nothing and leaves it, however long ago the claim was.
     run_edit(id);
+    clock_.advance(20min);
+    run_edit(id, true);
     EXPECT_TRUE(google_.updates.empty());
-    EXPECT_EQ(edit(id, "status"), "sending") << "it may be another run at work";
-    clock_.advance(4min);
+    EXPECT_EQ(edit(id, "status"), "sending");
+    // While a job for the edit is queued or running, nothing gives it back: that job may still send, and a
+    // person who approved again meanwhile would have that approval undone by the first request arriving late.
+    ASSERT_EQ(count("jobs WHERE kind = 'local_posts.edit' AND status IN ('queued', 'running')"), 1);
     await(local_posts_->enqueue_due());
     EXPECT_EQ(edit(id, "status"), "sending");
+    EXPECT_EQ(write(id, standard("Meanwhile.")).error().code, "local_post_edit_not_open");
+    EXPECT_EQ(problems(), 0);
 
-    // Five minutes after the claim no run is at work on it any more. The job that finds it so gives it back.
-    clock_.advance(1min);
-    run_edit(id);
+    // The job runs (again, after the lock of a stopped engine's run expired), finds the edit being sent,
+    // and ends. Now no job is left for it, and the sweep gives it back as not confirmed.
+    run_jobs();
     EXPECT_TRUE(google_.updates.empty()) << "it does not send";
+    EXPECT_EQ(edit(id, "status"), "sending") << "nor does it settle what it did not start";
+    await(local_posts_->enqueue_due());
     EXPECT_EQ(edit(id, "status"), "draft");
-    EXPECT_THAT(edit(id, "status_reason"), HasSubstr("Google did not confirm the edit (the engine stopped while the edit was being sent)"));
+    EXPECT_THAT(edit(id, "status_reason"), HasSubstr("Google did not confirm the edit (the job that sends the edit ended without an answer)"));
     EXPECT_THAT(edit(id, "status_reason"), HasSubstr("may or may not have changed"));
     EXPECT_EQ(problems(), 1);
     EXPECT_EQ(last_subject(), kNotConfirmed);
     EXPECT_EQ(audited("local_post.edit_outcome_unknown"), 1);
     run_edit(id);
     run_edit(id, true);
+    await(local_posts_->enqueue_due());
     EXPECT_TRUE(google_.updates.empty());
     EXPECT_EQ(problems(), 1);
-
-    // With no job left to find it, the sweep does the same.
-    const auto other = at_google(kSpaPosts, 2, "Closed on Mondays.");
-    approved_edit(other, [](auto& c) { c.summary = "Closed on Tuesdays."; });
-    ASSERT_EQ(claim(other).outcome, Claim::claimed);
-    exec("DELETE FROM jobs WHERE kind = 'local_posts.edit'");
-    clock_.advance(5min);
-    await(local_posts_->enqueue_due());
-    EXPECT_EQ(edit(other, "status"), "draft");
-    EXPECT_THAT(edit(other, "status_reason"), HasSubstr("Google did not confirm the edit"));
-    EXPECT_EQ(problems(), 2);
-    EXPECT_TRUE(google_.updates.empty());
 }
 
 TEST_F(LocalPostsEdit, AnApprovedEditWhoseJobDiedReturnsToTheDrafts) {
@@ -1618,7 +1871,9 @@ TEST_F(LocalPostsEdit, WhenTheOutcomeCannotBeWrittenDownTheEditStaysAsBeingSentA
     exec("CREATE FUNCTION refuse_edited() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'the disk is full'; END $$ LANGUAGE plpgsql");
     exec("CREATE TRIGGER refuse_edited BEFORE UPDATE ON local_posts FOR EACH ROW WHEN (NEW.edited_at IS DISTINCT FROM OLD.edited_at) "
          "EXECUTE FUNCTION refuse_edited()");
-    EXPECT_NO_THROW(run_edit(id)) << "the job must not ask to be run again: the request went out";
+    run_jobs();
+    EXPECT_EQ(count("jobs WHERE kind = 'local_posts.edit' AND status = 'succeeded' AND attempts = 1"), 1)
+        << "the job must not ask to be run again: the request went out";
     EXPECT_EQ(google_.updates.size(), 1u);
     EXPECT_EQ(edit(id, "status"), "sending");
     EXPECT_EQ(summary(id), "Open late on Fridays.");
@@ -1626,74 +1881,51 @@ TEST_F(LocalPostsEdit, WhenTheOutcomeCannotBeWrittenDownTheEditStaysAsBeingSentA
     run_edit(id, true);
     EXPECT_EQ(google_.updates.size(), 1u);
 
-    // Five minutes on it is given back as not confirmed; the next read shows that it arrived.
+    // Its job has ended, so the sweep gives it back as not confirmed; the read that follows shows that it arrived.
     exec("DROP TRIGGER refuse_edited ON local_posts");
-    clock_.advance(6min);
     await(local_posts_->enqueue_due());
     EXPECT_EQ(edit(id, "status"), "draft");
     EXPECT_EQ(last_subject(), kNotConfirmed);
-    sync(spa_);
+    clock_.advance(1min);
+    run_jobs();
     EXPECT_EQ(summary(id), "Open late on Saturdays.");
     EXPECT_EQ(google_.updates.size(), 1u);
 }
 
-TEST_F(LocalPostsEdit, AnAnswerThatComesAfterTheEditWasGivenBackStillSettlesIt) {
-    const auto id = at_google(kSpaPosts, 1, "Slow answer.");
-    approved_edit(id, [](auto& c) { c.summary = "Slow answer, corrected."; });
-    const auto claimed = claim(id);
-    ASSERT_EQ(claimed.outcome, Claim::claimed);
-    const auto request = prepare(id, claimed.claim, read_from_google(id));
-    ASSERT_EQ(request.outcome, repo::LocalPostEditRequest::Outcome::send);
-    // The job is stuck (a slow answer, a paused limiter). The sweep takes the edit for one nobody will settle.
-    clock_.advance(6min);
-    await(local_posts_->enqueue_due());
-    ASSERT_EQ(edit(id, "status"), "draft");
-    ASSERT_EQ(problems(), 1);
-
-    // A refusal or an "unknown" that comes back late changes nothing that was settled.
+TEST_F(LocalPostsEdit, TheBookkeepingSettlesOnlyAnEditThatIsBeingSent) {
+    const auto id = at_google(kSpaPosts, 1, "Open late on Fridays.");
+    ASSERT_TRUE(write(id, [](auto& c) { c.summary = "Open late on Saturdays."; }));
+    const auto answer = [&] {
+        auto changed_post = read_from_google(id);
+        changed_post.summary = "Open late on Saturdays.";
+        changed_post.raw = boost::json::value_from(changed_post);
+        return changed_post;
+    }();
+    // Whatever calls them, and whenever: a draft stays a draft, an approved edit stays approved, and an edit
+    // that was given back stays as it was given back.
+    const auto held = shown(id).content();
     tx([&](pqxx::work& tx) {
-        repo::local_post_edit_not_made(tx, id, claimed.claim, repo::LocalPostEditFailure::refused, "HTTP 400", false, clock_.now());
-        repo::local_post_edit_unknown(tx, id, claimed.claim, "timeout", clock_.now());
+        repo::local_post_edit_accepted(tx, id, held, {"summary"}, answer, clock_.now());
+        repo::local_post_edit_not_made(tx, id, repo::LocalPostEditFailure::refused, "HTTP 400", false, clock_.now());
+        repo::local_post_edit_unknown(tx, id, "timeout", clock_.now());
+        EXPECT_EQ(repo::prepare_local_post_edit(tx, id, answer, clock_.now(), test::kMediaBase).outcome, repo::LocalPostEditRequest::Outcome::settled);
     });
-    EXPECT_THAT(edit(id, "status_reason"), HasSubstr("did not confirm"));
-    EXPECT_EQ(problems(), 1);
+    EXPECT_EQ(edit(id, "status"), "draft");
+    EXPECT_EQ(edit(id, "status_reason"), "");
+    EXPECT_EQ(summary(id), "Open late on Fridays.");
 
-    // Then Google's "accepted" comes back after all: it says what the post is now, and the edit is done.
-    const auto answer = await(google_.update_local_post(claimed.name, request.mask, request.body));
-    ASSERT_TRUE(answer);
-    tx([&](pqxx::work& tx) { repo::local_post_edit_accepted(tx, id, claimed.claim, request.content, request.mask, *answer, clock_.now()); });
-    EXPECT_EQ(summary(id), "Slow answer, corrected.");
-    EXPECT_FALSE(has_edit(id));
-    EXPECT_EQ(post(id, "edited_by"), std::to_string(user_));
-
-    // If a person has written another edit meanwhile, that one is theirs and stays.
-    const auto other = at_google(kSpaPosts, 2, "Another slow answer.");
-    approved_edit(other, [](auto& c) { c.summary = "Another slow answer, corrected."; });
-    const auto second = claim(other);
-    const auto to_send = prepare(other, second.claim, read_from_google(other));
-    ASSERT_EQ(to_send.outcome, repo::LocalPostEditRequest::Outcome::send);
-    clock_.advance(6min);
-    await(local_posts_->enqueue_due());
-    ASSERT_TRUE(write(other, [](auto& c) { c.summary = "Something else again."; }));
-    const auto late = await(google_.update_local_post(second.name, to_send.mask, to_send.body));
-    tx([&](pqxx::work& tx) { repo::local_post_edit_accepted(tx, other, second.claim, to_send.content, to_send.mask, *late, clock_.now()); });
-    EXPECT_EQ(summary(other), "Another slow answer, corrected.") << "Google's answer is the post now";
-    EXPECT_EQ(edit(other, "content->>'summary'"), "Something else again.");
-    EXPECT_EQ(edit(other, "status"), "draft");
-
-    // And a run's bookkeeping never settles an edit that another claim is sending.
-    clock_.advance(1min);
-    ASSERT_TRUE(approve(other));
-    const auto third = claim(other);
-    ASSERT_EQ(third.outcome, Claim::claimed);
-    EXPECT_NE(third.claim, second.claim) << "a claim's number is never used twice";
+    clock_.advance(1s);
+    ASSERT_TRUE(approve(id));
     tx([&](pqxx::work& tx) {
-        repo::local_post_edit_unknown(tx, other, second.claim, "timeout", clock_.now());
-        repo::local_post_edit_not_made(tx, other, second.claim, repo::LocalPostEditFailure::refused, "HTTP 400", true, clock_.now());
+        repo::local_post_edit_accepted(tx, id, held, {"summary"}, answer, clock_.now());
+        repo::local_post_edit_not_made(tx, id, repo::LocalPostEditFailure::refused, "HTTP 429", true, clock_.now());
+        repo::local_post_edit_unknown(tx, id, "timeout", clock_.now());
     });
-    EXPECT_EQ(edit(other, "status"), "sending");
-    EXPECT_EQ(prepare(other, second.claim, read_from_google(other)).outcome, repo::LocalPostEditRequest::Outcome::settled);
-    EXPECT_EQ(edit(other, "status"), "sending");
+    EXPECT_EQ(edit(id, "status"), "approved");
+    EXPECT_EQ(summary(id), "Open late on Fridays.");
+    EXPECT_EQ(problems(), 0);
+    EXPECT_EQ(audited("local_post.edit_applied") + audited("local_post.edit_refused") + audited("local_post.edit_outcome_unknown"), 0);
+    EXPECT_TRUE(google_.updates.empty());
 }
 
 // ---- what stays as it was -------------------------------------------------------------------------------

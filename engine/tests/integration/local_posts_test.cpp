@@ -1153,7 +1153,11 @@ TEST_F(LocalPostEdits, AnEditIsWrittenReplacedAndApprovedThroughTheApi) {
     EXPECT_EQ(edit.at("content").as_object().size(), 8u);
     EXPECT_EQ(edit.at("content").at("summary").as_string(), "Open late on Saturdays.");
     EXPECT_EQ(edit.at("content").at("call_to_action").at("url").as_string(), "https://example.com/hours");
-    EXPECT_EQ(edit.as_object().size(), 8u) << "content, checks, status, status_reason, written_by, written_at, decided_by, decided_at";
+    EXPECT_EQ(edit.as_object().size(), 10u)
+        << "content, fields, media, checks, status, status_reason, written_by, written_at, decided_by, decided_at";
+    // What the edit changes, by the names of the content's members, and what the post would show with it.
+    EXPECT_EQ(edit.at("fields"), boost::json::parse(R"(["summary"])"));
+    EXPECT_TRUE(edit.at("media").as_array().empty());
     // The post itself is as it was: what Google has.
     EXPECT_EQ(json(written).at("summary").as_string(), "Open late on Fridays.");
     EXPECT_EQ(json(written).at("status").as_string(), "sent");
@@ -1166,6 +1170,7 @@ TEST_F(LocalPostEdits, AnEditIsWrittenReplacedAndApprovedThroughTheApi) {
     ASSERT_EQ(replaced.status, 200u) << replaced.body;
     EXPECT_EQ(json(replaced).at("edit").at("content").at("summary").as_string(), "Open late on Sundays.");
     EXPECT_TRUE(json(replaced).at("edit").at("content").at("call_to_action").is_null());
+    EXPECT_EQ(json(replaced).at("edit").at("fields"), boost::json::parse(R"(["summary", "call_to_action"])"));
     EXPECT_EQ(count("local_post_edits"), 1);
 
     // The approval carries the edit's content as the person read it.
@@ -1193,7 +1198,7 @@ TEST_F(LocalPostEdits, AnEditIsWrittenReplacedAndApprovedThroughTheApi) {
     ASSERT_EQ(log.size(), 3u);
     EXPECT_EQ(log[0].at("action").as_string(), "local_post.edit_approve");
     EXPECT_EQ(log[0].at("after").at("edit").at("summary").as_string(), "Open late on Sundays.") << "what was approved is kept";
-    EXPECT_EQ(log[0].at("after").at("fields"), boost::json::parse(R"(["summary", "callToAction"])"));
+    EXPECT_EQ(log[0].at("after").at("fields"), boost::json::parse(R"(["summary", "call_to_action"])"));
     EXPECT_EQ(log[1].at("action").as_string(), "local_post.edit_write");
     EXPECT_EQ(log[1].at("before").at("edit").at("summary").as_string(), "Open late on Saturdays.");
     EXPECT_EQ(log[2].at("action").as_string(), "local_post.edit_write");
@@ -1293,7 +1298,9 @@ TEST_F(LocalPostEdits, AnApprovalIsRefusedWhilePostingIsOffForAFailedCheckAndFor
 
     // An edit that says what the post says has nothing to send.
     const auto same = edit_body(id, "{}");
-    ASSERT_EQ(put(target(id), same).status, 200u);
+    const auto saved = put(target(id), same);
+    ASSERT_EQ(saved.status, 200u);
+    EXPECT_TRUE(json(saved).at("edit").at("fields").as_array().empty());
     const auto unchanged = post(target(id) + "/approve", same);
     EXPECT_EQ(unchanged.status, 409u);
     EXPECT_EQ(error_code(unchanged), "local_post_edit_unchanged");
@@ -1313,6 +1320,19 @@ TEST_F(LocalPostEdits, TheAppWritesAndDiscardsAnEditWithItsToken) {
     EXPECT_EQ(as_app(verb::post, target(id) + "/approve", token, body).status, 409u) << "posting is off";
     EXPECT_EQ(as_app(verb::delete_, target(id), token).status, 204u);
     EXPECT_EQ(as_app(verb::put, target(id), "not-a-token", body).status, 401u);
+}
+
+TEST_F(LocalPostEdits, AnEditShowsThePhotoItBrings) {
+    const auto id = at_google();
+    const auto media = insert_upload({.object = "p/new.jpg"});
+    const auto written = put(target(id), edit_body(id, std::format(R"({{"media_id": {}}})", media)));
+    ASSERT_EQ(written.status, 200u) << written.body;
+    const auto shown = json(written);
+    EXPECT_EQ(shown.at("edit").at("fields"), boost::json::parse(R"(["media"])"));
+    EXPECT_EQ(shown.at("edit").at("media"),
+              boost::json::parse(R"([{"format": "photo", "url": "https://storage.googleapis.com/poni-public-test/p/new.jpg"}])"))
+        << "the person who approves sees the file, not only its id";
+    EXPECT_TRUE(shown.at("media").as_array().empty()) << "the post itself shows what it shows at Google";
 }
 
 TEST_F(LocalPostEdits, AgainstTheGoogleMockNoEditIsWrittenOrApproved) {

@@ -1033,6 +1033,13 @@ BOOST_DESCRIBE_STRUCT(LocalPostCopy, (), (id, status))
 // to have, beside the post until a person approved it and Google accepted it.
 struct LocalPostEdit {
     domain::LocalPostContent content;
+    // What the edit changes, and so all it ever writes at Google: of "summary", "call_to_action", "event",
+    // "offer", "media" and "language_code", those in which the content differs from the post's as it was
+    // when the edit was written.
+    std::vector<std::string> fields;
+    // What the post would show with the edit applied: the edit's upload where it changes the media, what
+    // the post shows now where it does not.
+    std::vector<LocalPostMediaItem> media;
     // The checks on that content as of its last change.
     std::vector<domain::CheckResult> checks;
     std::string status;  // "draft", "approved" or "sending"
@@ -1043,7 +1050,8 @@ struct LocalPostEdit {
     std::optional<std::string> decided_by;  // who approved it last
     std::optional<std::string> decided_at;
 };
-BOOST_DESCRIBE_STRUCT(LocalPostEdit, (), (content, checks, status, status_reason, written_by, written_at, decided_by, decided_at))
+BOOST_DESCRIBE_STRUCT(LocalPostEdit, (),
+                      (content, fields, media, checks, status, status_reason, written_by, written_at, decided_by, decided_at))
 
 // A post on a location's profile: a draft, a post the engine sent, or one
 // made in Google's own interface. The content fields are those of

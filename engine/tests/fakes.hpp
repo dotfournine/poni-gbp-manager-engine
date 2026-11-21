@@ -345,6 +345,8 @@ public:
     std::optional<std::string> state_after_update;
     // The answer to an update names this post instead of the one that was changed.
     std::optional<std::string> update_answers_as;
+    // Fields an update may name that this Google accepts and then leaves as they were.
+    std::set<std::string> ignored_in_updates;
 
     boost::asio::awaitable<gbp::Result<gbp::LocalPost>> create_local_post(std::string account, std::string location_id,
                                                                           boost::json::object body) override {
@@ -398,6 +400,7 @@ public:
         const auto part = [&](std::string_view field) -> const boost::json::value* { return body.if_contains(field); };
         for (const auto field : mask) {
             const auto* value = part(field);
+            if (ignored_in_updates.contains(std::string(field))) continue;
             if (field == "summary") {
                 post->summary = value ? std::optional(std::string(value->as_string())) : std::nullopt;
             } else if (field == "languageCode") {

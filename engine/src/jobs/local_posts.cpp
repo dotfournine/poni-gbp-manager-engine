@@ -239,8 +239,8 @@ asio::awaitable<void> LocalPosts::edit(std::int64_t local_post_id, bool last_att
         return repo::claim_local_post_edit(tx, local_post_id, now, options_.media_base);
     });
     if (claim.outcome != repo::LocalPostEditClaim::Outcome::claimed) {
-        // Run twice, an edit that was dealt with meanwhile, or one an earlier run left `sending`: that one
-        // has been given back as not confirmed, and is not sent from here.
+        // Run twice, an edit that was dealt with meanwhile, or one that is `sending` already: that one
+        // belongs to an earlier run and is never sent from here.
         log::info("local post edit not sent", {{"local_post_id", local_post_id}, {"reason", claim.detail}});
         co_return;
     }
@@ -252,7 +252,8 @@ asio::awaitable<void> LocalPosts::edit(std::int64_t local_post_id, bool last_att
     // id. Until the PATCH itself starts (`sent`), nothing has gone to Google that could change anything.
     bool sent = false;
     bool settled = false;                   // dealt with before anything was sent: done already, or given back
-    std::optional<Step> unread;             // the post could not be read, or what was read could not be stored
+    std::optional<Step> unread;             // the post could not be read
+    std::string failed_here;                // the engine itself failed before the request
     std::optional<gbp::LocalPost> updated;  // Google's answer to the PATCH
     std::optional<ApiError> refused;        // a certain refusal of the PATCH
     std::string unknown;                    // anything else about the PATCH
@@ -263,7 +264,7 @@ asio::awaitable<void> LocalPosts::edit(std::int64_t local_post_id, bool last_att
             unread = from_error(read.error());
         } else {
             request = co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) {
-                return repo::prepare_local_post_edit(tx, local_post_id, claim.claim, *read, now, options_.media_base);
+                return repo::prepare_local_post_edit(tx, local_post_id, *read, now, options_.media_base);
             });
             if (request.outcome != repo::LocalPostEditRequest::Outcome::send) {
                 settled = true;
@@ -296,7 +297,7 @@ asio::awaitable<void> LocalPosts::edit(std::int64_t local_post_id, bool last_att
         } else {
             // The engine's own failure (the database, say): its words are for the log, not for the post's page.
             log::error("local post edit could not be prepared", {{"local_post_id", local_post_id}, {"error", e.what()}});
-            unread = Step{Step::Kind::again, "the engine could not prepare the request"};
+            failed_here = "an error of its own";
         }
     }
     if (settled) {
@@ -310,7 +311,7 @@ asio::awaitable<void> LocalPosts::edit(std::int64_t local_post_id, bool last_att
     try {
         if (updated) {
             co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) {
-                repo::local_post_edit_accepted(tx, local_post_id, claim.claim, request.content, request.mask, *updated, now);
+                repo::local_post_edit_accepted(tx, local_post_id, request.content, request.mask, *updated, now);
             });
             // No text in the log: ids and field names only.
             log::info("local post edited", {{"local_post_id", local_post_id}, {"fields", static_cast<std::int64_t>(request.mask.size())}});
@@ -319,21 +320,28 @@ asio::awaitable<void> LocalPosts::edit(std::int64_t local_post_id, bool last_att
             const bool retry = unread->kind == Step::Kind::again && !last_attempt;
             const auto failure = unread->kind == Step::Kind::gone ? repo::LocalPostEditFailure::gone : repo::LocalPostEditFailure::unreadable;
             co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) {
-                repo::local_post_edit_not_made(tx, local_post_id, claim.claim, failure, unread->detail, retry, now);
+                repo::local_post_edit_not_made(tx, local_post_id, failure, unread->detail, retry, now);
             });
             log::warn("local post edit not sent: the post could not be read", {{"local_post_id", local_post_id}, {"error", unread->detail}, {"will_retry", retry}});
             if (retry) retry_error = std::format("local post {}: the post could not be read before its edit: {}", local_post_id, unread->detail);
+        } else if (!failed_here.empty()) {
+            // Nothing was sent either, and trying again is as safe.
+            const bool retry = !last_attempt;
+            co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) {
+                repo::local_post_edit_not_made(tx, local_post_id, repo::LocalPostEditFailure::internal, failed_here, retry, now);
+            });
+            if (retry) retry_error = std::format("local post {}: its edit could not be prepared", local_post_id);
         } else if (refused) {
             const bool retry = google::worth_retrying(refused->kind) && !last_attempt;
             co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) {
-                repo::local_post_edit_not_made(tx, local_post_id, claim.claim, repo::LocalPostEditFailure::refused, refused->message, retry, now);
+                repo::local_post_edit_not_made(tx, local_post_id, repo::LocalPostEditFailure::refused, refused->message, retry, now);
             });
             log::warn("local post edit refused by Google", {{"local_post_id", local_post_id}, {"error", refused->message}, {"will_retry", retry}});
             // Nothing was changed, so another attempt is safe.
             if (retry) retry_error = std::format("local post {}: Google refused the edit: {}", local_post_id, refused->message);
         } else {
             co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) {
-                repo::local_post_edit_unknown(tx, local_post_id, claim.claim, unknown, now);
+                repo::local_post_edit_unknown(tx, local_post_id, unknown, now);
             });
             log::warn("local post edit sent, outcome unknown; it is not sent again", {{"local_post_id", local_post_id}, {"error", unknown}});
         }
@@ -342,7 +350,8 @@ asio::awaitable<void> LocalPosts::edit(std::int64_t local_post_id, bool last_att
     }
     if (!bookkeeping_failure.empty()) {
         // The PATCH happened (or may have) and the database could not be told. The edit stays `sending`,
-        // which is the safe state: nothing sends it again, and the sweep gives it back as not confirmed.
+        // which is the safe state: nothing sends it again, and once this job has ended the sweep gives it
+        // back as not confirmed.
         // Not thrown: the job must not run again.
         log::error("local post edit bookkeeping failed; the edit stays as being sent", {{"local_post_id", local_post_id}, {"error", bookkeeping_failure}});
         co_return;

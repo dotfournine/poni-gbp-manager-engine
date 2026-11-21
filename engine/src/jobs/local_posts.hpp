@@ -23,8 +23,9 @@
 //                         (D-099). Claims it (both posting switches are read
 //                         in that transaction), reads the post from Google
 //                         under its location's own ids, and sends one PATCH
-//                         that names exactly the fields in which the edit
-//                         differs from what was just read. Enqueued only by
+//                         that names the fields the edit's author changed
+//                         and Google does not have yet, and no other; a
+//                         field changed at Google too stops it. Enqueued only by
 //                         the approval of a signed-in person
 //                         (repo::approve_local_post_edit). The PATCH is sent
 //                         once per approval: a certain refusal gives the edit
@@ -56,11 +57,12 @@
 // An edit has no `unknown` state and nothing settles it: an edit that may
 // have arrived cannot leave a second post behind, and the next read of the
 // location shows what the post says. So an edit whose outcome is not known
-// goes back to the person as a draft that says so. A job that finds its
-// edit `sending` already sends nothing: an edit left so by an engine that
-// stopped between the claim and the bookkeeping is given back the same way,
-// by that job or by local_posts.sync_due, once it has been `sending` for
-// five minutes.
+// goes back to the person as a draft that says so, and Google is read again
+// 1, 5 and 15 minutes on. A job that finds its edit `sending` already sends
+// nothing and leaves it. An edit left so by an engine that stopped between
+// the claim and the bookkeeping is given back the same way by
+// local_posts.sync_due, once no job for it is queued or running; until that
+// job's lock has expired and it has run, the edit shows as being sent.
 #pragma once
 
 #include "connectors/gbp/local_posts.hpp"
