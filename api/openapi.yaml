@@ -160,7 +160,14 @@ paths:
         nobody is signed in, `sign_in` says which ways of signing in the
         engine offers. Never fails for a missing or expired session. With a
         bearer token the answer is the same, and `csrf_token` is null: a
-        token needs none.
+        token needs none. A bearer token that is unknown or has ended, and
+        a header that begins with `Bearer` and has no token after it, are
+        answered with a 200 and `authenticated: false`, never a 401, and so
+        is a request with no header at all and no session cookie. A header
+        with another scheme is not the app's: the request is judged by its
+        cookie, so a browser's valid cookie still gives `authenticated:
+        true`. A client signed in with a token treats `authenticated: false`
+        as signed out.
       tags: [session]
       security: []
       responses:
@@ -170,8 +177,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Session"
-        "429":
-          $ref: "#/components/responses/TooManyAttempts"
 
   /api/auth/google/start:
     get:
@@ -2402,7 +2407,20 @@ paths:
       description: |
         Queues the read that otherwise runs once an hour: the location's
         posts are listed at Google and stored, so states, posts made at
-        Google and removals show up.
+        Google and removals show up. The answer comes before the read. To
+        see that a read has ended, read `Location.local_posts_synced_at` and
+        `Location.local_posts_sync_error_at` before asking and again later:
+        a read that succeeded moved the first, one that failed moved the
+        second (the engine's clock wrote both, so compare the two values,
+        not a time of the client's). A read already under way may move
+        either too. A read that fails is tried again after a delay, up to
+        three reads in all, so a failure may still be followed by a success.
+        Neither moves when the location stopped being synced in between (it
+        was unlinked, its client archived, or access lost), so a client
+        stops waiting after a time of its own choosing. Posts that
+        Google no longer has are marked removed after
+        `local_posts_synced_at` has moved, one by one, so a removal can
+        show up a moment later.
       tags: [local-posts]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -2578,6 +2596,27 @@ paths:
     get:
       operationId: getEscalation
       summary: Get an escalation
+      description: |
+        The escalation as it is now, with its review. What happened to it
+        is in two logs, which a client reads and puts in order by time:
+
+        - Who did what: `GET /api/audit-log?object_type=escalation&object_id={id}`.
+          `escalation.open` and `escalation.reopen` (a closed escalation
+          opened again because a newer analysis of the review still flags
+          it) are done by `system:review-analysis`; their `after` holds
+          `review_id` and `severity_flags`, the ids of the flags raised.
+          `escalation.assign` is done by the person who assigned it (the
+          `actor`); `before.assignee_id` and `after.assignee_id` are user
+          ids, and `after.assignee_id` is null when the assignment was
+          lifted. `GET /api/users` lists active users only, so the id of a
+          person who was disabled since does not resolve there: show the
+          id, or the `actor`'s address where it is the same person. `escalation.close` is done by the person
+          who closed it; its `after` holds `status`, `reason` and `note`.
+        - What was sent: `GET /api/notification-deliveries?escalation_id={id}`,
+          one row per recipient and channel, the emails and the pushes, or
+          a single row with an empty `recipient` and the status `not_sent`
+          when no rule names a recipient. Deliveries written before push was
+          added carry no `escalation_id`.
       tags: [escalations]
       responses:
         "200":
@@ -2810,6 +2849,12 @@ paths:
           in: query
           schema:
             $ref: "#/components/schemas/DeliveryStatus"
+        - name: escalation_id
+          in: query
+          description: Only the deliveries of this escalation's events (`NotificationDelivery.escalation_id`).
+          schema:
+            type: integer
+            format: int64
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PerPage"
       responses:
@@ -2837,6 +2882,8 @@ paths:
         changes hands. A registration that changes nothing writes nothing.
         Only the app's bearer token registers a device. An engine sends to
         one APNs environment; a token of the other is refused with a 400.
+        What a push carries, and what raises one, is `PushPayload` and
+        `NotificationEventType`.
       tags: [notifications]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -3034,7 +3081,11 @@ components:
         as `Authorization: Bearer <token>`. The engine reads it from that
         header and from nowhere else. A request with this header is the
         token's alone: a cookie sent beside it is not looked at, and a token
-        that is unknown or has ended is a 401. It needs no CSRF token.
+        that is unknown or has ended is a 401 on every route that needs a
+        session. A route that needs none (`GET /api/session`, the sign-in
+        routes, `GET /api/health`) does not refuse an unknown token, and
+        `GET /api/session` among them answers it with a 200 and
+        `authenticated: false`. A token needs no CSRF token.
 
   parameters:
     Id:
@@ -3502,6 +3553,8 @@ components:
         - last_sync_error_at
         - local_posts_synced_at
         - local_posts_sync_error
+        - local_posts_sync_error_at
+        - time_zone
       properties:
         id:
           type: integer
@@ -3592,6 +3645,28 @@ components:
         local_posts_sync_error:
           type: [string, "null"]
           description: Why the last read of the local posts failed; null after a success.
+        local_posts_sync_error_at:
+          type: [string, "null"]
+          format: date-time
+          description: |
+            When the last read of the local posts failed; null after a
+            success and before the first failure. A read that fails again
+            with the same message moves this time and nothing else, which is
+            why it is here: see `POST /api/locations/{id}/local-posts/refresh`
+            for how to tell that a read has ended.
+        time_zone:
+          type: [string, "null"]
+          description: |
+            The location's time zone, an IANA name such as
+            `America/New_York`. It is the same value as
+            `AutoPosting.time_zone`, where the posting window uses it, and
+            the only one a location has. Google gives none, so it is null
+            until a person enters it, in one place only,
+            `PATCH /api/locations/{id}/auto-posting`; `LocationUpdate` does
+            not take it. A report takes the zone of the client's
+            location with the lowest id that has one (`ReportCreate.time_zone`). It does not change how
+            date-times are written: they stay UTC, `scheduled_time` and
+            `recurrence.until` of a local post included.
     LocationUpdate:
       type: object
       additionalProperties: false
@@ -3850,9 +3925,24 @@ components:
           description: The user's email address, or `system:<component>` for the engine itself.
         action:
           type: string
-          description: "`<object>.<verb>`, for example `location.link`."
+          description: |
+            `<object>.<verb>`, for example `location.link`. New actions are
+            added as the engine learns to do more, and a client shows one it
+            does not know as it is. The verb is not always a plain verb
+            (`reply.post_outcome_unknown`), and the object is not always the
+            `object_type` (`reply.posted` is about a `draft`,
+            `reply_settings.update` and `local_posts.refresh` about a
+            `location`).
         object_type:
           type: string
+          description: |
+            What the entry is about. The engine writes these today: `client`,
+            `location`, `system_settings`, `ai_settings`, `review`, `draft`
+            (a reply draft), `escalation`, `local_post`, `local_post_media`,
+            `notification_rule`, `notification_delivery`, `report`,
+            `report_share_link`, `report_schedule`, `go_live_run`, `user`
+            (signing in and out), `device` and `credential`. The list grows
+            like the actions do.
         object_id:
           type: string
         before:
@@ -4285,7 +4375,42 @@ components:
           $ref: "#/components/schemas/DraftRoute"
         route_reasons:
           type: array
-          description: Why the draft did not go to auto-post; empty for `auto_post`.
+          description: |
+            Why the policy did not send the draft to auto-post, written once
+            when the draft is made and never changed after. Empty for a
+            draft the policy routed to `auto_post`, also when it then did not
+            get posted automatically: that is in `status_reason`, prose for
+            people with no fixed form (it often begins "Not posted
+            automatically.", but a refused or unconfirmed reply and a review
+            that could not be read say other things), and it is null when
+            only a switch or the location's auto-posting configuration kept
+            the draft from being scheduled. A pause is on the location
+            (`AutoPosting.paused`, `pause_reason`), never among the reasons.
+            The values, in this order when several apply, in the engine's
+            wording:
+
+            - `severity: <flag ids>`: the severity flag ids that were
+              raised, sorted and joined with ", ", for example
+              `severity: allergen_incident, hygiene`. The route is
+              `escalate`, and this is then the only reason.
+            - `analysis failed`: the analysis could not be used.
+            - `generation failed`: the writer gave no usable reply.
+            - `manipulation suspected`: the analysis or the writer suspected
+              it.
+            - `check failed: <check names>`: the names of the reply checks
+              that failed, sorted and joined with ", ": `emoji_limit`,
+              `language_match`, `length`, `no_email`, `no_phone`, `no_url`,
+              `not_empty`.
+            - One of these, the first that applies:
+              `<n> stars` (the rating is below the policy's minimum for
+              auto-posting; `<n>` is the rating, so `1 stars`, `2 stars` and
+              so on), `no star rating`, `contains a complaint`,
+              `auto-post is off for rating-only reviews`,
+              `auto-post is off for positive reviews`.
+            - `regenerated_with_instructions`: a person wrote the reply
+              again with instructions of their own and the policy would have
+              auto-posted it. The route is `approval_queue` and this is the
+              only reason.
           items:
             type: string
         mode:
@@ -4508,6 +4633,10 @@ components:
       required: [rating_only, positive, complaint, severity]
       properties:
         rating_only:
+          description: |
+            For a review with no text. A draft of `mode` `rating_only_low`
+            (no text, three stars or fewer) uses this range too: there is no
+            range of its own.
           $ref: "#/components/schemas/LengthRange"
         positive:
           $ref: "#/components/schemas/LengthRange"
@@ -5481,11 +5610,67 @@ components:
       type: string
       enum: [escalation, approval_needed, system_problem, test, client_report]
       description: |
-        `escalation`: a severity flag opened an escalation. `approval_needed`:
-        a draft waits in the approval queue. `system_problem`: lost access
-        to a location, a token that stopped working, a job that failed for
-        good, a reply that could not be posted or confirmed. `test`: a test
-        message; no rule can name it.
+        `escalation`: a severity flag opened an escalation, or opened a
+        closed one again. Subject: `Escalation: <client name> - <flag
+        labels, joined with ", ">`. It carries the ids of the escalation,
+        its review and its location.
+
+        `approval_needed`: a reply draft waits in the approval queue, or
+        was on its way to an automatic post and is back in the queue.
+        Subject: `Approval needed: <location title> (<client name>)`. Email
+        only; its ids are the review and the location.
+
+        `client_report`: a client's report was sent. It is the report's
+        email to the client's recipients: subject `Your Google reviews and
+        visibility report, <period>`. Email only, and a rule for it names
+        one client.
+
+        `test`: a test message; no rule can name it.
+
+        `system_problem`: something the engine cannot put right by itself.
+        These are all of them, with the subject as a person reads it (what
+        is in `<>` varies) and the ids a push carries beside `event_type`
+        (see `PushPayload`):
+
+        - `The Google Business Profile token stopped working`: the managing
+          account's token was refused. At most once a day. No ids.
+        - `A background job failed: <job kind>`: a job was given up on after
+          its last attempt, for example `local_posts.publish`. At most once
+          a day for each kind. No ids.
+        - `Apple refused the engine's push settings`: the APNs key, team or
+          topic was refused. At most once a day. No ids.
+        - `Lost access to a location`: two listings of the managing account
+          in a row did not include a location that is linked to a client.
+          `location_id`.
+        - `Auto-posting paused: <location title>`: the engine paused
+          auto-posting at one location (checks kept failing, an automatic
+          reply did not appear on Google, or Google refused one).
+          `location_id`.
+        - `Auto-posting paused for every location`: Google refused an
+          automatic reply as unauthenticated or not configured. No ids.
+        - `A reply could not be posted`: an approved or scheduled reply was
+          not posted because its review could not be read from Google on the
+          job's last attempt. `review_id`, `location_id`.
+        - `Google refused a reply`: a reply was refused and will not be
+          tried again. `review_id`, `location_id`.
+        - `A reply did not appear on Google`: a reply was sent and did not
+          show on the review in time. `review_id`, `location_id`.
+        - `Google refused a post`: a local post was refused for certain; it
+          is back among the drafts. `location_id`, `local_post_id`.
+        - `A post may or may not have reached Google`: a local post was sent
+          and no answer came, or the engine stopped while sending. It is not
+          sent again. `location_id`, `local_post_id`.
+        - `A post did not reach Google`: such a post was not found at Google
+          after 15 minutes. `location_id`, `local_post_id`.
+        - `A post could not be removed`: a request to remove a local post at
+          Google was given back (refused, out of attempts, not carried out
+          within an hour, its job is gone, or the post's address cannot be
+          used). The post may still be on the profile. `location_id`, `local_post_id`.
+        - `Google rejected a post`: Google took a local post and now shows
+          it as rejected. `location_id`, `local_post_id`.
+
+        New problems are added to this list, and a client shows a subject
+        it does not know as it is.
     DeliveryStatus:
       type: string
       enum: [pending, sent, failed, not_sent]
@@ -5511,7 +5696,9 @@ components:
           enum: [email, push]
         recipients:
           type: array
-          description: Email addresses. For `push`, the staff whose devices are told.
+          description: |
+            Email addresses. For `push`, the staff whose devices are told;
+            what a push says is `PushPayload`.
           items:
             type: string
         enabled:
@@ -5610,6 +5797,75 @@ components:
           type: string
           format: date-time
           description: The last request of the session the device belongs to.
+    PushPayload:
+      type: object
+      description: |
+        The JSON the engine gives Apple for a push to the phone app, not a
+        response of this API. It is built from the event's subject, its type
+        and its ids, and from nothing else: the body of an event, which may
+        quote a review, never reaches a push.
+
+        Only an `escalation` event has the title `New escalation`, the
+        category `ESCALATION` and the thread `escalation`; a
+        `system_problem` event has the title `System problem`, the category
+        `SYSTEM` and the thread `system`. There is no title per kind of
+        problem: the subject says what happened (the list is in
+        `NotificationEventType`). `aps.alert.body` is the event's subject,
+        cut to 178 characters (code points) with `…` added when it was
+        longer. The sound is always `default`.
+
+        Each id is there only when the event has it. An `escalation` event
+        carries `escalation_id`, `review_id` and `location_id`; a
+        `system_problem` carries the ids listed with its subject in
+        `NotificationEventType`. `client_id` is never in a push. An app opens a screen from
+        the ids and reads the rest from the API.
+
+        Apple is given a collapse id made from the event, so the same event
+        sent again (a retry) replaces the alert already shown and does
+        not add one.
+      additionalProperties: false
+      required: [aps, event_type]
+      properties:
+        aps:
+          type: object
+          additionalProperties: false
+          required: [alert, sound, category, thread-id]
+          properties:
+            alert:
+              type: object
+              additionalProperties: false
+              required: [title, body]
+              properties:
+                title:
+                  type: string
+                  enum: [New escalation, System problem]
+                body:
+                  type: string
+                  description: The event's subject, cut to 178 characters.
+            sound:
+              type: string
+              enum: [default]
+            category:
+              type: string
+              enum: [ESCALATION, SYSTEM]
+            thread-id:
+              type: string
+              enum: [escalation, system]
+        event_type:
+          type: string
+          enum: [escalation, system_problem]
+        escalation_id:
+          type: integer
+          format: int64
+        review_id:
+          type: integer
+          format: int64
+        location_id:
+          type: integer
+          format: int64
+        local_post_id:
+          type: integer
+          format: int64
     NotificationDelivery:
       type: object
       description: One message to one recipient.
@@ -5621,6 +5877,7 @@ components:
         - client_name
         - location_id
         - review_id
+        - escalation_id
         - channel
         - recipient
         - subject
@@ -5647,6 +5904,10 @@ components:
         review_id:
           type: [integer, "null"]
           format: int64
+        escalation_id:
+          type: [integer, "null"]
+          format: int64
+          description: The escalation the event was about; set for an `escalation` event and null for every other one.
         channel:
           type: string
         recipient:
@@ -5752,7 +6013,9 @@ components:
           description: At most this many automatic replies in any 24 hours; the next draft waits for a person. 100 unless changed.
         time_zone:
           type: [string, "null"]
-          description: IANA name, for example `America/New_York`. Needed for a posting window.
+          description: |
+            IANA name, for example `America/New_York`. Needed for a posting
+            window. The same value as `Location.time_zone`, set here.
         delay_min_minutes:
           type: integer
         delay_max_minutes:
@@ -6239,7 +6502,13 @@ components:
         drafts_waiting:
           type: integer
           format: int64
-          description: Drafts waiting for a person.
+          description: |
+            Reply drafts with the status `draft`, waiting for a person. It is
+            the `total` of `GET /api/reviews?draft_status=draft`: that list
+            shows the reviews that are not removed by default and takes each
+            review's newest draft, a review has at most one live draft (which
+            is its newest), and the drafts of a removed review are
+            cancelled, so the two count the same drafts.
         in_flight:
           type: integer
           format: int64
@@ -6311,6 +6580,8 @@ components:
         - error
         - hold_reason
         - new_reviews
+        - average_rating
+        - response_rate
         - summary
         - summary_note
         - created_at
@@ -6356,6 +6627,20 @@ components:
           type: [integer, "null"]
           format: int64
           description: The reviews written in the period; null until the report is built.
+        average_rating:
+          type: [number, "null"]
+          description: |
+            The average star rating of the period's reviews, as the built
+            report holds it. Null until the report is built, and when no
+            review of the period has a rating.
+        response_rate:
+          type: [number, "null"]
+          minimum: 0
+          maximum: 1
+          description: |
+            The share of the period's reviews that have a reply, 0 to 1 (0.75
+            is 75 %), as the built report holds it. Null until the report is
+            built, and when the period had no reviews.
         summary:
           type: [string, "null"]
           description: The model's summary of the figures; null when it gave none that could be used.
@@ -6403,7 +6688,7 @@ components:
         time_zone:
           type: string
           maxLength: 64
-          description: An IANA name. Without one, the time zone of the client's first location that has one, else UTC.
+          description: An IANA name. Without one, the time zone of the client's location with the lowest id that has one, else UTC.
     ReportShareLink:
       type: object
       description: |

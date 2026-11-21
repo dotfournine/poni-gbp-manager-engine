@@ -109,6 +109,37 @@ TEST_F(Notifications, AnEscalationAlertsOncePerOpening) {
     EXPECT_EQ(channel_.sent.size(), 1u);
 }
 
+TEST_F(Notifications, EveryDeliveryOfAnEscalationCarriesItsIdAndTheFilterReturnsThoseOnly) {
+    rule("escalation", std::nullopt, {"owner@xvisionmediaus.com", "manager@xvisionmediaus.com"});
+    rule("approval_needed", spa_client_, {"spa-team@xvisionmediaus.com"});
+    waiting_draft("r1", kSpa);
+    const auto id = flagged_review();
+    await(pipeline_->process(id, false, false));
+    run_jobs();
+    ASSERT_EQ(count("cases"), 1);
+    const auto escalation = value<std::int64_t>("SELECT id FROM cases");
+
+    const auto list = [&](const repo::DeliveryFilter& filter) { return tx([&](pqxx::work& tx) { return repo::list_deliveries(tx, filter); }); };
+    repo::DeliveryFilter of_it;
+    of_it.escalation_id = escalation;
+    const auto mine = list(of_it);
+    ASSERT_EQ(mine.total, 2) << "one per recipient";
+    for (const auto& item : mine.items) {
+        EXPECT_EQ(item.escalation_id, escalation);
+        EXPECT_EQ(item.event_type, "escalation");
+    }
+    // The delivery of another event is in the log without one.
+    const auto everything = list({});
+    ASSERT_EQ(everything.total, 3);
+    for (const auto& item : everything.items) {
+        if (item.event_type == "escalation") continue;
+        EXPECT_FALSE(item.escalation_id) << item.event_type;
+    }
+    repo::DeliveryFilter of_another;
+    of_another.escalation_id = escalation + 1;
+    EXPECT_EQ(list(of_another).total, 0);
+}
+
 TEST_F(Notifications, AnEscalationIsAssignedAndClosedWithAReasonAndOpensAgainIfTheReviewIsFlaggedAgain) {
     rule("escalation", std::nullopt, {"owner@xvisionmediaus.com"});
     const auto id = flagged_review();

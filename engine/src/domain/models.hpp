@@ -119,6 +119,9 @@ struct Location {
     // The read of the location's local posts (D-088 point 8).
     std::optional<std::string> local_posts_synced_at;
     std::optional<std::string> local_posts_sync_error;
+    std::optional<std::string> local_posts_sync_error_at;
+    // The one time zone of the location, for every purpose (D-071, D-098); nothing until a person entered it.
+    std::optional<std::string> time_zone;
 };
 BOOST_DESCRIBE_STRUCT(Location, (),
                       (id, gbp_location_id, gbp_account_id, client_id, client_name, title, store_code, primary_category,
@@ -126,7 +129,8 @@ BOOST_DESCRIBE_STRUCT(Location, (),
                        access_status, access_lost_at, first_seen_at, last_seen_at, review_poll_interval_s,
                        posting_enabled, review_count,
                        unreplied_count, average_rating, reviews_polled_at, reviews_full_synced_at, last_sync_error,
-                       last_sync_error_at, local_posts_synced_at, local_posts_sync_error))
+                       last_sync_error_at, local_posts_synced_at, local_posts_sync_error, local_posts_sync_error_at,
+                       time_zone))
 
 using LocationList = Paged<Location>;
 
@@ -710,6 +714,7 @@ struct NotificationDelivery {
     std::optional<std::string> client_name;
     std::optional<std::int64_t> location_id;
     std::optional<std::int64_t> review_id;
+    std::optional<std::int64_t> escalation_id;
     std::string channel;
     std::string recipient;
     std::string subject;
@@ -721,7 +726,7 @@ struct NotificationDelivery {
     std::optional<std::string> sent_at;
 };
 BOOST_DESCRIBE_STRUCT(NotificationDelivery, (),
-                      (id, event_type, client_id, client_name, location_id, review_id, channel, recipient,
+                      (id, event_type, client_id, client_name, location_id, review_id, escalation_id, channel, recipient,
                        subject, body, status, status_reason, attempts, created_at, sent_at))
 
 using NotificationDeliveryList = Paged<NotificationDelivery>;
@@ -968,6 +973,9 @@ struct Report {
     std::optional<std::string> hold_reason;
     // From the built report; nothing while it is building.
     std::optional<std::int64_t> new_reviews;
+    // The two headline figures of the built report, as its data holds them (D-085).
+    std::optional<double> average_rating;
+    std::optional<double> response_rate;
     std::optional<std::string> summary;
     std::optional<std::string> summary_note;
     std::string created_at;
@@ -978,7 +986,8 @@ struct Report {
 };
 BOOST_DESCRIBE_STRUCT(Report, (),
                       (id, client_id, client_name, period_start, period_end, time_zone, schedule_id, requested_by, status, error,
-                       hold_reason, new_reviews, summary, summary_note, created_at, sent_at, sent_by, share_links))
+                       hold_reason, new_reviews, average_rating, response_rate, summary, summary_note, created_at, sent_at, sent_by,
+                       share_links))
 
 using ReportList = Paged<Report>;
 

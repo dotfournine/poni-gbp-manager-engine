@@ -79,10 +79,11 @@ std::string location_select() {
                    AS unreplied_count,
                (SELECT avg(r.rating)::float8 FROM reviews r WHERE r.location_id = l.id AND r.removed_at IS NULL) AS average_rating,
                {} AS reviews_polled_at, {} AS reviews_full_synced_at, l.last_sync_error, {} AS last_sync_error_at, l.posting_enabled,
-               {} AS local_posts_synced_at, l.local_posts_sync_error
+               {} AS local_posts_synced_at, l.local_posts_sync_error, {} AS local_posts_sync_error_at, l.time_zone
           FROM locations l LEFT JOIN clients c ON c.id = l.client_id)sql",
                        iso("l.access_lost_at"), iso("l.first_seen_at"), iso("l.last_seen_at"), iso("l.reviews_polled_at"),
-                       iso("l.reviews_full_synced_at"), iso("l.last_sync_error_at"), iso("l.local_posts_synced_at"));
+                       iso("l.reviews_full_synced_at"), iso("l.last_sync_error_at"), iso("l.local_posts_synced_at"),
+                       iso("l.local_posts_sync_error_at"));
 }
 
 boost::json::value optional_json(const OptString& s) { return s ? boost::json::value(*s) : boost::json::value(nullptr); }

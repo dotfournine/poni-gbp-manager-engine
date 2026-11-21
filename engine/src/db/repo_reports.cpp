@@ -36,7 +36,9 @@ std::string report_select() {
     return std::format(R"sql(
         SELECT p.id, p.client_id, c.name AS client_name, p.period_start::text AS period_start, p.period_end::text AS period_end,
                p.time_zone, p.schedule_id, (SELECT u.email FROM users u WHERE u.id = p.requested_by) AS requested_by, p.status, p.error,
-               p.hold_reason, (p.data->'reviews'->>'new_reviews')::bigint AS new_reviews, p.data->>'summary' AS summary,
+               p.hold_reason, (p.data->'reviews'->>'new_reviews')::bigint AS new_reviews,
+               (p.data->'reviews'->>'average_rating')::float8 AS average_rating,
+               (p.data->'reviews'->>'response_rate')::float8 AS response_rate, p.data->>'summary' AS summary,
                nullif(p.data->>'summary_note', '') AS summary_note, {} AS created_at, {} AS sent_at,
                (SELECT u.email FROM users u WHERE u.id = p.sent_by) AS sent_by
           FROM reports p

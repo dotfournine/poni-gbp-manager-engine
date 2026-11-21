@@ -3,6 +3,7 @@
 openapi.yaml:
   operation-4xx-response:
     - '#/paths/~1api~1health/get/responses'
+    - '#/paths/~1api~1session/get/responses'
   operation-2xx-response:
     - '#/paths/~1api~1auth~1google~1start/get/responses'
     - '#/paths/~1api~1auth~1google~1callback/get/responses'

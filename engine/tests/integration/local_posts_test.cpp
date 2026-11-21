@@ -620,10 +620,14 @@ TEST_F(LocalPosts, ALocationSaysWhenItsPostsWereLastRead) {
     const auto before = read(std::format("/api/locations/{}", spa_));
     EXPECT_TRUE(before.at("local_posts_synced_at").is_null());
     EXPECT_TRUE(before.at("local_posts_sync_error").is_null());
-    exec(std::format("UPDATE locations SET local_posts_synced_at = '2026-11-10T12:00:00Z', local_posts_sync_error = 'HTTP 503' WHERE id = {}", spa_));
+    EXPECT_TRUE(before.at("local_posts_sync_error_at").is_null());
+    exec(std::format("UPDATE locations SET local_posts_synced_at = '2026-11-10T12:00:00Z', local_posts_sync_error = 'HTTP 503', "
+                     "local_posts_sync_error_at = '2026-11-10T13:00:00Z' WHERE id = {}",
+                     spa_));
     const auto after = read(std::format("/api/locations/{}", spa_));
     EXPECT_EQ(after.at("local_posts_synced_at").as_string(), "2026-11-10T12:00:00.000000Z");
     EXPECT_EQ(after.at("local_posts_sync_error").as_string(), "HTTP 503");
+    EXPECT_EQ(after.at("local_posts_sync_error_at").as_string(), "2026-11-10T13:00:00.000000Z");
 }
 
 // ---- what the table itself refuses ------------------------------------------------------

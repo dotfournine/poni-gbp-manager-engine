@@ -439,6 +439,9 @@ TEST_F(RepliesApi, NotificationRulesAreManagedAndTheLogShowsWhatHappened) {
     EXPECT_EQ(log.at("items").as_array().at(0).at("status").as_string(), "not_sent");
     EXPECT_EQ(log.at("items").as_array().at(0).at("status_reason").as_string(), "email sending is switched off");
     EXPECT_EQ(log.at("items").as_array().at(0).at("recipient").as_string(), "team@xvisionmediaus.com");
+    EXPECT_TRUE(log.at("items").as_array().at(0).at("escalation_id").is_null()) << "a draft's event is not about an escalation";
+    EXPECT_EQ(read("/api/notification-deliveries?escalation_id=1").at("total").as_int64(), 0);
+    EXPECT_EQ(get("/api/notification-deliveries?escalation_id=first", browser_).status, 400u);
     EXPECT_TRUE(channel_.sent.empty());
 
     const auto changed = patch(path, R"({"recipients": ["team@xvisionmediaus.com", "owner@xvisionmediaus.com"], "enabled": false})");
@@ -473,6 +476,30 @@ TEST_F(RepliesApi, NotificationRulesAreManagedAndTheLogShowsWhatHappened) {
 }
 
 // ---- auto-posting ------------------------------------------------------
+
+TEST_F(RepliesApi, ALocationShowsItsTimeZoneInTheListAndWhenRead) {
+    const auto zone_in_list = [&](std::int64_t id) -> boost::json::value {
+        for (const auto& item : read("/api/locations").at("items").as_array()) {
+            if (item.at("id").as_int64() == id) return item.at("time_zone");
+        }
+        return "not listed";
+    };
+    const auto target = "/api/locations/" + std::to_string(spa_) + "/auto-posting";
+    EXPECT_TRUE(read("/api/locations/" + std::to_string(spa_)).at("time_zone").is_null()) << "Google gives none";
+    EXPECT_TRUE(zone_in_list(spa_).is_null());
+
+    // It is set where auto-posting's own settings are, and nowhere else: one value, shown in both places.
+    ASSERT_EQ(patch(target, R"({"time_zone": "America/New_York"})").status, 200u);
+    EXPECT_EQ(read("/api/locations/" + std::to_string(spa_)).at("time_zone").as_string(), "America/New_York");
+    EXPECT_EQ(zone_in_list(spa_).as_string(), "America/New_York");
+    EXPECT_EQ(auto_posting_of(spa_).at("time_zone").as_string(), "America/New_York");
+    EXPECT_EQ(patch("/api/locations/" + std::to_string(spa_), R"({"time_zone": "Europe/Paris"})").status, 400u)
+        << "the location's own update does not take it";
+    EXPECT_EQ(count("locations WHERE auto_post_enabled"), 0);
+
+    ASSERT_EQ(patch(target, R"({"time_zone": null})").status, 200u);
+    EXPECT_TRUE(read("/api/locations/" + std::to_string(spa_)).at("time_zone").is_null());
+}
 
 TEST_F(RepliesApi, AutoPostingEndpointsNeedASessionAndEveryChangeTheCsrfToken) {
     draft_for();

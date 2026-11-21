@@ -528,6 +528,8 @@ try {
     check("POST /api/notifications/test", "/api/notifications/test", "POST", await call("POST", "/api/notifications/test", { body: { recipient: "contract-check@example.com" } }));
   }
   check("GET /api/notification-deliveries?status=not_sent", "/api/notification-deliveries", "GET", await call("GET", "/api/notification-deliveries?status=not_sent"));
+  check("GET /api/notification-deliveries?escalation_id=1", "/api/notification-deliveries", "GET", await call("GET", "/api/notification-deliveries?escalation_id=1"));
+  expectStatus("GET /api/notification-deliveries?escalation_id=x", await call("GET", "/api/notification-deliveries?escalation_id=x"), 400, "invalid_request");
 
   // Phase 5: reports. A client of its own, because the one above is archived.
   // It has no location and no review, so building its report asks neither

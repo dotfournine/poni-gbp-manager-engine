@@ -155,6 +155,7 @@ Result<void> delete_rule(pqxx::transaction_base& tx, audit::Writer& audit, std::
 struct DeliveryFilter {
     std::string event_type;  // one of kEventTypes; empty: any
     std::string status;      // one of kDeliveryStatuses; empty: any
+    std::optional<std::int64_t> escalation_id;  // the deliveries of one escalation's events
     db::Page page;
 };
 model::NotificationDeliveryList list_deliveries(pqxx::transaction_base& tx, const DeliveryFilter& filter);
