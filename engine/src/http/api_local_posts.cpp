@@ -4,7 +4,9 @@
 //
 // Every route here needs a signed-in person. A post reaches Google in one
 // way: the approval of a signed-in person, which carries the content that
-// person read (D-088 point 3).
+// person read (D-088 point 3). A post that is at Google is changed there in
+// one way too: the approval of an edit of it, which carries the edit's
+// content as that person read it (D-099).
 //
 // The last three routes are the help with writing one (D-088 point 11): what
 // customers praised lately, from the stored analysis, and the model's ideas
@@ -55,6 +57,13 @@ struct DraftRequestBody {
     static constexpr bool sent_whole = true;
 };
 BOOST_DESCRIBE_STRUCT(DraftRequestBody, (), (topic_type, language_code, brief, summary, title))
+
+// LocalPostEditRequest: what the post should say, and the post's content as the person saw it.
+struct EditRequestBody {
+    domain::LocalPostContent content;
+    domain::LocalPostContent based_on;
+};
+BOOST_DESCRIBE_STRUCT(EditRequestBody, (), (content, based_on))
 
 // The limits of LocalPostDraftRequest, in code points.
 constexpr std::size_t kBriefMax = 2000;
@@ -127,6 +136,43 @@ void add_local_post_routes(Router& router, const Api& api, storage::ObjectStore*
                    co_return respond(co_await api.change(request, [id = *id](pqxx::work& tx, audit::Writer& audit) {
                        return repo::delete_local_post(tx, audit, id);
                    }), Response::no_content());
+               });
+
+    // An edit of a post that is at Google (D-099): written, replaced and discarded here, and nothing goes
+    // to Google before a person approves it. Like the routes that send a post, the two that lead to a
+    // request are not offered against the mock.
+    router.add(verb::put, "/api/local-posts/{id}/edit", {Access::user, "local_posts.write_edit"},
+               [api, media_base](const Request& request) -> asio::awaitable<Response> {
+                   const auto id = path_id(request);
+                   if (!id) co_return not_found("local post");
+                   if (api.options.google_mock) co_return unavailable();
+                   const auto body = body_as<EditRequestBody>(request);
+                   if (!body) co_return body.error();
+                   co_return respond(co_await api.change(request, [id = *id, edit = *body, media_base](pqxx::work& tx, audit::Writer& audit) {
+                       return repo::write_local_post_edit(tx, audit, id, edit.content, edit.based_on, media_base);
+                   }));
+               });
+
+    router.add(verb::delete_, "/api/local-posts/{id}/edit", {Access::user, "local_posts.discard_edit"},
+               [api](const Request& request) -> asio::awaitable<Response> {
+                   const auto id = path_id(request);
+                   if (!id) co_return not_found("local post");
+                   co_return respond(co_await api.change(request, [id = *id](pqxx::work& tx, audit::Writer& audit) {
+                       return repo::discard_local_post_edit(tx, audit, id);
+                   }), Response::no_content());
+               });
+
+    // The only way a post that is at Google is changed there: the body is the edit's content as the person read it.
+    router.add(verb::post, "/api/local-posts/{id}/edit/approve", {Access::user, "local_posts.approve_edit"},
+               [api, media_base](const Request& request) -> asio::awaitable<Response> {
+                   const auto id = path_id(request);
+                   if (!id) co_return not_found("local post");
+                   if (api.options.google_mock) co_return unavailable();
+                   const auto body = body_as<domain::LocalPostContent>(request);
+                   if (!body) co_return body.error();
+                   co_return respond(co_await api.change(request, [id = *id, content = *body, media_base](pqxx::work& tx, audit::Writer& audit) {
+                       return repo::approve_local_post_edit(tx, audit, id, content, media_base);
+                   }), 202);
                });
 
     // A new draft from any post, also one made at Google (D-094). Like writing one, it is not offered

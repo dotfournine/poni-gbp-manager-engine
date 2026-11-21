@@ -500,7 +500,7 @@ TEST_F(LocalPostsPublish, OnlyADraftCanBeEditedOrRejected) {
     const auto id = draft(spa_);
     approve_and_send(id);
     EXPECT_EQ(edit(id, standard("Changed my mind.")).error().code, "local_post_not_open")
-        << "a post that is at Google is not edited: it is removed and written again";
+        << "a post that is at Google is not edited as a draft: it gets an edit of its own (D-099)";
     EXPECT_EQ(reject(id).error().code, "local_post_not_open");
     EXPECT_EQ(post(id, "content->>'summary'"), "Fall specials start Monday.");
     EXPECT_EQ(edit(999999, standard()).error().kind, repo::Failure::Kind::not_found);

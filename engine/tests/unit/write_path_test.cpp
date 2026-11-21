@@ -1,8 +1,8 @@
 // The engine's ways out, against a scripted HTTP client and the real
-// outbound client: the three requests that change something at Google (a
+// outbound client: the four requests that change something at Google (a
 // reply to a review, the create of a local post, the delete of a local
-// post), each of which the client refuses to send anywhere else, and the
-// email the Gmail channel builds.
+// post, the edit of a local post), each of which the client refuses to send
+// anywhere else, and the email the Gmail channel builds.
 
 #include "connectors/gbp/writer.hpp"
 #include "connectors/notify/gmail.hpp"
@@ -330,7 +330,8 @@ TEST(OutboundAddress, AHostIsNamedWithLettersDigitsDotsAndHyphensForEveryMethod)
                                 "https://mybusiness.googleapis.com%00.example/v4/accounts/111/locations/9001/media",
                                 "https://mybusiness%EF%BC%8Egoogleapis.com/v4/accounts/111/locations/9001/media",  // a full-width dot
                                 "https://my_business.googleapis.com/v4/accounts/111/locations/9001/media"}) {
-        for (const auto method : {http::ClientMethod::get, http::ClientMethod::post, http::ClientMethod::put, http::ClientMethod::del}) {
+        for (const auto method : {http::ClientMethod::get, http::ClientMethod::post, http::ClientMethod::put, http::ClientMethod::del,
+                                  http::ClientMethod::patch}) {
             EXPECT_TRUE(http::why_refused(method, boost::urls::url(written))) << written;
         }
     }
@@ -347,7 +348,7 @@ TEST(OutboundAddress, AHostIsNamedWithLettersDigitsDotsAndHyphensForEveryMethod)
 }
 
 TEST(OutboundAddress, AMethodTheClientDoesNotKnowIsRefused) {
-    EXPECT_TRUE(http::why_refused(static_cast<http::ClientMethod>(4), boost::urls::url("https://example.com/x")));
+    EXPECT_TRUE(http::why_refused(static_cast<http::ClientMethod>(5), boost::urls::url("https://example.com/x")));
 }
 
 // ---- what a request may not carry ---------------------------------------------------------------
@@ -471,8 +472,209 @@ TEST_F(WritePath, TheScriptedClientRefusesWhatTheRealOneRefuses) {
                  std::invalid_argument);
     EXPECT_THROW(await(http_.send(request_to(http::ClientMethod::put, "https://mybusiness.googleapis.com/v4/accounts/1/locations/2"))),
                  std::invalid_argument);
+    EXPECT_THROW(await(http_.send(request_to(http::ClientMethod::patch, "https://mybusiness.googleapis.com/v4/accounts/1/locations/2?updateMask=summary"))),
+                 std::invalid_argument);
+    EXPECT_THROW(await(http_.send(request_to(http::ClientMethod::patch, kLocalPostUrl))), std::invalid_argument) << "a PATCH without its mask";
     EXPECT_TRUE(http_.requests.empty()) << "a refused request is not a sent one";
-    EXPECT_EQ(http_.refused.size(), 3u);
+    EXPECT_EQ(http_.refused.size(), 5u);
+}
+
+// ---- the outbound client: PATCH exists for one address only (D-099) ------------------------
+
+namespace {
+
+constexpr std::string_view kLocalPostUpdateUrl =
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/7856477975681504943?updateMask=summary";
+
+// Every way of writing the one address a PATCH may go to that is not that address, and every mask
+// that is not one or more of the six field names, each once, joined by commas.
+const auto kNotALocalPostUpdate = std::to_array<const char*>({
+    // without a mask, or with an empty one
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask",
+    // a field that is not one of the six: the kind, the time, what only Google writes, everything at once
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=topicType",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=scheduledTime",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary,scheduledTime",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=state",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=name",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=alertType",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=*",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=event.title",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=Summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=call_to_action",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summar",
+    // a name twice, a stray comma, a space
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary,summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary,event,summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary,",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=,summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary,,event",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary,%20event",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary+event",
+    // anything percent-encoded, which a server would read as one of the above or as something else
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary%2Cevent",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=%73ummary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?update%4Dask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask%3Dsummary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary%26validateOnly=true",
+    // a second parameter, before or after, and the parameter under another name
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary&validateOnly=true",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary&updateMask=topicType",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?alt=json&updateMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary&",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary;x=1",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?update_mask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updatemask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?fieldMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary#x",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary?x",
+    // other things on a profile, with a mask that would be allowed on a post
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/reviews/r1?updateMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/reviews/r1/reply?updateMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001?updateMask=summary",                // a location
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001?updateMask=media",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts?updateMask=summary",     // the list
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/media/m1?updateMask=media",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/media/localPosts/m1?updateMask=media",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/questions/q1?updateMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111?updateMask=summary",
+    "https://mybusinessbusinessinformation.googleapis.com/v1/locations/9001?updateMask=title",
+    "https://mybusinessaccountmanagement.googleapis.com/v1/accounts/111/admins/a1?updateMask=summary",
+    "https://storage.googleapis.com/storage/v1/b/poni-public/o/r%2Ftoken.html?updateMask=summary",
+    "https://gmail.googleapis.com/gmail/v1/users/me/messages/m1?updateMask=summary",
+    // the address of a post, written another way
+    "http://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary",   // not TLS
+    "https://mybusiness.googleapis.com.evil.example/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary",
+    "https://evil.example/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary",
+    "https://mybusiness.googleapis.com:8443/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary",
+    "https://mybusiness.googleapis.com:443/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary",
+    "https://user@mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary",
+    "https://MyBusiness.GoogleAPIs.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary",
+    "https://mybusiness.googleapis.com./v4/accounts/111/locations/9001/localPosts/1?updateMask=summary",
+    "HTTPS://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1?updateMask=summary",
+    "https://mybusiness.googleapis.com/./v4/accounts/111/locations/9001/localPosts/1?updateMask=summary",
+    "https://mybusiness.googleapis.com//v4/accounts/111/locations/9001/localPosts/1?updateMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1/?updateMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1/extra?updateMask=summary",
+    "https://mybusiness.googleapis.com/v5/accounts/111/locations/9001/localPosts/1?updateMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localposts/1?updateMask=summary",
+    "https://mybusiness.googleapis.com/%76%34/accounts/111/locations/9001/local%50osts/1?updateMask=summary",
+    // ids that are no ids: a server that resolves dot segments would land on the location
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/..?updateMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/%2E%2E?updateMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/.?updateMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/../localPosts/1?updateMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts//locations/9001/localPosts/1?updateMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1%2F..%2F..%2Freviews%2Fr1?updateMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1%3FupdateMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/1%3Fx?updateMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001%2F..%2F9002/localPosts/1?updateMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/a%20b?updateMask=summary",
+    "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/7:x?updateMask=summary",
+});
+
+}  // namespace
+
+TEST(OutboundPatch, OnlyTheAddressOfALocalPostWithItsMaskIsOne) {
+    EXPECT_TRUE(http::is_local_post_update_url(boost::urls::url(kLocalPostUpdateUrl)));
+    EXPECT_FALSE(http::why_refused(http::ClientMethod::patch, boost::urls::url(kLocalPostUpdateUrl)));
+    // Each of the six fields alone, several in any order, and all of them.
+    for (const auto* mask : {"summary", "callToAction", "event", "offer", "media", "languageCode", "summary,callToAction", "event,summary",
+                             "media,languageCode,offer", "summary,callToAction,event,offer,media,languageCode"}) {
+        const boost::urls::url address(std::format("https://mybusiness.googleapis.com/v4/accounts/a-1/locations/l_2/localPosts/AbC-9_x?updateMask={}", mask));
+        EXPECT_TRUE(http::is_local_post_update_url(address)) << mask;
+        EXPECT_FALSE(http::why_refused(http::ClientMethod::patch, address)) << mask;
+    }
+    for (const auto* other : kNotALocalPostUpdate) EXPECT_FALSE(http::is_local_post_update_url(boost::urls::url(other))) << other;
+}
+
+TEST(OutboundPatch, EveryOtherPatchIsRefused) {
+    for (const auto* other : kNotALocalPostUpdate) {
+        const auto refusal = http::why_refused(http::ClientMethod::patch, boost::urls::url(other));
+        ASSERT_TRUE(refusal) << other;
+        EXPECT_THAT(std::string(*refusal), HasSubstr("PATCH"));
+    }
+    // Everything a DELETE may not go to, a PATCH may not go to either, with or without a mask.
+    for (const auto* other : kNotALocalPost) {
+        EXPECT_TRUE(http::why_refused(http::ClientMethod::patch, boost::urls::url(other))) << other;
+        if (std::string_view(other).find_first_of("?#") != std::string_view::npos) continue;
+        EXPECT_TRUE(http::why_refused(http::ClientMethod::patch, boost::urls::url(std::string(other) + "?updateMask=summary"))) << other;
+    }
+    // Nothing else of the engine's is a PATCH: not its ordinary calls to other hosts, a model or its own machine.
+    for (const auto* elsewhere : {"https://oauth2.googleapis.com/token", "https://gmail.googleapis.com/gmail/v1/users/me/settings",
+                                  "https://storage.googleapis.com/storage/v1/b/poni-public/o/x", "https://api.anthropic.com/v1/messages",
+                                  "https://example.com/x?updateMask=summary", "http://127.0.0.1:8090/x", "http://localhost:8080/api/clients/1"}) {
+        EXPECT_TRUE(http::why_refused(http::ClientMethod::patch, boost::urls::url(elsewhere))) << elsewhere;
+    }
+    // The address with its mask belongs to the PATCH alone: nothing is deleted, replaced or created under it,
+    // and the one address a PUT may go to takes no PATCH.
+    const boost::urls::url update(kLocalPostUpdateUrl);
+    EXPECT_TRUE(http::why_refused(http::ClientMethod::del, update));
+    EXPECT_TRUE(http::why_refused(http::ClientMethod::put, update));
+    EXPECT_TRUE(http::why_refused(http::ClientMethod::post, update));
+    EXPECT_TRUE(http::why_refused(http::ClientMethod::patch, boost::urls::url(kReplyUrl)));
+    EXPECT_TRUE(http::why_refused(http::ClientMethod::patch, boost::urls::url(std::string(kReplyUrl) + "?updateMask=summary")));
+    EXPECT_TRUE(http::why_refused(http::ClientMethod::patch, boost::urls::url(kLocalPostsUrl)));
+    EXPECT_TRUE(http::why_refused(http::ClientMethod::patch, boost::urls::url(kBatchGetReviewsUrl)));
+    // Reading a post is not limited, whatever follows its address.
+    EXPECT_FALSE(http::why_refused(http::ClientMethod::get, update));
+
+    // An id of 128 characters is one; one more is not.
+    const std::string long_id(129, '7');
+    EXPECT_TRUE(http::why_refused(http::ClientMethod::patch,
+                                  boost::urls::url("https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/" + long_id +
+                                                   "?updateMask=summary")));
+    EXPECT_FALSE(http::why_refused(http::ClientMethod::patch,
+                                   boost::urls::url("https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/" +
+                                                    long_id.substr(1) + "?updateMask=summary")));
+}
+
+TEST(OutboundPatch, TheClientRefusesAnyOtherPatchBeforeOpeningAConnection) {
+    RefusingClient refusing;
+    for (const auto* target : kNotALocalPostUpdate) {
+        // invalid_argument, not a network error: nothing was resolved or connected.
+        EXPECT_THROW(refusing.send(request_to(http::ClientMethod::patch, target)), std::invalid_argument) << target;
+    }
+    EXPECT_THROW(refusing.send(request_to(http::ClientMethod::patch, "http://127.0.0.1:1/v4/accounts/1/locations/2/localPosts/3?updateMask=summary")),
+                 std::invalid_argument)
+        << "not on the engine's own machine either";
+    // The address of a local post with its mask is let through to the network, which here is nothing: a transport error, not a refusal.
+    auto allowed = request_to(http::ClientMethod::patch, kLocalPostUpdateUrl);
+    allowed.content_type = "application/json";
+    allowed.body = R"({"summary": "Open late on Fridays."})";
+    EXPECT_THROW(refusing.send(std::move(allowed)), boost::system::system_error);
+}
+
+TEST(OutboundPatch, NoHeaderTurnsAnotherRequestIntoAPatchOrThePatchIntoAnotherRequest) {
+    // Google's front ends take a method from X-HTTP-Method-Override on a POST: neither may a POST become a PATCH
+    // that way, nor the PATCH something else.
+    for (const auto* name : {"X-HTTP-Method-Override", "x-http-method-override", "X-HTTP-Method", "X-Method-Override", "Host",
+                             "Content-Length", "Transfer-Encoding"}) {
+        auto patch = request_to(http::ClientMethod::patch, kLocalPostUpdateUrl);
+        patch.headers.emplace_back(name, "DELETE");
+        EXPECT_TRUE(http::why_refused(patch)) << name;
+        auto post = request_to(http::ClientMethod::post, kLocalPostsUrl);
+        post.headers.emplace_back(name, "PATCH");
+        EXPECT_TRUE(http::why_refused(post)) << name;
+    }
+    auto smuggled = request_to(http::ClientMethod::patch, kLocalPostUpdateUrl);
+    smuggled.headers.emplace_back("Authorization", "Bearer x\r\nX-HTTP-Method-Override: DELETE");
+    EXPECT_TRUE(http::why_refused(smuggled));
+
+    // What the connector sends is untouched.
+    auto ordinary = request_to(http::ClientMethod::patch, kLocalPostUpdateUrl);
+    ordinary.headers.emplace_back("Authorization", "Bearer token-1");
+    ordinary.content_type = "application/json";
+    ordinary.body = R"({"summary": "Open late on Fridays."})";
+    EXPECT_FALSE(http::why_refused(ordinary));
+
+    RefusingClient refusing;
+    auto through_the_client = request_to(http::ClientMethod::patch, kLocalPostUpdateUrl);
+    through_the_client.headers.emplace_back("X-HTTP-Method-Override", "DELETE");
+    EXPECT_THROW(refusing.send(std::move(through_the_client)), std::invalid_argument);
 }
 
 // ---- email ----------------------------------------------------------------------------

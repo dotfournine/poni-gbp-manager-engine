@@ -88,7 +88,7 @@ TEST_F(LocalPosts, ADraftIsShownWithItsContentAndItsAuthor) {
     EXPECT_EQ(post.at("language_code").as_string(), "en");
     EXPECT_EQ(post.at("created_by").as_string(), "staff@xvisionmediaus.com");
     for (const auto* nothing : {"status_reason", "google_state", "google_name", "search_url", "call_to_action", "event", "offer",
-                                "media_id", "scheduled_time", "edited_by", "decided_by", "decided_at", "sent_at",
+                                "media_id", "scheduled_time", "edit", "edited_by", "decided_by", "decided_at", "sent_at",
                                 "removal_requested_by", "removal_requested_at", "removed_at", "google_created_at", "synced_at"}) {
         EXPECT_TRUE(post.at(nothing).is_null()) << nothing;
     }
@@ -1105,4 +1105,268 @@ TEST_F(LocalPosts, APostTheSyncFoundAndADraftWrittenNewHaveNoLinks) {
         EXPECT_TRUE(shown.at("copies").is_array()) << id;
         EXPECT_TRUE(shown.at("copies").as_array().empty()) << id;
     }
+}
+
+// ---- an edit of a post that is at Google (D-099) --------------------------------------------------------
+
+namespace {
+
+class LocalPostEdits : public LocalPosts {
+protected:
+    // A post Google has, made in its own interface, with a button.
+    std::int64_t at_google(const std::string& summary = "Open late on Fridays.") {
+        auto content = test::standard(summary);
+        content.call_to_action = domain::LocalPostCallToAction{.action_type = "learn_more", .url = "https://example.com/hours"};
+        return insert_local_post(spa_, "origin, status, content, google_name, google_state",
+                                 std::format("'google', 'sent', {}, 'accounts/111/locations/9001/localPosts/{}', 'live'", test::content_sql(content),
+                                             ++google_ids_));
+    }
+    // The post's content as the API shows it, with `members` in place of its own: what the app sends as an edit.
+    std::string edit_body(std::int64_t id, std::string_view members) {
+        auto content = boost::json::parse(content_of(read(std::format("/api/local-posts/{}", id)))).as_object();
+        for (const auto& member : boost::json::parse(members).as_object()) content[member.key()] = member.value();
+        return boost::json::serialize(content);
+    }
+    // The body of a PUT: that content, and the post's content as just read, which is what the person had in front of them.
+    std::string edit_request(std::int64_t id, std::string_view members) {
+        return boost::json::serialize(boost::json::object{
+            {"content", boost::json::parse(edit_body(id, members))},
+            {"based_on", boost::json::parse(content_of(read(std::format("/api/local-posts/{}", id))))}});
+    }
+    static std::string target(std::int64_t id) { return std::format("/api/local-posts/{}/edit", id); }
+};
+
+}  // namespace
+
+TEST_F(LocalPostEdits, AnEditIsWrittenReplacedAndApprovedThroughTheApi) {
+    exec("UPDATE system_settings SET posting_enabled = true");
+    const auto id = at_google();
+    EXPECT_TRUE(read(std::format("/api/local-posts/{}", id)).at("edit").is_null());
+
+    const auto written = put(target(id), edit_request(id, R"({"summary": "Open late on Saturdays."})"));
+    ASSERT_EQ(written.status, 200u) << written.body;
+    const auto shown = json(written);
+    const auto& edit = shown.at("edit");
+    EXPECT_EQ(edit.at("status").as_string(), "draft");
+    EXPECT_TRUE(edit.at("status_reason").is_null());
+    EXPECT_EQ(edit.at("written_by").as_string(), "staff@xvisionmediaus.com");
+    EXPECT_FALSE(edit.at("written_at").as_string().empty());
+    EXPECT_TRUE(edit.at("decided_by").is_null());
+    EXPECT_TRUE(edit.at("decided_at").is_null());
+    EXPECT_EQ(edit.at("checks").as_array().size(), 12u);
+    for (const auto& check : edit.at("checks").as_array()) EXPECT_TRUE(check.at("passed").as_bool()) << check.at("name").as_string();
+    // The edit's content is a whole LocalPostContent, the body an approval sends back.
+    EXPECT_EQ(edit.at("content").as_object().size(), 8u);
+    EXPECT_EQ(edit.at("content").at("summary").as_string(), "Open late on Saturdays.");
+    EXPECT_EQ(edit.at("content").at("call_to_action").at("url").as_string(), "https://example.com/hours");
+    EXPECT_EQ(edit.as_object().size(), 10u)
+        << "content, fields, media, checks, status, status_reason, written_by, written_at, decided_by, decided_at";
+    // What the edit changes, by the names of the content's members, and what the post would show with it.
+    EXPECT_EQ(edit.at("fields"), boost::json::parse(R"(["summary"])"));
+    EXPECT_TRUE(edit.at("media").as_array().empty());
+    // The post itself is as it was: what Google has.
+    EXPECT_EQ(json(written).at("summary").as_string(), "Open late on Fridays.");
+    EXPECT_EQ(json(written).at("status").as_string(), "sent");
+    EXPECT_TRUE(json(written).at("edited_by").is_null());
+    // Everyone who reads the post or the list sees that an edit is open, and by whom.
+    EXPECT_EQ(read("/api/local-posts").at("items").at(0).at("edit").at("written_by").as_string(), "staff@xvisionmediaus.com");
+
+    // Sent again, it replaces the draft.
+    const auto replaced = put(target(id), edit_request(id, R"({"summary": "Open late on Sundays.", "call_to_action": null})"));
+    ASSERT_EQ(replaced.status, 200u) << replaced.body;
+    EXPECT_EQ(json(replaced).at("edit").at("content").at("summary").as_string(), "Open late on Sundays.");
+    EXPECT_TRUE(json(replaced).at("edit").at("content").at("call_to_action").is_null());
+    EXPECT_EQ(json(replaced).at("edit").at("fields"), boost::json::parse(R"(["summary", "call_to_action"])"));
+    EXPECT_EQ(count("local_post_edits"), 1);
+
+    // The approval carries the edit's content as the person read it.
+    const auto stale = post(target(id) + "/approve", boost::json::serialize(edit.at("content")));
+    EXPECT_EQ(stale.status, 409u);
+    EXPECT_EQ(error_code(stale), "local_post_changed");
+    const auto approved = post(target(id) + "/approve", boost::json::serialize(json(replaced).at("edit").at("content")));
+    ASSERT_EQ(approved.status, 202u) << approved.body;
+    EXPECT_EQ(json(approved).at("edit").at("status").as_string(), "approved");
+    EXPECT_EQ(json(approved).at("edit").at("decided_by").as_string(), "staff@xvisionmediaus.com");
+    EXPECT_FALSE(json(approved).at("edit").at("decided_at").is_null());
+    EXPECT_EQ(json(approved).at("summary").as_string(), "Open late on Fridays.") << "nothing has changed at Google yet";
+    EXPECT_EQ(count("jobs WHERE kind = 'local_posts.edit'"), 1);
+    EXPECT_EQ(count("jobs"), 1) << "and nothing else is queued";
+
+    // On its way, it is neither replaced, nor discarded, nor approved again.
+    EXPECT_EQ(error_code(put(target(id), edit_request(id, R"({"summary": "Too late."})"))), "local_post_edit_not_open");
+    EXPECT_EQ(error_code(del(target(id))), "local_post_edit_not_open");
+    EXPECT_EQ(error_code(post(target(id) + "/approve", boost::json::serialize(json(replaced).at("edit").at("content")))), "local_post_edit_not_open");
+    // The draft's own route still does not take a post that is at Google.
+    EXPECT_EQ(error_code(put(std::format("/api/local-posts/{}", id), kStandard)), "local_post_not_open");
+
+    // The post's page shows who did what, newest first.
+    const auto log = read(std::format("/api/audit-log?object_type=local_post&object_id={}", id)).at("items").as_array();
+    ASSERT_EQ(log.size(), 3u);
+    EXPECT_EQ(log[0].at("action").as_string(), "local_post.edit_approve");
+    EXPECT_EQ(log[0].at("after").at("edit").at("summary").as_string(), "Open late on Sundays.") << "what was approved is kept";
+    EXPECT_EQ(log[0].at("after").at("fields"), boost::json::parse(R"(["summary", "call_to_action"])"));
+    EXPECT_EQ(log[1].at("action").as_string(), "local_post.edit_write");
+    EXPECT_EQ(log[1].at("before").at("edit").at("summary").as_string(), "Open late on Saturdays.");
+    EXPECT_EQ(log[2].at("action").as_string(), "local_post.edit_write");
+    EXPECT_EQ(log[2].at("actor").as_string(), "staff@xvisionmediaus.com");
+}
+
+TEST_F(LocalPostEdits, AnEditIsDiscardedAndTheAuditLogKeepsWhatItSaid) {
+    const auto id = at_google();
+    ASSERT_EQ(put(target(id), edit_request(id, R"({"summary": "Open late on Saturdays."})")).status, 200u);
+    const auto discarded = del(target(id));
+    ASSERT_EQ(discarded.status, 204u) << discarded.body;
+    EXPECT_TRUE(discarded.body.empty());
+    const auto after = read(std::format("/api/local-posts/{}", id));
+    EXPECT_TRUE(after.at("edit").is_null());
+    EXPECT_EQ(after.at("summary").as_string(), "Open late on Fridays.");
+    EXPECT_EQ(after.at("status").as_string(), "sent") << "the post is not deleted, and nothing at Google is touched";
+    const auto again = del(target(id));
+    EXPECT_EQ(again.status, 409u);
+    EXPECT_EQ(error_code(again), "local_post_edit_not_open");
+    const auto log = read(std::format("/api/audit-log?object_type=local_post&object_id={}", id)).at("items").as_array();
+    ASSERT_EQ(log.size(), 2u);
+    EXPECT_EQ(log[0].at("action").as_string(), "local_post.edit_discard");
+    EXPECT_EQ(log[0].at("before").at("edit").at("summary").as_string(), "Open late on Saturdays.");
+    EXPECT_EQ(count("jobs"), 0) << "nothing goes to Google";
+}
+
+TEST_F(LocalPostEdits, WhatAnEditMayNotBeIsRefusedWithAnAnswerThatSaysWhy) {
+    const auto id = at_google();
+    const auto refused = [&](std::string body) {
+        const auto response = put(target(id), std::move(body));
+        EXPECT_EQ(response.status, 400u) << response.body;
+        return response.status == 400 ? std::string(json(response).at("error").at("message").as_string()) : std::string{};
+    };
+    // The body is read strictly (D-092): the two contents, each whole, and nothing else.
+    EXPECT_THAT(refused("[]"), testing::HasSubstr("JSON object"));
+    EXPECT_THAT(refused(edit_body(id, "{}")), testing::HasSubstr("topic_type")) << "a bare content, as the draft's route takes it, is not this body";
+    EXPECT_THAT(refused(boost::json::serialize(boost::json::object{{"content", boost::json::parse(edit_body(id, "{}"))}})),
+                testing::HasSubstr("based_on"))
+        << "what the person was looking at is not optional";
+    EXPECT_THAT(refused(boost::json::serialize(boost::json::object{{"content", boost::json::parse(edit_body(id, "{}"))}, {"based_on", nullptr}})),
+                testing::HasSubstr("based_on"));
+    EXPECT_THAT(refused(edit_request(id, R"({"edited_by": "someone"})")), testing::HasSubstr("edited_by"));
+    EXPECT_THAT(refused(edit_request(id, R"({"summary": null})")), testing::HasSubstr("summary"));
+    // What is not a post at all, as for a draft.
+    EXPECT_THAT(refused(edit_request(id, R"({"topic_type": "alert"})")), testing::HasSubstr("topic_type"));
+    EXPECT_THAT(refused(edit_request(id, R"({"media_id": 42})")), testing::HasSubstr("media_id"));
+    // What an edit does not change: a 400 that names the member.
+    EXPECT_THAT(refused(edit_request(id, R"({"scheduled_time": "2026-12-19T17:00:00Z"})")), testing::HasSubstr("\"scheduled_time\""));
+    EXPECT_THAT(refused(edit_request(id, R"({"topic_type": "event", "call_to_action": null,
+        "event": {"title": "Open house", "schedule": {"start_date": "2026-12-19", "start_time": "10:00", "end_date": "2026-12-19",
+                                                       "end_time": "16:00"}, "recurrence": null}})")),
+                testing::HasSubstr("\"topic_type\""));
+    EXPECT_EQ(count("local_post_edits"), 0);
+
+    // A post that cannot have an edit, a post that does not exist, and a caller who is not signed in.
+    const auto a_draft = draft(spa_, "Never sent.");
+    const auto not_at_google = put(target(a_draft), edit_request(a_draft, R"({"summary": "Changed."})"));
+    EXPECT_EQ(not_at_google.status, 409u);
+    EXPECT_EQ(error_code(not_at_google), "local_post_not_editable");
+    const auto removal = at_google("To be removed.");
+    ASSERT_EQ(post(std::format("/api/local-posts/{}/remove", removal), "").status, 202u);
+    EXPECT_EQ(error_code(put(target(removal), edit_request(removal, R"({"summary": "Too late."})"))), "local_post_not_editable");
+    exec(std::format("UPDATE locations SET client_id = NULL WHERE id = {}", buffet_));
+    const auto unlinked = insert_local_post(buffet_, "origin, status, content, google_name, google_state",
+                                            "'google', 'sent', " + test::content_sql(test::standard("Unlinked.")) +
+                                                ", 'accounts/111/locations/9002/localPosts/900', 'live'");
+    EXPECT_EQ(error_code(put(target(unlinked), edit_request(unlinked, R"({"summary": "Changed."})"))), "location_not_synced");
+    // Written from a post that is not the post as it is now: refused, and nothing is stored.
+    auto stale = boost::json::parse(edit_request(id, R"({"summary": "Open late on Saturdays."})")).as_object();
+    stale["based_on"].as_object()["summary"] = "What the post said when the page was loaded.";
+    const auto changed_since = put(target(id), boost::json::serialize(stale));
+    EXPECT_EQ(changed_since.status, 409u) << changed_since.body;
+    EXPECT_EQ(error_code(changed_since), "local_post_changed");
+    const auto body = edit_body(id, R"({"summary": "Open late on Saturdays."})");
+    const auto request = edit_request(id, R"({"summary": "Open late on Saturdays."})");
+    EXPECT_EQ(put("/api/local-posts/999999/edit", request).status, 404u);
+    EXPECT_EQ(del("/api/local-posts/999999/edit").status, 404u);
+    EXPECT_EQ(post("/api/local-posts/999999/edit/approve", body).status, 404u);
+    EXPECT_EQ(put("/api/local-posts/x/edit", request).status, 404u);
+    EXPECT_EQ(call(verb::put, target(id), {}, request).status, 401u) << "nobody writes an edit without signing in";
+    EXPECT_EQ(call(verb::delete_, target(id)).status, 401u);
+    EXPECT_EQ(call(verb::post, target(id) + "/approve", {}, body).status, 401u);
+    EXPECT_EQ(call(verb::put, target(id), {.cookie = browser_.cookie, .csrf = ""}, request).status, 403u) << "a change needs the CSRF token";
+    EXPECT_EQ(call(verb::post, target(id) + "/approve", {.cookie = browser_.cookie, .csrf = ""}, body).status, 403u);
+    EXPECT_EQ(count("local_post_edits"), 0);
+    EXPECT_EQ(count("audit_log WHERE action LIKE 'local_post.edit%'"), 0) << "a refused request leaves no entry";
+}
+
+TEST_F(LocalPostEdits, AnApprovalIsRefusedWhilePostingIsOffForAFailedCheckAndForNothingToSend) {
+    const auto id = at_google();
+    const auto body = edit_body(id, R"({"summary": "Open late on Saturdays."})");
+    ASSERT_EQ(put(target(id), edit_request(id, R"({"summary": "Open late on Saturdays."})")).status, 200u)
+        << "an edit is written whatever the switches say";
+    const auto off = post(target(id) + "/approve", body);
+    EXPECT_EQ(off.status, 409u);
+    EXPECT_EQ(error_code(off), "posting_disabled") << "posting is off after installation, for an edit as for a post";
+    EXPECT_EQ(count("jobs"), 0);
+    EXPECT_EQ(count("audit_log WHERE action = 'local_post.edit_approve'"), 0);
+
+    exec("UPDATE system_settings SET posting_enabled = true");
+    // A check that fails is stored with the edit and says what was found.
+    const auto with_phone = put(target(id), edit_request(id, R"({"summary": "Call (212) 555-0100 to book."})"));
+    ASSERT_EQ(with_phone.status, 200u);
+    bool phone_failed = false;
+    for (const auto& check : json(with_phone).at("edit").at("checks").as_array()) {
+        if (check.at("name").as_string() == "no_phone") phone_failed = !check.at("passed").as_bool() && !check.at("detail").as_string().empty();
+    }
+    EXPECT_TRUE(phone_failed);
+    EXPECT_EQ(error_code(post(target(id) + "/approve", boost::json::serialize(json(with_phone).at("edit").at("content")))), "checks_failed");
+
+    // An edit that says what the post says has nothing to send.
+    const auto same = edit_body(id, "{}");
+    const auto saved = put(target(id), edit_request(id, "{}"));
+    ASSERT_EQ(saved.status, 200u);
+    EXPECT_TRUE(json(saved).at("edit").at("fields").as_array().empty());
+    const auto unchanged = post(target(id) + "/approve", same);
+    EXPECT_EQ(unchanged.status, 409u);
+    EXPECT_EQ(error_code(unchanged), "local_post_edit_unchanged");
+    // No edit at all.
+    ASSERT_EQ(del(target(id)).status, 204u);
+    EXPECT_EQ(error_code(post(target(id) + "/approve", same)), "local_post_edit_not_open");
+    EXPECT_EQ(count("jobs"), 0);
+}
+
+TEST_F(LocalPostEdits, TheAppWritesAndDiscardsAnEditWithItsToken) {
+    const auto id = at_google();
+    const auto body = edit_body(id, R"({"summary": "Open late on Saturdays."})");
+    const auto request = edit_request(id, R"({"summary": "Open late on Saturdays."})");
+    const auto token = app_sign_in(staff("phone@xvisionmediaus.com"));
+    const auto written = as_app(verb::put, target(id), token, request);
+    ASSERT_EQ(written.status, 200u) << written.body;
+    EXPECT_EQ(json(written).at("edit").at("written_by").as_string(), "phone@xvisionmediaus.com") << "no CSRF token, and the edit names the caller";
+    EXPECT_EQ(as_app(verb::post, target(id) + "/approve", token, body).status, 409u) << "posting is off";
+    EXPECT_EQ(as_app(verb::delete_, target(id), token).status, 204u);
+    EXPECT_EQ(as_app(verb::put, target(id), "not-a-token", request).status, 401u);
+}
+
+TEST_F(LocalPostEdits, AnEditShowsThePhotoItBrings) {
+    const auto id = at_google();
+    const auto media = insert_upload({.object = "p/new.jpg"});
+    const auto written = put(target(id), edit_request(id, std::format(R"({{"media_id": {}}})", media)));
+    ASSERT_EQ(written.status, 200u) << written.body;
+    const auto shown = json(written);
+    EXPECT_EQ(shown.at("edit").at("fields"), boost::json::parse(R"(["media"])"));
+    EXPECT_EQ(shown.at("edit").at("media"),
+              boost::json::parse(R"([{"format": "photo", "url": "https://storage.googleapis.com/poni-public-test/p/new.jpg"}])"))
+        << "the person who approves sees the file, not only its id";
+    EXPECT_TRUE(shown.at("media").as_array().empty()) << "the post itself shows what it shows at Google";
+}
+
+TEST_F(LocalPostEdits, AgainstTheGoogleMockNoEditIsWrittenOrApproved) {
+    const auto id = at_google();
+    const auto body = edit_body(id, R"({"summary": "Open late on Saturdays."})");
+    const auto request = edit_request(id, R"({"summary": "Open late on Saturdays."})");
+    api_options_.google_mock = true;
+    build({});
+    browser_ = sign_in();
+    // The mock has no posts: nothing that would lead to a request about one is started.
+    EXPECT_EQ(error_code(put(target(id), request)), "local_posts_unavailable");
+    EXPECT_EQ(error_code(post(target(id) + "/approve", body)), "local_posts_unavailable");
+    EXPECT_EQ(count("local_post_edits"), 0);
+    EXPECT_EQ(count("jobs"), 0);
+    // What the engine holds can still be read, with the member there.
+    EXPECT_TRUE(read(std::format("/api/local-posts/{}", id)).at("edit").is_null());
 }

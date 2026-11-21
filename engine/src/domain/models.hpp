@@ -1029,6 +1029,30 @@ struct LocalPostCopy {
 };
 BOOST_DESCRIBE_STRUCT(LocalPostCopy, (), (id, status))
 
+// The open edit of a post that is at Google (D-099): the content the post is
+// to have, beside the post until a person approved it and Google accepted it.
+struct LocalPostEdit {
+    domain::LocalPostContent content;
+    // What the edit changes, and so all it ever writes at Google: of "summary", "call_to_action", "event",
+    // "offer", "media" and "language_code", those in which the content differs from the post's as it was
+    // when the edit was written.
+    std::vector<std::string> fields;
+    // What the post would show with the edit applied: the edit's upload where it changes the media, what
+    // the post shows now where it does not.
+    std::vector<LocalPostMediaItem> media;
+    // The checks on that content as of its last change.
+    std::vector<domain::CheckResult> checks;
+    std::string status;  // "draft", "approved" or "sending"
+    // Why the edit is a draft again, when it came back.
+    std::optional<std::string> status_reason;
+    std::string written_by;  // emails
+    std::string written_at;
+    std::optional<std::string> decided_by;  // who approved it last
+    std::optional<std::string> decided_at;
+};
+BOOST_DESCRIBE_STRUCT(LocalPostEdit, (),
+                      (content, fields, media, checks, status, status_reason, written_by, written_at, decided_by, decided_at))
+
 // A post on a location's profile: a draft, a post the engine sent, or one
 // made in Google's own interface. The content fields are those of
 // domain::LocalPostContent, flat, as in the schema.
@@ -1064,8 +1088,11 @@ struct LocalPost {
     // from this one, newest first. Not content: nothing approves, sends or removes by them (D-098).
     std::optional<std::int64_t> copied_from_id;
     std::vector<LocalPostCopy> copies;
+    // The open edit of a post that is at Google, if it has one (D-099). The content above stays Google's.
+    std::optional<LocalPostEdit> edit;
 
     std::optional<std::string> created_by;  // emails
+    // Who last edited the draft or, once Google accepted an edit of the post, who wrote that edit.
     std::optional<std::string> edited_by;
     std::optional<std::string> edited_at;
     std::optional<std::string> decided_by;  // who approved or rejected the draft
@@ -1094,7 +1121,7 @@ struct LocalPost {
 BOOST_DESCRIBE_STRUCT(LocalPost, (),
                       (id, location_id, location_title, client_id, client_name, origin, status, status_reason, google_state,
                        google_name, search_url, topic_type, summary, language_code, call_to_action, event, offer, media_id,
-                       scheduled_time, media, checks, copied_from_id, copies, created_by, edited_by, edited_at, decided_by, decided_at, sent_at,
+                       scheduled_time, media, checks, copied_from_id, copies, edit, created_by, edited_by, edited_at, decided_by, decided_at, sent_at,
                        removal_requested_by, removal_requested_at, removed_at, google_created_at, synced_at,
                        created_at, updated_at))
 

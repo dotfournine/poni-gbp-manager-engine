@@ -43,7 +43,7 @@ A job is a row in `jobs` (`run_at`, backoff, idempotency keys, `FOR UPDATE SKIP 
 | `notifications.deliver` | One delivery |
 | `golive.sweep`, `golive.case` | Go-live test (section 10) |
 | `reports.schedule`, `reports.build` | Reports (4.3) |
-| `local_posts.sync_due`, `local_posts.sync`, `local_posts.publish`, `local_posts.remove` | Local posts (4.4) |
+| `local_posts.sync_due`, `local_posts.sync`, `local_posts.publish`, `local_posts.remove`, `local_posts.edit` | Local posts (4.4) |
 | `system.heartbeat`, `system.housekeeping` | Liveness; purging finished jobs, ended sessions, unused app codes |
 
 ## 3. External integrations
@@ -51,7 +51,7 @@ A job is a row in `jobs` (`run_at`, backoff, idempotency keys, `FOR UPDATE SKIP 
 | Service | Used for | Auth |
 | ------- | -------- | ---- |
 | GBP Account Management, Business Information (v1) | Accounts and locations | OAuth of the managing account, `business.manage` |
-| Google My Business API (v4) | Reviews (list, batch get, reply); local posts (list, get, create, delete) | Same |
+| Google My Business API (v4) | Reviews (list, batch get, reply); local posts (list, get, create, delete, and the update of the fields an approved edit names) | Same |
 | Business Profile Performance API (v1) | Daily metrics and monthly search keywords, read for a report or post help | Same |
 | Cloud Pub/Sub (REST) | Review notifications, by pull | Locally gcloud application-default credentials; in production the VM's service account |
 | Cloud Storage (JSON API) | Report pages and post media in one public bucket; uploads only | As Pub/Sub |
@@ -116,6 +116,7 @@ A person reads the draft in a sandboxed frame and sends, regenerates or rejects 
 - **Media:** one photo or video, `POST /api/local-post-media`, checked from its bytes, stored unchanged as `p/<32 random bytes>.<ext>` in the public bucket, where Google fetches it (D-090).
 - **Help:** praise of the last 90 days counted without a model (`GET /api/locations/{id}/review-highlights`), and ideas or a text from the `posts` task through `jobs::PostAdvisor`; nothing stored.
 - **Remove:** `repo::request_local_post_removal`, then `local_posts.remove`; the only way to stop a scheduled post.
+- **Edit (D-099):** a post that is at Google gets an edit beside it (`local_post_edits`, one open edit per post), written and approved like a draft, with the post's content the person wrote it against (which the client sends, and the engine checks). `repo::approve_local_post_edit` enqueues `local_posts.edit`, which claims the edit, reads the post from Google and sends one PATCH that names the fields the edit's author changed and Google does not have yet, and no other. A field changed on both sides stops the edit. Accepted: the post's row takes Google's answer, and the location is read again after 1, 5 and 15 minutes. A certain refusal: the edit is a draft again with Google's message (429 and token errors are tried again). Anything else: the edit is a draft again saying that Google did not confirm it, and nothing is sent again without a new approval. Built from the documentation, without a trial.
 - **Read:** `local_posts.sync_due` (every five minutes) queues a sync for each linked location unread for an hour or holding an unsettled send. A sync settles sends of unknown outcome by adoption (CLAUDE.md), stores the listed posts, and marks `removed` only a post whose own get answers `NOT_FOUND`. None of this runs against the mock.
 
 ### 4.5 Sign-in, sessions and audit
@@ -137,7 +138,7 @@ Migrations in `engine/migrations/`, applied by `poni-tools migrate`, from `0001_
 | Settings | `reply_settings` (one complete row per linked location: voice, localization, policy, delay, window; D-093), `ai_settings` (analysis settings, each task's provider and model) |
 | Reviews | `reviews` (rating, original and translated text, language, script, reviewer, current reply), `review_events`, `review_analyses` |
 | Replies | `reply_drafts` (draft, scheduled, approved, posting, posted, published, rejected, cancelled, superseded; model text beside a person's edit), `reply_posts` (one per PUT, at most one open per review) |
-| Local posts | `local_posts` (draft, approved, sending, sent, unknown, failed, rejected, removed, beside Google's state), `local_post_media` |
+| Local posts | `local_posts` (draft, approved, sending, sent, unknown, failed, rejected, removed, beside Google's state), `local_post_media`, `local_post_edits` (the open edit of a post at Google: draft, approved, sending) |
 | Other | `cases`, `go_live_runs`, `go_live_cases`, `notification_rules`, `notification_deliveries`, `reports`, `report_share_links`, `report_schedules` |
 | Knowledge base | `kb_meta`, `kb_industries`, `kb_common`, `kb_corpus_cases`, `kb_defaults`, `kb_voice_templates`, `kb_model_prices` (written only by `poni-tools seed`) |
 | Operations | `jobs`, `credentials` (encrypted, D-043), `integration_status`, `llm_calls`, `system_settings` (posting and email switches, the Google the database belongs to) |
@@ -233,7 +234,7 @@ PONI runs Google Business Profiles (GBP) for its clients. The system automates r
 - **FR-11 Users and audit.** Google sign-in and sign-out; the audit log is append-only, viewable and filterable.
 - **FR-12 Cases.** After the MVP: following a negative review from first alert to final public response; today's escalation is its simplest form (D-054).
 - **FR-13 Knowledge base (D-078).** What is the same for every client and nobody changes while the system runs is files reviewed like code, checked and seeded by `poni-tools` into static, versioned tables. An industry is supported only with a complete pack; settings start as copies (section 9).
-- **FR-14 Local posts (D-088).** Updates, offers and events with Google's fields and one photo or video. A person approves the exact content; Google schedules and repeats. Every post of a location is shown with its state at Google, including posts made there; staff may remove any; none is edited at Google. The model helps only when asked. Not included: client approval, figures per post, product posts, several photos.
+- **FR-14 Local posts (D-088, D-099).** Updates, offers and events with Google's fields and one photo or video. A person approves the exact content; Google schedules and repeats. Every post of a location is shown with its state at Google, including posts made there; staff may remove any, and correct one in place by an edit a person approves (D-099). The model helps only when asked. Not included: client approval, figures per post, product posts, several photos.
 
 ### 12.4 Non-functional requirements
 

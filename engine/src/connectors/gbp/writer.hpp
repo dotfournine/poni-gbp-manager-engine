@@ -2,8 +2,8 @@
 // purpose: the engine can put a reply on a review (D-061). There is no
 // delete and no update of anything else here, and none is to be added: the
 // API reports canDelete even for a manager account (CLAUDE.md). The other
-// two writes, creating and deleting a local post, have an interface of
-// their own (D-088).
+// three writes, creating, deleting and editing a local post, have an
+// interface of their own (D-088, D-099).
 //
 // Google keeps one reply per review, so putting a reply on a review that
 // has one replaces it. Callers must have checked what is there first

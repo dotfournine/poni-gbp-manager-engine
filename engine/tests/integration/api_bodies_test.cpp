@@ -57,6 +57,8 @@ const std::map<std::string, std::string> kRoutesWithBody = {
     {"PATCH /api/report-schedules/{id}", "frequency"},
     {"PUT /api/local-posts/{id}", "topic_type"},
     {"POST /api/local-posts/{id}/approve", "topic_type"},
+    {"PUT /api/local-posts/{id}/edit", "content"},
+    {"POST /api/local-posts/{id}/edit/approve", "topic_type"},
     {"POST /api/local-posts/{id}/reject", "reason"},
     {"POST /api/locations/{id}/local-posts", "topic_type"},
     {"POST /api/locations/{id}/local-post-drafts", "topic_type"},
@@ -93,6 +95,7 @@ const std::vector<std::string> kRoutesWithoutBody = {
     "DELETE /api/devices/{id}",
     "DELETE /api/report-schedules/{id}",
     "DELETE /api/local-posts/{id}",
+    "DELETE /api/local-posts/{id}/edit",
 };
 
 }  // namespace

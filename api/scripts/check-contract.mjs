@@ -18,7 +18,9 @@
 //      location and puts them back. It never starts a model call. For Phase 3 it
 //      walks the draft, escalation and notification endpoints; it never
 //      posts a reply (it approves a draft only to see the refusal while the
-//      posting switch is off) and sends no email.
+//      posting switch is off) and sends no email. It writes, replaces and
+//      discards an edit of a seeded post that is "at Google", and never
+//      changes a post there (the same refusal, for the same reason).
 //   4. Checks the error answers: missing CSRF token, unknown id, unknown path.
 //   5. For every route with a JSON body in the spec: a body with a member the
 //      schema does not list, and one with null for a member that can't be
@@ -221,16 +223,27 @@ try {
   // Locations and reviews exist only after a sync (or the CI seed).
   const locations = await call("GET", "/api/locations?per_page=1");
   const location = locations.json?.items?.[0];
+  // The location contract-seed.sql adds, under an account that does not exist. Whatever the check changes or
+  // queues about a location, it does to this one and to no other: run by hand, the database may hold real ones.
+  const allLocations = await call("GET", "/api/locations?per_page=100");
+  const seededLocation = (allLocations.json?.items ?? []).find((item) => item.gbp_location_id === "contract-location-1" && item.gbp_account_id === "contract-account-1");
   if (location) {
     const path = `/api/locations/${location.id}`;
     check(`GET ${path}`, "/api/locations/{id}", "GET", await call("GET", path));
-    check(`PATCH ${path} (no change)`, "/api/locations/{id}", "PATCH", await call("PATCH", path, { body: {} }));
-    // Queues a read of the location's posts. Without a GBP account connected the job reads nothing and says so.
-    check(`POST ${path}/local-posts/refresh`, "/api/locations/{id}/local-posts/refresh", "POST", await call("POST", `${path}/local-posts/refresh`));
   } else if (requireData) {
     fail("GET /api/locations", "no location to check; was the seed applied?");
   } else {
     console.log("skip  location endpoints: no locations in this database");
+  }
+  if (seededLocation) {
+    const path = `/api/locations/${seededLocation.id}`;
+    check(`PATCH ${path} (no change)`, "/api/locations/{id}", "PATCH", await call("PATCH", path, { body: {} }));
+    // Queues a read of the location's posts. Its account does not exist, so the job reads nothing and says so.
+    check(`POST ${path}/local-posts/refresh`, "/api/locations/{id}/local-posts/refresh", "POST", await call("POST", `${path}/local-posts/refresh`));
+  } else if (requireData) {
+    fail("PATCH /api/locations/{id}", "the seeded location is missing; was the seed applied?");
+  } else {
+    console.log("skip  a location's PATCH and the read of its posts: this database has no seeded location, and the check changes no other");
   }
   // Local posts (Phase 6): the list with its filters, and each post's page.
   for (const filter of [
@@ -256,34 +269,62 @@ try {
     fail("GET /api/local-posts", "no local posts to check; was the seed applied?");
   }
   check("GET /api/local-posts/0", "/api/local-posts/{id}", "GET", await call("GET", "/api/local-posts/0"));
-  // A draft, start to finish, on the first location. Nothing is sent: the approval is refused while posting is off.
-  if (location) {
+  // An approval that is to be refused, and only while posting is off: the switch is read a moment before,
+  // every time, and anything but the expected refusal is a failure. The check never sends anything to Google.
+  const refusedApproval = async (name, specPath, url, body, code) => {
+    const switches = await call("GET", "/api/system/settings");
+    if (switches.json?.posting_enabled !== false) return console.log(`skip  ${name}: the posting switch is on in this database, and the check never sends a post to Google or changes one there`);
+    const approval = await call("POST", url, { body });
+    check(name, specPath, "POST", approval);
+    if (approval.status !== 409 || approval.json?.error?.code !== code) fail(name, `expected the refusal ${code}, got ${approval.status} ${approval.json?.error?.code ?? ""}: the check must never send a post to Google or change one there`);
+  };
+  // A draft, start to finish. Only ever on the location contract-seed.sql adds, under an account that does
+  // not exist: never on a real location, whatever database this runs against. Nothing is sent: each
+  // approval is tried only right after reading that posting is off. The draft is deleted on every way out.
+  if (!seededLocation) {
+    if (requireData) fail("POST /api/locations/{id}/local-posts", "the seeded location is missing; was the seed applied?");
+    else console.log("skip  a draft of a local post: this database has no seeded location, and the check writes a draft on no other");
+  } else {
     const content = { topic_type: "standard", summary: "Written by check-contract.mjs.", language_code: "en", call_to_action: null, event: null, offer: null, media_id: null, scheduled_time: null };
-    const draft = await call("POST", `/api/locations/${location.id}/local-posts`, { body: content });
-    check(`POST /api/locations/${location.id}/local-posts`, "/api/locations/{id}/local-posts", "POST", draft);
-    check("POST /api/locations/{id}/local-posts (not a post)", "/api/locations/{id}/local-posts", "POST", await call("POST", `/api/locations/${location.id}/local-posts`, { body: { ...content, topic_type: "alert" } }));
+    const draft = await call("POST", `/api/locations/${seededLocation.id}/local-posts`, { body: content });
+    check(`POST /api/locations/${seededLocation.id}/local-posts`, "/api/locations/{id}/local-posts", "POST", draft);
+    check("POST /api/locations/{id}/local-posts (not a post)", "/api/locations/{id}/local-posts", "POST", await call("POST", `/api/locations/${seededLocation.id}/local-posts`, { body: { ...content, topic_type: "alert" } }));
     if (draft.status === 201) {
       const path = `/api/local-posts/${draft.json.id}`;
-      const edited = { ...content, summary: "Written by check-contract.mjs, then edited.", call_to_action: { action_type: "call", url: null } };
-      check(`PUT ${path}`, "/api/local-posts/{id}", "PUT", await call("PUT", path, { body: edited }));
-      check(`POST ${path}/approve (content changed)`, "/api/local-posts/{id}/approve", "POST", await call("POST", `${path}/approve`, { body: content }));
-      const approval = await call("POST", `${path}/approve`, { body: edited });
-      check(`POST ${path}/approve (posting is off)`, "/api/local-posts/{id}/approve", "POST", approval);
-      if (approval.status !== 409) fail(`POST ${path}/approve`, `expected a refusal while posting is off, got ${approval.status}: the check must never send a post`);
-      check(`POST ${path}/reject`, "/api/local-posts/{id}/reject", "POST", await call("POST", `${path}/reject`, { body: { reason: "Only a check." } }));
-      check(`POST ${path}/reject (again)`, "/api/local-posts/{id}/reject", "POST", await call("POST", `${path}/reject`));
-      check(`PUT ${path} (rejected)`, "/api/local-posts/{id}", "PUT", await call("PUT", path, { body: edited }));
-      // Only the refusal: the check never asks for a post at Google to be deleted.
-      check(`POST ${path}/remove (not at Google)`, "/api/local-posts/{id}/remove", "POST", await call("POST", `${path}/remove`));
-      // A copy of the rejected draft is a new draft (D-094); both are then deleted, which touches nothing at Google.
-      const copy = await call("POST", `${path}/copy`);
-      check(`POST ${path}/copy`, "/api/local-posts/{id}/copy", "POST", copy);
-      if (copy.status === 201) {
-        // The source now lists its copy (D-098).
-        check(`GET ${path} (copied)`, "/api/local-posts/{id}", "GET", await call("GET", path));
-        check(`DELETE /api/local-posts/${copy.json.id} (the copy)`, "/api/local-posts/{id}", "DELETE", await call("DELETE", `/api/local-posts/${copy.json.id}`));
+      let copyPath;
+      try {
+        const edited = { ...content, summary: "Written by check-contract.mjs, then edited.", call_to_action: { action_type: "call", url: null } };
+        const saved = await call("PUT", path, { body: edited });
+        check(`PUT ${path}`, "/api/local-posts/{id}", "PUT", saved);
+        if (saved.status === 200) {
+          // The first content is not the stored content any more; the stored one meets the switch.
+          await refusedApproval(`POST ${path}/approve (content changed)`, "/api/local-posts/{id}/approve", `${path}/approve`, content, "local_post_changed");
+          await refusedApproval(`POST ${path}/approve (posting is off)`, "/api/local-posts/{id}/approve", `${path}/approve`, edited, "posting_disabled");
+        } else {
+          fail(`PUT ${path}`, `expected 200, got ${saved.status}: no approval is tried`);
+        }
+        check(`POST ${path}/reject`, "/api/local-posts/{id}/reject", "POST", await call("POST", `${path}/reject`, { body: { reason: "Only a check." } }));
+        check(`POST ${path}/reject (again)`, "/api/local-posts/{id}/reject", "POST", await call("POST", `${path}/reject`));
+        check(`PUT ${path} (rejected)`, "/api/local-posts/{id}", "PUT", await call("PUT", path, { body: edited }));
+        // Only the refusal: the check never asks for a post at Google to be deleted.
+        check(`POST ${path}/remove (not at Google)`, "/api/local-posts/{id}/remove", "POST", await call("POST", `${path}/remove`));
+        // A copy of the rejected draft is a new draft (D-094); both are then deleted, which touches nothing at Google.
+        const copy = await call("POST", `${path}/copy`);
+        check(`POST ${path}/copy`, "/api/local-posts/{id}/copy", "POST", copy);
+        if (copy.status === 201) {
+          copyPath = `/api/local-posts/${copy.json.id}`;
+          // The source now lists its copy (D-098).
+          check(`GET ${path} (copied)`, "/api/local-posts/{id}", "GET", await call("GET", path));
+        }
+      } finally {
+        // Whatever happened above, no draft of the check's stays behind. (A draft that is not yet rejected is
+        // rejected first; one that was approved against every guard cannot be deleted, and that is reported.)
+        await call("POST", `${path}/reject`, { body: { reason: "Only a check." } });
+        if (copyPath) check(`DELETE ${copyPath} (the copy)`, "/api/local-posts/{id}", "DELETE", await call("DELETE", copyPath));
+        const deleted = await call("DELETE", path);
+        check(`DELETE ${path} (rejected)`, "/api/local-posts/{id}", "DELETE", deleted);
+        if (deleted.status !== 204) fail(`DELETE ${path}`, `the check left its draft behind: ${deleted.status} ${deleted.text.slice(0, 200)}`);
       }
-      check(`DELETE ${path} (rejected)`, "/api/local-posts/{id}", "DELETE", await call("DELETE", path));
       check(`DELETE ${path} (again)`, "/api/local-posts/{id}", "DELETE", await call("DELETE", path));
     }
   }
@@ -294,6 +335,64 @@ try {
     check(`DELETE /api/local-posts/${atGoogle.id} (at Google)`, "/api/local-posts/{id}", "DELETE", refused);
     if (refused.status !== 409) fail(`DELETE /api/local-posts/${atGoogle.id}`, `expected a refusal for a post at Google, got ${refused.status}`);
   }
+  // An edit of a post "at Google" (D-099): written, replaced and discarded, which touches nothing at Google.
+  // Only ever of the post contract-seed.sql adds, which belongs to the seed's own client under an account
+  // that does not exist: never of a real post, whatever database this runs against. The check never
+  // changes a post at Google: each approval is tried only right after reading that posting is off, and
+  // anything but the expected refusal is a failure. The edit is discarded on every way out.
+  const seededPost = (localPosts.json?.items ?? []).find(
+    (post) => post.status === "sent" && post.client_name === "Contract Check Spa" && post.google_name === "accounts/contract-account-1/locations/contract-location-1/localPosts/contract-post-1",
+  );
+  if (!seededPost) {
+    if (requireData) fail("PUT /api/local-posts/{id}/edit", "the seeded post at Google is missing; was the seed applied?");
+    else console.log("skip  the edit of a post at Google: this database has no seeded post, and the check edits no other");
+  } else {
+    const path = `/api/local-posts/${seededPost.id}/edit`;
+    const content = Object.fromEntries(["topic_type", "summary", "language_code", "call_to_action", "event", "offer", "media_id", "scheduled_time"].map((name) => [name, seededPost[name]]));
+    // An edit says what the post should say and what the person was looking at: the post's content as just read.
+    const written = await call("PUT", path, { body: { content: { ...content, summary: "Edited by check-contract.mjs." }, based_on: content } });
+    try {
+      check(`PUT ${path}`, "/api/local-posts/{id}/edit", "PUT", written);
+      // Against the Google mock the answer is the 409 `local_posts_unavailable`, and there is no edit to go on with.
+      if (written.status === 200) {
+        if (written.json.edit?.status !== "draft") fail(`PUT ${path}`, `the post does not show its edit as a draft: ${JSON.stringify(written.json.edit)}`);
+        if (JSON.stringify(written.json.edit?.fields) !== JSON.stringify(["summary"])) fail(`PUT ${path}`, `the edit does not say that it changes the summary alone: ${JSON.stringify(written.json.edit?.fields)}`);
+        check(`GET /api/local-posts/${seededPost.id} (with an edit)`, "/api/local-posts/{id}", "GET", await call("GET", `/api/local-posts/${seededPost.id}`));
+        check("GET /api/local-posts (one with an edit)", "/api/local-posts", "GET", await call("GET", "/api/local-posts?per_page=100"));
+        // An edit does not change when Google publishes a post: a 400 that names the member.
+        const moved = await call("PUT", path, { body: { content: { ...content, scheduled_time: content.scheduled_time === null ? "2031-01-01T00:00:00Z" : null }, based_on: content } });
+        check(`PUT ${path} (another time)`, "/api/local-posts/{id}/edit", "PUT", moved);
+        if (moved.status !== 400 || !moved.json?.error?.message?.includes("scheduled_time")) fail(`PUT ${path} (another time)`, `expected a 400 that names scheduled_time, got ${moved.status}: ${moved.text.slice(0, 200)}`);
+        // Written from a post that is not the post as it is now: refused, and nothing is stored.
+        const stale = await call("PUT", path, { body: { content: { ...content, summary: "Edited by check-contract.mjs, from a stale page." }, based_on: { ...content, summary: "What the post said once." } } });
+        check(`PUT ${path} (the post changed since)`, "/api/local-posts/{id}/edit", "PUT", stale);
+        if (stale.status !== 409 || stale.json?.error?.code !== "local_post_changed") fail(`PUT ${path} (the post changed since)`, `expected the refusal local_post_changed, got ${stale.status}: ${stale.text.slice(0, 200)}`);
+        const replaced = await call("PUT", path, { body: { content: { ...content, summary: "Edited by check-contract.mjs, then replaced." }, based_on: content } });
+        check(`PUT ${path} (replaced)`, "/api/local-posts/{id}/edit", "PUT", replaced);
+        if (replaced.status === 200) {
+          // The content of the edit that was replaced is not the stored edit any more; the stored one meets the switch.
+          await refusedApproval(`POST ${path}/approve (content changed)`, "/api/local-posts/{id}/edit/approve", `${path}/approve`, written.json.edit.content, "local_post_changed");
+          await refusedApproval(`POST ${path}/approve (posting is off)`, "/api/local-posts/{id}/edit/approve", `${path}/approve`, replaced.json.edit.content, "posting_disabled");
+        } else {
+          fail(`PUT ${path} (replaced)`, `expected 200, got ${replaced.status}: no approval is tried`);
+        }
+      }
+    } finally {
+      // Whatever happened above, no edit stays behind. An edit the check wrote is a draft, which a discard takes.
+      const discarded = await call("DELETE", path);
+      if (written.status === 200) check(`DELETE ${path}`, "/api/local-posts/{id}/edit", "DELETE", discarded);
+      const after = await call("GET", `/api/local-posts/${seededPost.id}`);
+      if (after.status === 200 && after.json?.edit !== null) fail(`DELETE ${path}`, `the check left an edit behind: ${JSON.stringify(after.json.edit).slice(0, 200)}`);
+    }
+    if (written.status === 200) {
+      check(`DELETE ${path} (again)`, "/api/local-posts/{id}/edit", "DELETE", await call("DELETE", path));
+      check(`GET /api/local-posts/${seededPost.id} (the edit discarded)`, "/api/local-posts/{id}", "GET", await call("GET", `/api/local-posts/${seededPost.id}`));
+    }
+  }
+  const onlyACheck = { topic_type: "standard", summary: "Only a check.", language_code: "en", call_to_action: null, event: null, offer: null, media_id: null, scheduled_time: null };
+  check("PUT /api/local-posts/0/edit", "/api/local-posts/{id}/edit", "PUT", await call("PUT", "/api/local-posts/0/edit", { body: { content: onlyACheck, based_on: onlyACheck } }));
+  check("DELETE /api/local-posts/0/edit", "/api/local-posts/{id}/edit", "DELETE", await call("DELETE", "/api/local-posts/0/edit"));
+  check("POST /api/local-posts/0/edit/approve", "/api/local-posts/{id}/edit/approve", "POST", await call("POST", "/api/local-posts/0/edit/approve", { body: { topic_type: "standard", summary: "Only a check.", language_code: "en", call_to_action: null, event: null, offer: null, media_id: null, scheduled_time: null } }));
   // The help with writing a post. The highlights are counted from the database. The check never asks the
   // model: an idea or a text costs a call, so only what is refused before one is tried here, and the
   // answers of the model's two routes are checked field by field in the engine's tests.
@@ -363,9 +462,11 @@ try {
 
   // A location's reply settings (D-093): its own complete voice, localization and policy. A save sends all of
   // them; here they are read, saved back as they are, saved with a change, and put back. Only a location that
-  // is linked to a client has settings.
+  // is linked to a client has settings, and only the seeded location's are saved: between the change and the
+  // putting back, a real location's replies would be drafted under the check's name, and a go-live test
+  // running there would be cancelled and started again (D-077).
   const settingsSpec = "/api/locations/{id}/reply-settings";
-  const linked = (await call("GET", "/api/locations?linked=true&per_page=1")).json?.items?.[0];
+  const linked = seededLocation?.client_id ? seededLocation : undefined;
   if (linked) {
     const path = `/api/locations/${linked.id}/reply-settings`;
     const stored = await call("GET", path);
@@ -388,9 +489,9 @@ try {
       fail(`GET ${path}`, `a linked location has reply settings, got ${stored.status}: ${stored.text.slice(0, 200)}`);
     }
   } else if (requireData) {
-    fail(`PUT ${settingsSpec}`, "no linked location whose settings to save; was the seed applied?");
+    fail(`PUT ${settingsSpec}`, "the seeded location is missing or not linked, so there are no settings to save; was the seed applied?");
   } else {
-    console.log("skip  reply settings: no location is linked to a client in this database");
+    console.log("skip  reply settings: this database has no seeded location linked to a client, and the check saves no other location's settings");
   }
   expectStatus("GET /api/locations/999999999/reply-settings", await call("GET", "/api/locations/999999999/reply-settings"), 404, "not_found");
   if (created.status === 201) {

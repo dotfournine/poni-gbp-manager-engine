@@ -2,7 +2,7 @@
 //
 // Reader is the interface the engine uses; HttpReader talks to Google and
 // tests use a fake. Nothing here can post, change or delete anything at
-// Google: the three writes have interfaces of their own (writer.hpp,
+// Google: the four writes have interfaces of their own (writer.hpp,
 // local_posts.hpp).
 //
 // Payload structs mirror Google's JSON (camelCase names). Google omits empty

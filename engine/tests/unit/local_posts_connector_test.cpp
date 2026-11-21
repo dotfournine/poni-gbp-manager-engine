@@ -1,7 +1,8 @@
 // The local posts connector against a scripted HTTP client and sanitized
 // answers of Google's (fixtures/local-post*.json, from the spike on PONI's
-// own profile): what it asks, how it reads the answers, and that a create is
-// never repeated by the connector.
+// own profile): what it asks, how it reads the answers, and that a create
+// and an update are never repeated by the connector. No update was ever sent
+// to Google (D-099): its answers here are a post as Google returns one.
 
 #include "connectors/gbp/local_posts.hpp"
 #include "core/json.hpp"
@@ -13,6 +14,9 @@
 #include <gmock/gmock.h>
 
 #include <algorithm>
+#include <format>
+#include <functional>
+#include <stdexcept>
 
 using namespace poni;
 using google::ApiError;
@@ -408,6 +412,234 @@ TEST_F(LocalPostsConnector, AnIdCannotChangeWhatIsDeletedOrWhereAPostIsCreated) 
     EXPECT_EQ(http_.refused.size(), 7u);
 }
 
+// ---- the update (D-099) -------------------------------------------------------------------------
+
+namespace {
+
+// The post of the list fixture with that id, as the reader maps it.
+gbp::LocalPost listed(std::string_view post_id) {
+    for (const auto& value : boost::json::parse(test::fixture("local-posts-list.json")).at("localPosts").as_array()) {
+        auto post = core::from_json<gbp::LocalPost>(value).value();
+        if (!post.name.ends_with(std::string("/") + std::string(post_id))) continue;
+        post.raw = value;
+        return post;
+    }
+    throw std::logic_error("the fixture has no such post");
+}
+
+// The post's content as the engine holds it, with `change` made: an edit a person wrote.
+domain::LocalPostContent edit_of(const gbp::LocalPost& post, const std::function<void(domain::LocalPostContent&)>& change) {
+    auto content = gbp::to_content(post);
+    change(content);
+    return domain::normalize_local_post(content).value();
+}
+
+boost::json::object body_for(const gbp::LocalPost& post, const domain::LocalPostContent& edit, const std::optional<gbp::MediaSource>& media = {}) {
+    return gbp::update_body(post, edit, domain::local_post_edit_mask(gbp::to_content(post), edit).value(), media);
+}
+
+}  // namespace
+
+TEST_F(LocalPostsConnector, AnUpdateIsOnePatchOfThatPostWithTheFieldsItsMaskNames) {
+    http_.reply(200, std::string(kTokenOk));
+    http_.reply(200, test::fixture("local-post-created.json"));
+    const boost::json::object body{{"summary", "Live music every Friday evening through February."}, {"callToAction", {{"actionType", "CALL"}}}};
+    const auto updated = await(writer_.update_local_post({"111", "9001", "7001"}, {"summary", "callToAction"}, body));
+    ASSERT_TRUE(updated) << updated.error().message;
+    EXPECT_EQ(updated->name, "accounts/111/locations/9001/localPosts/7001") << "the post as Google has it after the edit";
+    EXPECT_EQ(updated->raw.at("topicType").as_string(), "EVENT") << "the payload is kept as Google sent it";
+
+    ASSERT_EQ(http_.requests.size(), 2u);
+    const auto& request = http_.requests[1];
+    EXPECT_EQ(request.method, http::ClientMethod::patch);
+    EXPECT_EQ(std::string_view(request.url.buffer()),
+              "https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/7001?updateMask=summary,callToAction");
+    EXPECT_TRUE(http::is_local_post_update_url(request.url));
+    EXPECT_EQ(boost::json::parse(request.body).as_object(), body) << "what the mask names, and nothing else";
+    EXPECT_EQ(request.content_type, "application/json");
+    EXPECT_EQ(http_.header(1, "Authorization"), "Bearer token-1");
+
+    // Each field alone travels under its own name.
+    for (const auto field : domain::kLocalPostEditFields) {
+        http_.reply(200, test::fixture("local-post-created.json"));
+        ASSERT_TRUE(await(writer_.update_local_post({"111", "9001", "7001"}, {field}, {})));
+        EXPECT_EQ(std::string_view(http_.requests.back().url.buffer()),
+                  std::format("https://mybusiness.googleapis.com/v4/accounts/111/locations/9001/localPosts/7001?updateMask={}", field));
+    }
+}
+
+TEST_F(LocalPostsConnector, TheUpdateBodyHoldsTheFieldsTheMaskNamesAndNoOther) {
+    // A live post made at Google, with a call button and three photos of Google's own.
+    const auto post = listed("7004");
+    EXPECT_EQ(body_for(post, edit_of(post, [](auto& c) { c.summary = "Now open late every day."; })),
+              boost::json::parse(R"({"summary": "Now open late every day."})").as_object())
+        << "the button and the photos are not in the request: they stay as they are";
+    EXPECT_EQ(body_for(post, edit_of(post, [](auto& c) { c.language_code = "es"; })), boost::json::parse(R"({"languageCode": "es"})").as_object());
+    EXPECT_EQ(body_for(post, edit_of(post, [](auto& c) {
+                  c.call_to_action = domain::LocalPostCallToAction{.action_type = "book", .url = "https://example.com/book"};
+              })),
+              boost::json::parse(R"({"callToAction": {"actionType": "BOOK", "url": "https://example.com/book"}})").as_object());
+    // The button taken away: the mask names it and the body leaves it out, which clears it.
+    const auto no_button = edit_of(post, [](auto& c) { c.call_to_action.reset(); });
+    EXPECT_THAT(domain::local_post_edit_mask(gbp::to_content(post), no_button).value(), testing::ElementsAre("callToAction"));
+    EXPECT_TRUE(body_for(post, no_button).empty());
+
+    // An upload replaces what the post shows; taking the post's own upload away sends the media empty.
+    auto with_upload = gbp::to_content(post);
+    with_upload.media_id = 7;
+    EXPECT_EQ(gbp::update_body(post, with_upload, {"media"}, gbp::MediaSource{"photo", "https://storage.googleapis.com/poni-public/p/abc.jpg"}),
+              boost::json::parse(R"({"media": [{"mediaFormat": "PHOTO", "sourceUrl": "https://storage.googleapis.com/poni-public/p/abc.jpg"}]})")
+                  .as_object());
+    EXPECT_EQ(gbp::update_body(post, gbp::to_content(post), {"media"}, std::nullopt), boost::json::parse(R"({"media": []})").as_object());
+
+    // Two fields at once, and an empty mask sends nothing at all.
+    EXPECT_EQ(body_for(post, edit_of(post, [](auto& c) {
+                  c.summary = "Now open late every day.";
+                  c.language_code = "es";
+              })),
+              boost::json::parse(R"({"summary": "Now open late every day.", "languageCode": "es"})").as_object());
+    EXPECT_TRUE(gbp::update_body(post, gbp::to_content(post), {}, std::nullopt).empty());
+}
+
+TEST_F(LocalPostsConnector, AnEventGoesBackWithItsRepeatAndItsUnchangedTimesAsGoogleHoldsThem) {
+    // A repeating event: its repeat is Google's, with whatever the pattern holds.
+    auto repeating = listed("7001");
+    repeating.raw.as_object()["event"].as_object()["recurrenceInfo"] =
+        boost::json::parse(R"({"weeklyPattern": {"daysOfWeek": ["FRIDAY", "SATURDAY"]}, "seriesEndTime": "2027-01-31T00:00:00Z"})");
+    repeating = [&] {
+        auto mapped = core::from_json<gbp::LocalPost>(repeating.raw).value();
+        mapped.raw = repeating.raw;
+        return mapped;
+    }();
+    const auto retitled = body_for(repeating, edit_of(repeating, [](auto& c) { c.event->title = "Friday and Saturday jazz"; }));
+    EXPECT_EQ(retitled, boost::json::parse(R"({"event": {
+                  "title": "Friday and Saturday jazz",
+                  "schedule": {"startDate": {"year": 2026, "month": 12, "day": 19}, "startTime": {"hours": 18},
+                               "endDate": {"year": 2026, "month": 12, "day": 19}, "endTime": {"hours": 20}},
+                  "recurrenceInfo": {"weeklyPattern": {"daysOfWeek": ["FRIDAY", "SATURDAY"]}, "seriesEndTime": "2027-01-31T00:00:00Z"}}})")
+                            .as_object())
+        << "the weekdays the engine does not hold, and the times as Google wrote them, are sent back as they came";
+
+    // A new time is the edit's, and only that part of the schedule is written anew; the repeat still is not.
+    const auto moved = body_for(repeating, edit_of(repeating, [](auto& c) { c.event->schedule.end_time = "21:30"; }));
+    EXPECT_EQ(moved.at("event").at("schedule"),
+              boost::json::parse(R"({"startDate": {"year": 2026, "month": 12, "day": 19}, "startTime": {"hours": 18},
+                                     "endDate": {"year": 2026, "month": 12, "day": 19}, "endTime": {"hours": 21, "minutes": 30}})"));
+    EXPECT_EQ(moved.at("event").at("recurrenceInfo"), repeating.raw.at("event").at("recurrenceInfo"));
+    EXPECT_EQ(moved.at("event").at("title").as_string(), "Friday live music");
+
+    // An offer whose start has no time at Google: a new title does not give it one.
+    const auto offer = listed("7005");
+    const auto renamed = body_for(offer, edit_of(offer, [](auto& c) { c.event->title = "Weekend special for four"; }));
+    EXPECT_EQ(renamed.at("event").at("schedule"), offer.raw.at("event").at("schedule"));
+    EXPECT_EQ(renamed.at("event").at("schedule").at("startTime"), boost::json::object{});
+    EXPECT_FALSE(renamed.at("event").as_object().contains("recurrenceInfo")) << "nor a repeat";
+    // Its end moves to another day: the start, which Google holds without a time, still gets none.
+    const auto longer = body_for(offer, edit_of(offer, [](auto& c) { c.event->schedule.end_date = "2026-09-13"; }));
+    EXPECT_EQ(longer.at("event").at("schedule"),
+              boost::json::parse(R"({"startDate": {"year": 2026, "month": 8, "day": 28}, "startTime": {},
+                                     "endDate": {"year": 2026, "month": 9, "day": 13}, "endTime": {"hours": 22}})"));
+    EXPECT_EQ(longer.at("event").at("title").as_string(), "Weekend special");
+    // A time the person sets is written, also 00:00 where Google held none: that is what they asked for.
+    const auto at_noon = body_for(offer, edit_of(offer, [](auto& c) { c.event->schedule.start_time = "12:00"; }));
+    EXPECT_EQ(at_noon.at("event").at("schedule").at("startTime"), boost::json::parse(R"({"hours": 12, "minutes": 0})"));
+    EXPECT_EQ(at_noon.at("event").at("schedule").at("endTime"), boost::json::parse(R"({"hours": 22})"));
+    // An offer's three parts are written whole, and one that says nothing is left out, which clears it.
+    EXPECT_EQ(body_for(offer, edit_of(offer, [](auto& c) { c.offer->coupon_code = "WEEKEND"; })),
+              boost::json::parse(R"({"offer": {"couponCode": "WEEKEND"}})").as_object());
+    const auto with_terms = listed("7002");
+    EXPECT_EQ(body_for(with_terms, edit_of(with_terms, [](auto& c) { c.offer->coupon_code.reset(); })),
+              boost::json::parse(R"({"offer": {"termsConditions": "Dine-in only. One per table."}})").as_object());
+    EXPECT_TRUE(body_for(with_terms, edit_of(with_terms, [](auto& c) { c.offer = domain::LocalPostOffer{}; })).empty());
+}
+
+TEST_F(LocalPostsConnector, AnUpdateIsNeverSentTwiceByTheConnector) {
+    const auto patches_sent = [&] {
+        return std::ranges::count_if(http_.requests, [](const auto& r) { return r.method == http::ClientMethod::patch; });
+    };
+    const auto update = [&] { return await(writer_.update_local_post({"111", "9001", "7001"}, {"summary"}, {{"summary", "New text."}})); };
+    http_.reply(200, std::string(kTokenOk));
+
+    // A refusal says what Google would not take; nothing changed.
+    http_.reply(400, error_fixture("summary_too_long"));
+    const auto too_long = update();
+    ASSERT_FALSE(too_long);
+    EXPECT_EQ(too_long.error().http_status, 400u);
+    EXPECT_THAT(too_long.error().message, HasSubstr("summary: Must be at most 1500 characters"));
+    http_.reply(404, error_fixture("not_found"));
+    EXPECT_EQ(update().error().kind, ApiError::Kind::not_found);
+    http_.reply(403, R"({"error": {"status": "PERMISSION_DENIED", "message": "no"}})");
+    EXPECT_EQ(update().error().kind, ApiError::Kind::permission_denied);
+    EXPECT_EQ(patches_sent(), 3);
+
+    // A 5xx says nothing about whether the post changed. It is reported; whether anything follows is the caller's call.
+    http_.reply(503, "{}");
+    const auto unavailable = update();
+    ASSERT_FALSE(unavailable);
+    EXPECT_EQ(unavailable.error().kind, ApiError::Kind::unavailable);
+    EXPECT_EQ(patches_sent(), 4);
+
+    // Accepted, with an answer that can't be read: the post changed, and the caller is told it can't see how.
+    http_.reply(200, "<html>proxy</html>");
+    EXPECT_EQ(update().error().kind, ApiError::Kind::invalid_response);
+    http_.reply(200, R"({"state": "PROCESSING"})");
+    EXPECT_EQ(update().error().kind, ApiError::Kind::invalid_response);
+    EXPECT_EQ(patches_sent(), 6);
+
+    // Rate limited: nothing changed. Still one request; the job decides about another.
+    http_.reply(429, R"({"error": {"status": "RESOURCE_EXHAUSTED", "message": "Quota exceeded"}})");
+    EXPECT_EQ(update().error().kind, ApiError::Kind::rate_limited);
+    EXPECT_EQ(patches_sent(), 7);
+
+    // 401: Google did nothing, so one more try with a new token is safe. A second 401 is the answer.
+    limiter_.configure(std::string(gbp::kLocalPostsApi), {.per_minute = 6000, .burst = 100});
+    clock_.advance(std::chrono::seconds(61));
+    http_.reply(401, "{}");
+    http_.reply(200, R"({"access_token": "token-2", "expires_in": 3600})");
+    http_.reply(200, test::fixture("local-post-created.json"));
+    ASSERT_TRUE(update());
+    EXPECT_EQ(patches_sent(), 9);
+    EXPECT_EQ(http_.header(http_.requests.size() - 1, "Authorization"), "Bearer token-2");
+
+    // No answer at all throws: jobs/local_posts.cpp takes that for "the outcome is unknown" and sends nothing again.
+    http_.fail();
+    EXPECT_THROW(update(), boost::system::system_error);
+    EXPECT_EQ(patches_sent(), 10);
+}
+
+TEST_F(LocalPostsConnector, NeitherAnIdNorAMaskCanChangeWhatAnUpdateIs) {
+    http_.reply(200, std::string(kTokenOk));
+    // Whatever a caller hands over, the address is built part by part and the outbound client's rule refuses the result.
+    for (const auto& name : {gbp::LocalPostName{"111", "9001", ".."}, gbp::LocalPostName{"111", "9001", "7001/../../../locations/9002"},
+                             gbp::LocalPostName{"111", "..", "7001"}, gbp::LocalPostName{"111", "9001", ""},
+                             gbp::LocalPostName{"111", "9001", "7001?updateMask=topicType"}}) {
+        EXPECT_THROW(await(writer_.update_local_post(name, {"summary"}, {})), std::invalid_argument) << name.str();
+    }
+    // A mask of anything but the six names, each once: the kind, the time, nothing, a second parameter.
+    for (const std::vector<std::string_view>& mask : std::vector<std::vector<std::string_view>>{
+             {},
+             {""},
+             {"topicType"},
+             {"scheduledTime"},
+             {"summary", "scheduledTime"},
+             {"summary", "summary"},
+             {"*"},
+             {"summary&validateOnly=true"},
+             {"summary#x"},
+             {"summary,topicType"},
+             {"summary "},
+             {"state"},
+         }) {
+        EXPECT_THROW(await(writer_.update_local_post({"111", "9001", "7001"}, mask, {})), std::invalid_argument);
+    }
+    for (const auto& request : http_.requests) {
+        EXPECT_EQ(request.method, http::ClientMethod::post) << "only the token request went out";
+        EXPECT_FALSE(http::is_gbp_host(request.url));
+    }
+    EXPECT_EQ(http_.refused.size(), 17u);
+    for (const auto& refused : http_.refused) EXPECT_EQ(refused.url.segments().size(), 7u) << "nothing a caller gave became another part of the address";
+}
+
 // ---- the stand-in for Google that the integration tests use ---------------------------------
 
 TEST_F(LocalPostsConnector, TheFakeHoldsANewPostInProcessingAsGoogleDoes) {
@@ -463,4 +695,47 @@ TEST_F(LocalPostsConnector, TheFakeHoldsANewPostInProcessingAsGoogleDoes) {
     EXPECT_THROW(await(google.create_local_post("111", "9001", gbp::create_body(standard("Arrived."), std::nullopt))), boost::system::system_error);
     EXPECT_EQ(google.posts["9001"].size(), 2u);
     EXPECT_EQ(google.creates.size(), 5u) << "every create that reached Google is counted, whatever became of it";
+}
+
+TEST_F(LocalPostsConnector, TheFakeChangesTheFieldsAnUpdateNamesAndNoOther) {
+    test::FakeLocalPosts google;
+    auto content = standard("Open late on Fridays.");
+    content.call_to_action = domain::LocalPostCallToAction{.action_type = "book", .url = "https://example.com/book"};
+    ASSERT_TRUE(await(google.create_local_post("111", "9001", gbp::create_body(content, gbp::MediaSource{"photo", "https://example.com/p/a.jpg"}))));
+    google.finish_processing();
+    const gbp::LocalPostName name{"111", "9001", "7001"};
+
+    const auto updated = await(google.update_local_post(name, {"summary"}, {{"summary", "Open late on Saturdays."}, {"languageCode", "es"}}));
+    ASSERT_TRUE(updated);
+    EXPECT_EQ(updated->summary, "Open late on Saturdays.");
+    EXPECT_EQ(updated->languageCode, "en") << "a member the mask does not name is ignored";
+    EXPECT_EQ(updated->callToAction->actionType, "BOOK");
+    EXPECT_EQ(updated->state, "LIVE") << "the state it had, unless the test says what Google does";
+    EXPECT_EQ(updated->raw.at("summary").as_string(), "Open late on Saturdays.");
+
+    // A field the mask names and the body leaves out is cleared.
+    google.state_after_update = "PROCESSING";
+    const auto cleared = await(google.update_local_post(name, {"callToAction", "media"}, {{"media", boost::json::array{}}}));
+    ASSERT_TRUE(cleared);
+    EXPECT_FALSE(cleared->callToAction);
+    EXPECT_FALSE(cleared->media);
+    EXPECT_EQ(cleared->state, "PROCESSING");
+    EXPECT_EQ(await(google.get_local_post(name))->state, "PROCESSING");
+
+    // Refused, lost, and lost after arriving.
+    google.fail_update = ApiError{ApiError::Kind::other, 400, "HTTP 400 INVALID_ARGUMENT"};
+    EXPECT_FALSE(await(google.update_local_post(name, {"summary"}, {{"summary", "Refused."}})));
+    google.fail_update.reset();
+    google.update_times_out = true;
+    EXPECT_THROW(await(google.update_local_post(name, {"summary"}, {{"summary", "Lost."}})), boost::system::system_error);
+    EXPECT_EQ(await(google.get_local_post(name))->summary, "Open late on Saturdays.");
+    google.timeout_after_updating = true;
+    EXPECT_THROW(await(google.update_local_post(name, {"summary"}, {{"summary", "Arrived."}})), boost::system::system_error);
+    EXPECT_EQ(await(google.get_local_post(name))->summary, "Arrived.");
+    google.update_times_out = false;
+
+    EXPECT_EQ(await(google.update_local_post({"111", "9001", "9999"}, {"summary"}, {})).error().kind, ApiError::Kind::not_found);
+    EXPECT_EQ(await(google.update_local_post(name, {"topicType"}, {{"topicType", "EVENT"}})).error().http_status, 400u);
+    EXPECT_EQ(google.updates.size(), 7u) << "every update that reached Google is counted, whatever became of it";
+    EXPECT_THAT(google.updates[0].mask, testing::ElementsAre("summary"));
 }

@@ -93,4 +93,34 @@ asio::awaitable<Result<void>> HttpLocalPostWriter::delete_local_post(LocalPostNa
     co_return Result<void>{};
 }
 
+asio::awaitable<Result<LocalPost>> HttpLocalPostWriter::update_local_post(LocalPostName name, std::vector<std::string_view> mask,
+                                                                          boost::json::object body) {
+    http::ClientRequest request;
+    request.method = http::ClientMethod::patch;
+    request.url = google::url(kV4Origin, {"v4", "accounts", name.account_id, "locations", name.location_id, "localPosts", name.post_id});
+    // The one query a write carries: the names joined by commas, as one parameter. Whatever a caller hands
+    // over is written as that parameter's value and never as more of the address; the outbound client then
+    // takes the address only if the value is field names an edit may change, each once
+    // (http::is_local_post_update_url), and refuses it otherwise before anything is sent.
+    std::string names;
+    for (const auto field : mask) {
+        if (!names.empty()) names.push_back(',');
+        names.append(field);
+    }
+    request.url.params().append({"updateMask", names});
+    request.content_type = "application/json";
+    request.body = boost::json::serialize(body);
+    const auto response = co_await google::send(api_, kLocalPostsApi, std::move(request));
+    if (!response) co_return std::unexpected(response.error());
+
+    // Google accepted the edit. A body that can't be read does not undo that: the caller is told so
+    // (invalid_response) and must not send it again.
+    boost::system::error_code ec;
+    const auto answer = boost::json::parse(response->body, ec);
+    if (ec) co_return std::unexpected(invalid_response("Google accepted the edit, but its answer is not JSON"));
+    auto post = to_post(answer);
+    if (!post) co_return std::unexpected(invalid_response("Google accepted the edit, but its answer names no post"));
+    co_return std::move(*post);
+}
+
 }  // namespace poni::gbp

@@ -8,6 +8,7 @@
 #include <array>
 #include <chrono>
 #include <format>
+#include <utility>
 
 namespace poni::domain {
 
@@ -248,7 +249,8 @@ CheckReport run_local_post_checks(const LocalPostContent& content, const LocalPo
     }
     {
         const auto* recurrence = event && event->recurrence ? &*event->recurrence : nullptr;
-        if (!recurrence) {
+        if (!recurrence || context.edit_at_google) {
+            // An edit of a post at Google leaves its repeat as Google has it.
             add("recurrence_end", true);
         } else if (!recurrence->until) {
             add("recurrence_end", false, "a repeating post needs a day on which it ends");
@@ -258,7 +260,8 @@ CheckReport run_local_post_checks(const LocalPostContent& content, const LocalPo
                 "the repeat ends before the event starts, or has ended already");
         }
     }
-    add("scheduled_in_future", !content.scheduled_time || still_ahead(*content.scheduled_time, context.now), "the time to publish at is in the past");
+    add("scheduled_in_future", context.edit_at_google || !content.scheduled_time || still_ahead(*content.scheduled_time, context.now),
+        "the time to publish at is in the past");
     add("language", is_post_language_tag(content.language_code), "the language must be a tag such as en or zh-Hant");
     add("media_usable", !content.media_id || !context.media_problem, context.media_problem.value_or(""));
     return report;
@@ -270,6 +273,129 @@ std::optional<std::string> contact_detail_in(std::string_view text) {
     if (scan_for_email(folded)) return "an email address";
     if (scan_for_handle(folded)) return "a social handle";
     return std::nullopt;
+}
+
+namespace {
+
+// The post as a draft would hold it. What a draft cannot hold has no place in an edit either.
+std::expected<LocalPostContent, EditObstacle> as_a_draft_holds(const LocalPostContent& post) {
+    auto held = normalize_local_post(post);
+    if (!held) {
+        return std::unexpected(EditObstacle{EditObstacle::Kind::not_editable,
+                                            {},
+                                            std::format("The post holds what a draft cannot hold, so it cannot be edited here. {}", held.error())});
+    }
+    return std::move(*held);
+}
+
+// The part an edit does not change in which the two differ, with what it is; nothing if in none.
+std::optional<std::pair<std::string_view, std::string_view>> fixed_difference(const LocalPostContent& a, const LocalPostContent& b) {
+    if (a.topic_type != b.topic_type) return std::pair{std::string_view("topic_type"), std::string_view("the kind of a post")};
+    if (a.scheduled_time != b.scheduled_time) {
+        return std::pair{std::string_view("scheduled_time"), std::string_view("the time Google publishes a post at")};
+    }
+    const auto repeat = [](const LocalPostContent& c) { return c.event ? c.event->recurrence : std::optional<LocalPostRecurrence>{}; };
+    if (repeat(a) != repeat(b)) return std::pair{std::string_view("event.recurrence"), std::string_view("how a post repeats")};
+    return std::nullopt;
+}
+
+// Which of the six fields differ between two contents a draft can hold, in the order of kLocalPostEditFields.
+std::array<bool, 6> differing(const LocalPostContent& a, const LocalPostContent& b) {
+    return {a.summary != b.summary, a.call_to_action != b.call_to_action, a.event != b.event,
+            a.offer != b.offer,     a.media_id != b.media_id,             a.language_code != b.language_code};
+}
+
+}  // namespace
+
+std::string_view edit_member(std::string_view field) {
+    const auto found = std::ranges::find(kLocalPostEditFields, field);
+    if (found == kLocalPostEditFields.end()) return {};
+    return kLocalPostEditMembers[static_cast<std::size_t>(found - kLocalPostEditFields.begin())];
+}
+
+std::expected<std::vector<std::string_view>, EditObstacle> local_post_edit_mask(const LocalPostContent& post, const LocalPostContent& edit) {
+    const auto held = as_a_draft_holds(post);
+    if (!held) return std::unexpected(held.error());
+    if (const auto fixed = fixed_difference(edit, *held)) {
+        return std::unexpected(EditObstacle{
+            EditObstacle::Kind::fixed_part, std::string(fixed->first),
+            std::format("\"{}\" is not the post's: an edit does not change {}. To change it, copy the post and remove it.", fixed->first,
+                        fixed->second)});
+    }
+    const auto differs = differing(*held, edit);
+    std::vector<std::string_view> mask;
+    for (std::size_t i = 0; i < differs.size(); ++i) {
+        if (differs[i]) mask.push_back(kLocalPostEditFields[i]);
+    }
+    return mask;
+}
+
+namespace {
+
+// One of the six fields, by its place in kLocalPostEditFields, taken from one content into another.
+void take_field(std::size_t i, const LocalPostContent& from, LocalPostContent& to) {
+    switch (i) {
+        case 0: to.summary = from.summary; break;
+        case 1: to.call_to_action = from.call_to_action; break;
+        case 2: to.event = from.event; break;
+        case 3: to.offer = from.offer; break;
+        case 4: to.media_id = from.media_id; break;
+        case 5: to.language_code = from.language_code; break;
+        default: break;
+    }
+}
+
+}  // namespace
+
+LocalPostContent local_post_with_edit(const LocalPostContent& base, const LocalPostContent& edit, const LocalPostContent& now) {
+    LocalPostContent out = now;
+    const auto then = normalize_local_post(base);
+    // A base no draft could hold has no edit (local_post_edit_mask): nothing of it is laid over the post.
+    if (!then) return out;
+    const auto changes = differing(*then, edit);
+    for (std::size_t i = 0; i < changes.size(); ++i) {
+        if (changes[i]) take_field(i, edit, out);
+    }
+    return out;
+}
+
+std::expected<std::vector<std::string_view>, EditObstacle> local_post_edit_request(const LocalPostContent& base, const LocalPostContent& edit,
+                                                                                 const LocalPostContent& at_google) {
+    const auto now = as_a_draft_holds(at_google);
+    if (!now) return std::unexpected(now.error());
+    const auto then = as_a_draft_holds(base);
+    if (!then) return std::unexpected(then.error());
+    const auto changes = differing(*then, edit);  // what the edit's author changed
+    const auto to_write = differing(*now, edit);  // where Google does not have the edit's value
+    const auto moved = differing(*now, *then);    // what changed at Google since the edit was written
+    std::vector<std::string_view> mask;
+    for (std::size_t i = 0; i < changes.size(); ++i) {
+        if (!changes[i] || !to_write[i]) continue;
+        if (moved[i]) {
+            return std::unexpected(EditObstacle{
+                EditObstacle::Kind::changed_at_google, std::string(kLocalPostEditMembers[i]),
+                std::format("The post changed at Google after the edit was written: its \"{}\" was changed there, and the edit would write over "
+                            "that change. Nothing is sent. Load the post and save the edit again, against the post as it is now.",
+                            kLocalPostEditMembers[i])});
+        }
+        mask.push_back(kLocalPostEditFields[i]);
+    }
+    return mask;
+}
+
+std::vector<std::string_view> edit_fields_not_shown(const LocalPostContent& sent, const std::vector<std::string_view>& fields,
+                                                    const LocalPostContent& answer) {
+    std::vector<std::string_view> missing;
+    for (std::size_t i = 0; i < kLocalPostEditFields.size(); ++i) {
+        const auto field = kLocalPostEditFields[i];
+        if (field == "media" || !std::ranges::contains(fields, field)) continue;
+        // What was sent, with this one field as the answer has it: whatever else the answer says or lacks stays out of it.
+        LocalPostContent with_answer = sent;
+        take_field(i, answer, with_answer);
+        const auto held = normalize_local_post(with_answer);
+        if (!held || differing(*held, sent)[i]) missing.push_back(field);
+    }
+    return missing;
 }
 
 bool is_post_language_tag(std::string_view tag) {
