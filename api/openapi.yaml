@@ -2018,10 +2018,13 @@ paths:
           in: query
           description: |
             Google's states to include, for example `google_state=live,recurring`.
-            `none` takes the posts that have no state: drafts, and posts Google
-            has not been read back for yet, as `google_state=none,processing`
-            does together with the posts Google is still taking in. `none` is a
-            word of this filter only; a post's `google_state` is then null.
+            `none` takes every post that has no state from Google, whatever its
+            `status`: a draft, a rejected draft, a post that is `approved`,
+            `sending`, `unknown` or `failed`, and a sent post Google has not been
+            read back for yet. It combines with the others:
+            `google_state=none,processing` adds the posts Google is still taking
+            in, and `status` narrows the result as usual. `none` is a word of
+            this filter only; a post's `google_state` is then null.
           style: form
           explode: false
           schema:
@@ -6871,9 +6874,10 @@ components:
           type: [integer, "null"]
           format: int64
           description: |
-            The post this draft was copied from (`POST /api/local-posts/{id}/copy`, D-098).
-            Null for any other post, and null again when that post was deleted. The link
-            is not content: it is not approved and changes nothing about either post.
+            The post this post was copied from (`POST /api/local-posts/{id}/copy`, D-098).
+            A copy keeps it after it is approved, sent or removed. Null for a post that
+            is no copy, and null again when the post it was copied from was deleted. The
+            link is not content: it is not approved and changes nothing about either post.
         copies:
           type: array
           description: |
