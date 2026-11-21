@@ -83,7 +83,11 @@ void add_local_post_routes(Router& router, const Api& api, storage::ObjectStore*
                    filter.client_id = query.integer("client_id", bad);
                    filter.location_id = query.integer("location_id", bad);
                    read_choices(query, "status", repo::kLocalPostStatuses, filter.statuses, bad);
-                   read_choices(query, "google_state", repo::kLocalPostGoogleStates, filter.google_states, bad);
+                   read_choices(query, "google_state", repo::kLocalPostGoogleStateFilter, filter.google_states, bad);
+                   if (const auto order = query.get("order")) {
+                       if (*order != "asc" && *order != "desc") bad = true;
+                       filter.descending = *order == "desc";
+                   }
                    if (!read_page(query, filter.page, bad)) co_return bad_query();
                    co_return ok(co_await api.query([filter, media_base](pqxx::work& tx) { return repo::list_local_posts(tx, filter, media_base); }));
                });

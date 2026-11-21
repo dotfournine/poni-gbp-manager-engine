@@ -47,6 +47,7 @@ std::string local_post_select(std::string_view base) {
     const auto at = [](std::string_view column) { return std::format("{} AS {}", iso(std::format("p.{}", column)), column); };
     const auto by = [](std::string_view column) { return std::format("(SELECT u.email FROM users u WHERE u.id = p.{0}) AS {0}", column); };
     // media: what Google shows once it has the post; before that, the uploaded file.
+    // copies: the posts copied from this one, newest first (D-098).
     return std::format(R"sql(
         SELECT p.id, p.location_id, l.title AS location_title, l.client_id, c.name AS client_name, p.origin, p.status,
                p.status_reason, p.google_state, p.google_name, p.search_url,
@@ -58,7 +59,10 @@ std::string local_post_select(std::string_view base) {
                     WHEN m.id IS NOT NULL AND {0}::text <> '' THEN
                         jsonb_build_array(jsonb_build_object('format', m.format, 'url', {0}::text || m.object_name))
                     ELSE '[]'::jsonb END AS media,
-               p.checks, {1}, {2}, {3}, {4}, {5}, {6}, {7}, {8}, {9}, {10}, {11}, {12}, {13}
+               p.checks, p.copied_from_id,
+               coalesce((SELECT jsonb_agg(jsonb_build_object('id', k.id, 'status', k.status) ORDER BY k.created_at DESC, k.id DESC)
+                           FROM local_posts k WHERE k.copied_from_id = p.id), '[]'::jsonb) AS copies,
+               {1}, {2}, {3}, {4}, {5}, {6}, {7}, {8}, {9}, {10}, {11}, {12}, {13}
           FROM local_posts p
           JOIN locations l ON l.id = p.location_id
           LEFT JOIN clients c ON c.id = l.client_id
@@ -247,9 +251,11 @@ bool same_post(const domain::LocalPostContent& sent, const domain::LocalPostCont
 }
 
 // A new draft by the signed-in person, with its checks: what writing a draft and copying a post share.
-// `normalized` has been through domain::normalize_local_post. The caller records the audit entry.
+// `normalized` has been through domain::normalize_local_post. `copied_from`: the post a copy was made
+// of, and nothing for a draft written new. The caller records the audit entry.
 Result<std::int64_t> insert_draft(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
-                                  const domain::LocalPostContent& normalized, const OptString& status_reason, std::string_view media_base) {
+                                  const domain::LocalPostContent& normalized, const OptString& status_reason,
+                                  std::optional<std::int64_t> copied_from, std::string_view media_base) {
     const auto location = sending_state(tx, location_id);
     if (!location) return not_found("location");
     if (!location->synced) return conflict("location_not_synced", std::string(kNotSynced));
@@ -258,10 +264,10 @@ Result<std::int64_t> insert_draft(pqxx::transaction_base& tx, audit::Writer& aud
     }
     const auto report = checks_for(tx, normalized, audit.now(), media_base);
     return tx.query_value<std::int64_t>(
-        "INSERT INTO local_posts (location_id, origin, status, status_reason, content, checks, created_by, created_at, updated_at) "
-        "VALUES ($1, 'system', 'draft', $2, $3::jsonb, $4::jsonb, $5, $6::timestamptz, $6::timestamptz) RETURNING id",
+        "INSERT INTO local_posts (location_id, origin, status, status_reason, content, checks, created_by, created_at, updated_at, "
+        "copied_from_id) VALUES ($1, 'system', 'draft', $2, $3::jsonb, $4::jsonb, $5, $6::timestamptz, $6::timestamptz, $7) RETURNING id",
         pqxx::params{location_id, status_reason, json_text(normalized), json_text(report.results), audit.user_id(),
-                     to_timestamptz(audit.now())});
+                     to_timestamptz(audit.now()), copied_from});
 }
 
 // "a; b; c".
@@ -293,9 +299,28 @@ model::LocalPostList list_local_posts(pqxx::transaction_base& tx, const LocalPos
         if (!values.empty()) where.add(std::format("{} IN (SELECT jsonb_array_elements_text({}::jsonb))", column, where.bind(db::json_list(values))));
     };
     any_of("p.status", filter.statuses);
-    any_of("p.google_state", filter.google_states);
-    return db::page<model::LocalPost>(tx, local_post_select(base), where, "coalesce(p.google_created_at, p.created_at) DESC, p.id DESC",
-                                      filter.page);
+    // Google's states, and `none` for a post without one: the two kinds are either.
+    std::vector<std::string> states;
+    bool stateless = false;
+    for (const auto& state : filter.google_states) {
+        if (state == kNoGoogleState) {
+            stateless = true;
+        } else {
+            states.push_back(state);
+        }
+    }
+    if (stateless && states.empty()) {
+        where.add("p.google_state IS NULL");
+    } else if (stateless) {
+        where.add(std::format("(p.google_state IS NULL OR p.google_state IN (SELECT jsonb_array_elements_text({}::jsonb)))",
+                              where.bind(db::json_list(states))));
+    } else {
+        any_of("p.google_state", states);
+    }
+    // One key, in either direction; the id breaks ties, so that paging is stable both ways.
+    const std::string_view direction = filter.descending ? "DESC" : "ASC";
+    return db::page<model::LocalPost>(tx, local_post_select(base), where,
+                                      std::format("coalesce(p.google_created_at, p.created_at) {0}, p.id {0}", direction), filter.page);
 }
 
 std::optional<model::LocalPost> get_local_post(pqxx::transaction_base& tx, std::int64_t id, std::string_view media_base) {
@@ -309,7 +334,7 @@ Result<model::LocalPost> create_local_post(pqxx::transaction_base& tx, audit::Wr
                                            const domain::LocalPostContent& content, std::string_view media_base) {
     const auto normalized = domain::normalize_local_post(content);
     if (!normalized) return invalid(normalized.error());
-    const auto id = insert_draft(tx, audit, location_id, *normalized, std::nullopt, media_base);
+    const auto id = insert_draft(tx, audit, location_id, *normalized, std::nullopt, std::nullopt, media_base);
     if (!id) return std::unexpected(id.error());
     audit.record("local_post.create", "local_post", *id, {.after = {{"location_id", location_id}, {"content", boost::json::value_from(*normalized)}}});
     return *get_local_post(tx, *id, media_base);
@@ -327,7 +352,7 @@ Result<model::LocalPost> copy_local_post(pqxx::transaction_base& tx, audit::Writ
     const OptString reason = fitted.left_out.empty()
                                  ? OptString{}
                                  : OptString(std::format("Copied from post {}. Left out: {}.", id, joined(fitted.left_out)));
-    const auto copy = insert_draft(tx, audit, source->location_id, *normalized, reason, media_base);
+    const auto copy = insert_draft(tx, audit, source->location_id, *normalized, reason, id, media_base);
     if (!copy) return std::unexpected(copy.error());
     audit.record("local_post.copy", "local_post", *copy,
                  {.after = {{"location_id", source->location_id},

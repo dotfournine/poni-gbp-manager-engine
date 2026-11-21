@@ -72,18 +72,25 @@ inline constexpr std::array<std::string_view, 4> kLocalPostTopicTypes{"standard"
 
 // The values of local_posts.google_state.
 inline constexpr std::array<std::string_view, 5> kLocalPostGoogleStates{"processing", "scheduled", "live", "recurring", "rejected"};
+// What the list's google_state filter takes: those, and `none` for a post without one (D-098).
+// `none` is a word of the filter, never a state.
+inline constexpr std::string_view kNoGoogleState = "none";
+inline constexpr std::array<std::string_view, 6> kLocalPostGoogleStateFilter{"processing", "scheduled", "live",
+                                                                             "recurring",  "rejected",  kNoGoogleState};
 
 struct LocalPostFilter {
     std::optional<std::int64_t> client_id;
     std::optional<std::int64_t> location_id;
-    // Any of these; empty: any.
+    // Any of these; empty: any. google_states may hold kNoGoogleState.
     std::vector<std::string> statuses;
     std::vector<std::string> google_states;
+    bool descending = true;
     db::Page page;
 };
 
-// Newest first, by the time Google has for the post or, before it has one,
-// the time the draft was written. `media_base` is the public bucket's
+// By the time Google has for the post or, before it has one, the time the
+// draft was written, then by id: newest first, or oldest first when not
+// `descending`. `media_base` is the public bucket's
 // address (ObjectStore::base_url()), to which an uploaded file's name is added.
 model::LocalPostList list_local_posts(pqxx::transaction_base& tx, const LocalPostFilter& filter, std::string_view media_base);
 std::optional<model::LocalPost> get_local_post(pqxx::transaction_base& tx, std::int64_t id, std::string_view media_base);
@@ -104,7 +111,8 @@ Result<model::LocalPost> edit_local_post(pqxx::transaction_base& tx, audit::Writ
 // for any post, also one made at Google (D-094). What a draft cannot hold is
 // left out and named in its status_reason (domain::fit_for_draft); an upload
 // is kept, Google's copy of a file is not. Otherwise as create_local_post:
-// the location must be synced, and nothing is sent or queued.
+// the location must be synced, and nothing is sent or queued. The copy's
+// copied_from_id names the post copied, which nothing else sets (D-098).
 Result<model::LocalPost> copy_local_post(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, std::string_view media_base);
 
 // Deletes a post that Google never had: a draft or a rejected one, and
