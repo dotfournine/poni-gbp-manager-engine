@@ -227,7 +227,7 @@ paths:
             sign-in page with `error=not_configured`, or for the app to
             `gbpmanager://auth?error=not_configured`. For the app over the
             attempt limit: to `gbpmanager://auth?error=too_many_attempts`,
-            with no attempt started.
+            with no attempt started and the attempt's cookie cleared.
           headers:
             Location:
               schema:
@@ -235,18 +235,10 @@ paths:
         "400":
           $ref: "#/components/responses/InvalidRequest"
         "429":
+          $ref: "#/components/responses/TooManyAttempts"
           description: >-
             The dashboard's start over the attempt limit
             (`too_many_attempts`). The app's start is redirected instead.
-          headers:
-            Retry-After:
-              description: Seconds to wait.
-              schema:
-                type: integer
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
 
   /api/auth/google/callback:
     get:
@@ -269,7 +261,7 @@ paths:
         `gbpmanager://auth?error=<code>` with the same codes and one of the
         app's only:
 
-        - `too_many_attempts`: too many sign-in attempts from this address; wait a quarter of an hour and start again
+        - `too_many_attempts`: too many sign-in attempts from this address; wait at most a quarter of an hour and start again
 
         Every request counts against the attempt limit of its address, the
         same limit as the start's, whatever its cookie says, and the limit
@@ -308,19 +300,11 @@ paths:
               schema:
                 type: string
         "429":
+          $ref: "#/components/responses/TooManyAttempts"
           description: >-
             Over the attempt limit (`too_many_attempts`): the dashboard's
             callback, or one without the attempt's cookie. The app's callback
             is redirected instead.
-          headers:
-            Retry-After:
-              description: Seconds to wait.
-              schema:
-                type: integer
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Error"
 
   /api/connections/{account}/start:
     parameters:

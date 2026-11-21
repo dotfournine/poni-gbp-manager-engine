@@ -615,6 +615,10 @@ TEST_F(AppSignIn, OverTheAttemptLimitTheAppIsSentBackWithItsOwnCode) {
     EXPECT_THAT(set_cookie(callback, "poni_signin"), HasSubstr("Max-Age=0"));
     EXPECT_TRUE(set_cookie(callback, "poni_session").empty());
     EXPECT_TRUE(provider_.redeemed_verifier.empty()) << "the code was not redeemed";
+    // Whose attempt it is is decided as before: a cookie with a note is the app's, the note well-formed or not.
+    const auto forged = app_flow.substr(0, app_flow.find('.') + 1) + "not-a-challenge";
+    EXPECT_EQ(header(get(kCallback + "?code=the-code&state=" + app_state, {.cookie = forged}), "Location"),
+              "gbpmanager://auth?error=too_many_attempts");
 
     // The dashboard's callback, and one without a cookie (nobody's attempt), keep the 429.
     const auto web = get(kCallback + "?code=the-code&state=" + web_state, {.cookie = web_flow});
@@ -629,9 +633,11 @@ TEST_F(AppSignIn, OverTheAttemptLimitTheAppIsSentBackWithItsOwnCode) {
     EXPECT_EQ(count("app_sign_in_codes"), 0);
     EXPECT_EQ(count("audit_log"), 0);
 
+    // The refused callback spent nothing on the server: presented again after the lockout, the same cookie,
+    // state and code still sign in. (A browser would have lost that cookie by then: the refusals cleared it.)
     clock_.advance(15min + 1s);
     EXPECT_FALSE(app_code(get(kCallback + "?code=the-code&state=" + app_state, {.cookie = app_flow})).empty())
-        << "after the lockout the same attempt goes through";
+        << "the refused callback redeemed, stored and spent nothing";
 }
 
 TEST_F(AppSignIn, EveryRequestToTheStartAndTheCallbackCountsWhateverItSays) {
