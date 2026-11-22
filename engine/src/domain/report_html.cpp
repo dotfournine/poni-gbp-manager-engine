@@ -314,11 +314,11 @@ std::string render_report(const ReportData& data) {
     const auto& before = data.previous;
     const auto period = period_label(data.period_start, data.period_end);
     std::string out(kHead);
-    out += std::format("<title>{} · {}</title>\n", html_escape(data.client_name), html_escape(period));
+    out += std::format("<title>{} · {}</title>\n", html_escape(data.location_title), html_escape(period));
     out += kStyle;
     out += "</head>\n<body>\n<main>\n";
     out += std::format("<header><h1>{}</h1><p class=\"sub\">Google reviews and visibility · {}</p></header>\n",
-                       html_escape(data.client_name), html_escape(period));
+                       html_escape(data.location_title), html_escape(period));
 
     if (data.summary) {
         out += std::format("<section><p class=\"summary\">{}</p></section>\n", html_escape(*data.summary));

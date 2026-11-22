@@ -1,6 +1,6 @@
-// Client reports as jobs (FR-8, D-085), and what a person does with one.
+// A location's reports as jobs (FR-8, D-085, D-102), and what a person does with one.
 //
-//   reports.build     builds one report: reads the client's stored reviews,
+//   reports.build     builds one report: reads the location's stored reviews,
 //                     asks Google for the period's visibility numbers and
 //                     search keywords, computes every figure in code
 //                     (domain/report.hpp), asks the model for a summary of
@@ -69,7 +69,7 @@ public:
 
 private:
     boost::asio::awaitable<void> build_once(std::int64_t report_id, bool last_attempt);
-    boost::asio::awaitable<std::vector<domain::LocationPerformance>> read_performance(const repo::ReportWork& work, bool last_attempt);
+    boost::asio::awaitable<domain::LocationPerformance> read_performance(const repo::ReportWork& work, bool last_attempt);
     boost::asio::awaitable<void> summarize(domain::ReportData& data);
     boost::asio::awaitable<void> hold(std::int64_t report_id, std::string reason);
     // Puts `html` under a new token. The token, or why the bucket refused.

@@ -373,7 +373,7 @@ DiscoveryOutcome apply_discovery(pqxx::transaction_base& tx, const std::vector<S
            SET missed_discoveries = missed_discoveries + 1, updated_at = $2::timestamptz
          WHERE access_status = 'active'
            AND gbp_location_id NOT IN (SELECT jsonb_array_elements_text($1::jsonb))
-        RETURNING id, title, missed_discoveries, client_id, enabled)sql",
+        RETURNING id, title, missed_discoveries, enabled)sql",
         pqxx::params{db::json_list(seen_ids), now_text});
     for (const auto& row : missing) {
         if (row[2].as<int>() < 2) continue;
@@ -385,11 +385,10 @@ DiscoveryOutcome apply_discovery(pqxx::transaction_base& tx, const std::vector<S
                    {.before = {{"access_status", "active"}}, .after = {{"access_status", "lost"}, {"title", row[1].as<std::string>()}}});
         // A location we work on that we can no longer reach is a system
         // problem (FR-7); one that is switched off is not.
-        if (row[4].as<bool>()) {
+        if (row[3].as<bool>()) {
             emit(tx,
                  {.type = std::string(kEventSystemProblem),
                   .key = std::format("location:{}:access_lost:{}", id, now_text),
-                  .client_id = row[3].as<std::optional<std::int64_t>>(),
                   .location_id = id,
                   .review_id = std::nullopt,
                   .subject = "Lost access to a location",

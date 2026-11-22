@@ -1,4 +1,4 @@
-// The numbers of a client report (FR-8, D-085), computed from what the
+// The numbers of a location's report (FR-8, D-085, D-102), computed from what the
 // engine has stored and from the visibility numbers read from Google for
 // the report. No I/O and no model: every figure a report shows comes out of
 // these functions, and the summary is written on top of them.
@@ -78,8 +78,9 @@ struct LocationPerformance {
 };
 
 struct ReportInput {
-    std::int64_t client_id = 0;
-    std::string client_name;
+    // The location the report covers (D-102); `locations` holds it alone.
+    std::int64_t location_id = 0;
+    std::string location_title;
     Period period;
     std::string time_zone;
     std::string generated_at;
@@ -87,9 +88,9 @@ struct ReportInput {
     // Reviews written in the period and in the period before it, not removed.
     std::vector<ReportReview> reviews;
     std::vector<ReportReview> previous_reviews;
-    // Topic id -> label, from the client's industry profile.
+    // Topic id -> label, from the location's industry profile.
     std::map<std::string, std::string> topic_labels;
-    // The item types of the client's industry that are people (a named staff
+    // The item types of the location's industry that are people (a named staff
     // member). Empty: the industry has none, and the report has no employee
     // recognition section.
     std::set<std::string> person_item_types;
@@ -146,7 +147,7 @@ BOOST_DESCRIBE_STRUCT(VisibilityDay, (), (day, views))
 struct Visibility {
     // False: Google could not be asked, or has no data for the period; `note` says which.
     bool available = false;
-    // For the page, which a client reads: no error text of Google's.
+    // For the page, which the business reads: no error text of Google's.
     std::string note;
     // Google's own words when it could not be asked. For staff; never on the page.
     std::string detail;
@@ -234,8 +235,8 @@ BOOST_DESCRIBE_STRUCT(Keywords, (), (month, items))
 struct ReportData {
     // 2: has `staff` (D-086). A report stored before it loads with none.
     int version = 2;
-    std::int64_t client_id = 0;
-    std::string client_name;
+    std::int64_t location_id = 0;
+    std::string location_title;
     std::string period_start;
     std::string period_end;
     std::string previous_start;
@@ -253,7 +254,7 @@ struct ReportData {
     std::vector<Ranked> topics_complained;
     std::vector<Ranked> items_praised;
     std::vector<Ranked> items_complained;
-    // Nothing when the client's industry has no item type for people, and in
+    // Nothing when the location's industry has no item type for people, and in
     // reports built before the section existed.
     std::optional<StaffRecognition> staff;
     std::vector<Highlight> highlights_best;
@@ -269,7 +270,7 @@ struct ReportData {
     std::string summary_note;
 };
 BOOST_DESCRIBE_STRUCT(ReportData, (),
-                      (version, client_id, client_name, period_start, period_end, previous_start, previous_end, time_zone,
+                      (version, location_id, location_title, period_start, period_end, previous_start, previous_end, time_zone,
                        generated_at, reviews, previous, running_count, running_average, locations, trend, topics_praised,
                        topics_complained, items_praised, items_complained, staff, highlights_best, highlights_worst, escalations_opened,
                        escalations_closed, visibility, keywords, summary, summary_note))

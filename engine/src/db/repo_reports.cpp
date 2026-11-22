@@ -34,7 +34,7 @@ std::string micros(std::string_view column) { return std::format("(extract(epoch
 
 std::string report_select() {
     return std::format(R"sql(
-        SELECT p.id, p.client_id, c.name AS client_name, p.period_start::text AS period_start, p.period_end::text AS period_end,
+        SELECT p.id, p.location_id, l.title AS location_title, p.period_start::text AS period_start, p.period_end::text AS period_end,
                p.time_zone, p.schedule_id, (SELECT u.email FROM users u WHERE u.id = p.requested_by) AS requested_by, p.status, p.error,
                p.hold_reason, (p.data->'reviews'->>'new_reviews')::bigint AS new_reviews,
                (p.data->'reviews'->>'average_rating')::float8 AS average_rating,
@@ -42,7 +42,7 @@ std::string report_select() {
                nullif(p.data->>'summary_note', '') AS summary_note, {} AS created_at, {} AS sent_at,
                (SELECT u.email FROM users u WHERE u.id = p.sent_by) AS sent_by
           FROM reports p
-          JOIN clients c ON c.id = p.client_id)sql",
+          JOIN locations l ON l.id = p.location_id)sql",
                        iso("p.created_at"), iso("p.sent_at"));
 }
 
@@ -64,7 +64,7 @@ model::ReportShareLink link_by_id(pqxx::transaction_base& tx, std::int64_t id, s
 }
 
 boost::json::value report_json(const model::Report& report) {
-    return {{"client_id", report.client_id},
+    return {{"location_id", report.location_id},
             {"period_start", report.period_start},
             {"period_end", report.period_end},
             {"time_zone", report.time_zone},
@@ -73,35 +73,37 @@ boost::json::value report_json(const model::Report& report) {
 
 // What has to hold for a report to go out, read with the report's row locked.
 Result<std::int64_t> sendable(pqxx::transaction_base& tx, std::int64_t report_id) {
-    const auto rows = tx.exec("SELECT status, client_id FROM reports WHERE id = $1 FOR UPDATE", pqxx::params{report_id});
+    const auto rows = tx.exec("SELECT p.status, p.location_id, l.enabled FROM reports p JOIN locations l ON l.id = p.location_id "
+                              "WHERE p.id = $1 FOR UPDATE OF p",
+                              pqxx::params{report_id});
     if (rows.empty()) return not_found("report");
     if (rows[0][0].as<std::string>() != "draft") {
         return conflict("report_not_ready", "Only a report that is built and has not been sent or rejected can be sent.");
     }
-    const auto client_id = rows[0][1].as<std::int64_t>();
-    if (tx.query_value<bool>("SELECT archived FROM clients WHERE id = $1", pqxx::params{client_id})) {
-        return conflict("client_archived", "The client is archived, so its reports are not sent.");
+    const auto location_id = rows[0][1].as<std::int64_t>();
+    if (!rows[0][2].as<bool>()) {
+        return conflict("location_not_enabled", "The location is switched off, so its reports are not sent.");
     }
     if (!tx.query_value<bool>("SELECT email_sending_enabled FROM system_settings")) {
         return conflict("sending_off", "Email sending is switched off, so the report would reach nobody. Switch it on first.");
     }
     const auto recipients = tx.query_value<std::int64_t>(
         "SELECT coalesce(sum(jsonb_array_length(recipients)), 0) FROM notification_rules "
-        "WHERE event_type = $1 AND enabled AND client_id = $2",
-        pqxx::params{kEventClientReport, client_id});
+        "WHERE event_type = $1 AND enabled AND location_id = $2",
+        pqxx::params{kEventLocationReport, location_id});
     if (recipients == 0) {
-        return conflict("no_recipients", "This client has no recipients for its reports. Add them first.");
+        return conflict("no_recipients", "This location has no recipients for its reports. Add them first.");
     }
-    return client_id;
+    return location_id;
 }
 
 // ---- schedules ----
 
 std::string schedule_select() {
-    return std::format("SELECT s.id, s.client_id, c.name AS client_name, s.frequency, s.weekday, s.month_day, "
+    return std::format("SELECT s.id, s.location_id, l.title AS location_title, s.frequency, s.weekday, s.month_day, "
                        "lpad((s.minute_of_day / 60)::text, 2, '0') || ':' || lpad((s.minute_of_day % 60)::text, 2, '0') AS \"time\", "
                        "s.time_zone, s.auto_send, s.enabled, s.last_run_on::text AS last_run_on, {} AS created_at, {} AS updated_at "
-                       "FROM report_schedules s JOIN clients c ON c.id = s.client_id",
+                       "FROM report_schedules s JOIN locations l ON l.id = s.location_id",
                        iso("s.created_at"), iso("s.updated_at"));
 }
 
@@ -120,7 +122,7 @@ Result<domain::ReportSchedule> checked(const model::ReportSchedule& schedule) {
 
 boost::json::value schedule_json(const model::ReportSchedule& schedule) {
     auto json = boost::json::value_from(schedule).as_object();
-    for (const auto key : {"id", "client_name", "created_at", "updated_at", "last_run_on"}) json.erase(key);
+    for (const auto key : {"id", "location_title", "created_at", "updated_at", "last_run_on"}) json.erase(key);
     return json;
 }
 
@@ -131,16 +133,11 @@ std::string share_object_name(std::string_view token) { return std::format("{}{}
 // ---- creating and building ---------------------------------------------------------
 
 Result<model::Report> create_report(pqxx::transaction_base& tx, audit::Writer& audit, const NewReport& report, std::string_view link_base) {
-    const auto client = tx.exec("SELECT archived FROM clients WHERE id = $1", pqxx::params{report.client_id});
-    if (client.empty()) return not_found("client");
-    if (client[0][0].as<bool>()) return invalid("The client is archived.");
+    const auto location = tx.exec("SELECT enabled, time_zone FROM locations WHERE id = $1", pqxx::params{report.location_id});
+    if (location.empty()) return not_found("location");
+    if (!location[0][0].as<bool>()) return invalid("The location is switched off, so it gets no report.");
     auto time_zone = report.time_zone;
-    if (time_zone.empty()) {
-        // That of the client's first location that has one.
-        const auto zone = tx.exec("SELECT time_zone FROM locations WHERE client_id = $1 AND time_zone IS NOT NULL ORDER BY id LIMIT 1",
-                                  pqxx::params{report.client_id});
-        time_zone = zone.empty() ? std::string("UTC") : zone[0][0].as<std::string>();
-    }
+    if (time_zone.empty()) time_zone = location[0][1].as<OptString>().value_or("UTC");
     if (!domain::known_time_zone(time_zone)) return invalid(std::format("Unknown time zone '{}'.", time_zone));
     if (report.period.start > report.period.end) return invalid("The period ends before it starts.");
     if ((report.period.end - report.period.start).count() >= kMaxPeriodDays) {
@@ -152,10 +149,10 @@ Result<model::Report> create_report(pqxx::transaction_base& tx, audit::Writer& a
 
     const auto now = audit.now();
     const auto id = tx.query_value<std::int64_t>(
-        "INSERT INTO reports (client_id, period_start, period_end, time_zone, schedule_id, requested_by, auto_send, status, "
+        "INSERT INTO reports (location_id, period_start, period_end, time_zone, schedule_id, requested_by, auto_send, status, "
         "created_at, updated_at) VALUES ($1, $2::date, $3::date, $4, $5, $6, $7, 'building', $8::timestamptz, $8::timestamptz) "
         "RETURNING id",
-        pqxx::params{report.client_id, domain::format_day(report.period.start), domain::format_day(report.period.end), time_zone,
+        pqxx::params{report.location_id, domain::format_day(report.period.start), domain::format_day(report.period.end), time_zone,
                      report.schedule_id, audit.person_id(), report.auto_send, to_timestamptz(now)});
     jobs::sql::enqueue(tx,
                        {.kind = std::string(kBuildReportKind),
@@ -172,19 +169,23 @@ Result<model::Report> create_report(pqxx::transaction_base& tx, audit::Writer& a
 }
 
 std::optional<ReportWork> load_report_work(pqxx::transaction_base& tx, std::int64_t report_id, core::TimePoint now) {
-    // The industry of the client's first location that has one, until a report is one location's.
-    const auto rows = tx.exec("SELECT p.client_id, c.name, (SELECT l.industry_key FROM locations l WHERE l.client_id = p.client_id "
-                              "AND l.industry_key IS NOT NULL ORDER BY l.id LIMIT 1), p.period_start::text, p.period_end::text, p.time_zone, "
-                              "p.auto_send FROM reports p JOIN clients c ON c.id = p.client_id WHERE p.id = $1 AND p.status = 'building'",
+    const auto rows = tx.exec("SELECT p.location_id, l.title, l.industry_key, p.period_start::text, p.period_end::text, p.time_zone, "
+                              "p.auto_send, l.enabled, l.gbp_location_id, l.access_status = 'active' "
+                              "FROM reports p JOIN locations l ON l.id = p.location_id WHERE p.id = $1 AND p.status = 'building'",
                               pqxx::params{report_id});
     if (rows.empty()) return std::nullopt;
     const auto row = rows[0];
+    if (!row[7].as<bool>()) {
+        fail_report(tx, report_id, "The location was switched off before its report was built.", now);
+        return std::nullopt;
+    }
     ReportWork work;
     work.report_id = report_id;
     work.auto_send = row[6].as<bool>();
+    work.location = {.id = row[0].as<std::int64_t>(), .gbp_location_id = row[8].as<std::string>(), .accessible = row[9].as<bool>()};
     auto& input = work.input;
-    input.client_id = row[0].as<std::int64_t>();
-    input.client_name = row[1].as<std::string>();
+    input.location_id = work.location.id;
+    input.location_title = row[1].as<std::string>();
     input.period = {domain::parse_report_day(row[3].as<std::string>()).value(), domain::parse_report_day(row[4].as<std::string>()).value()};
     input.time_zone = row[5].as<std::string>();
     input.generated_at = std::format("{:%FT%T}Z", std::chrono::floor<std::chrono::seconds>(now));
@@ -205,19 +206,14 @@ std::optional<ReportWork> load_report_work(pqxx::transaction_base& tx, std::int6
     }
 
     // Every review up to the end of the period counts for the overall rating; removed ones for nothing.
-    for (const auto& location : tx.exec(
-             "SELECT l.id, l.title, l.gbp_location_id, l.access_status = 'active', count(r.id), coalesce(sum(r.rating), 0) "
-             "FROM locations l LEFT JOIN reviews r ON r.location_id = l.id AND r.removed_at IS NULL AND r.rating IS NOT NULL "
-             "AND r.created_time < $2::timestamptz WHERE l.client_id = $1 GROUP BY l.id ORDER BY l.title, l.id",
-             pqxx::params{input.client_id, to})) {
-        input.locations.push_back({.id = location[0].as<std::int64_t>(),
-                                   .title = location[1].as<std::string>(),
-                                   .running_count = location[4].as<std::int64_t>(),
-                                   .running_rating_sum = location[5].as<std::int64_t>()});
-        work.locations.push_back({.id = location[0].as<std::int64_t>(),
-                                  .gbp_location_id = location[2].as<std::string>(),
-                                  .accessible = location[3].as<bool>()});
-    }
+    const auto running = tx.exec("SELECT count(*), coalesce(sum(rating), 0) FROM reviews WHERE location_id = $1 AND removed_at IS NULL "
+                                 "AND rating IS NOT NULL AND created_time < $2::timestamptz",
+                                 pqxx::params{input.location_id, to})
+                             .one_row();
+    input.locations.push_back({.id = input.location_id,
+                               .title = input.location_title,
+                               .running_count = running[0].as<std::int64_t>(),
+                               .running_rating_sum = running[1].as<std::int64_t>()});
 
     const auto reviews = tx.exec(std::format(R"sql(
         SELECT r.location_id, coalesce(r.rating, 0), ((r.created_time AT TIME ZONE $4)::date)::text, {},
@@ -225,14 +221,13 @@ std::optional<ReportWork> load_report_work(pqxx::transaction_base& tx, std::int6
                CASE WHEN r.reply_text IS NOT NULL THEN {} END, coalesce(a.sentiment, ''), coalesce(a.topics::text, '[]'),
                coalesce(a.items::text, '[]'), r.created_time >= $3::timestamptz
           FROM reviews r
-          JOIN locations l ON l.id = r.location_id
           LEFT JOIN LATERAL (SELECT x.sentiment, x.topics, x.items FROM review_analyses x
                               WHERE x.review_id = r.id AND x.status = 'ok' ORDER BY x.id DESC LIMIT 1) a ON true
-         WHERE l.client_id = $1 AND r.removed_at IS NULL
+         WHERE r.location_id = $1 AND r.removed_at IS NULL
            AND r.created_time >= $2::timestamptz AND r.created_time < $5::timestamptz
          ORDER BY r.created_time, r.id)sql",
                                              micros("r.created_time"), micros("r.reply_updated_time")),
-                                 pqxx::params{input.client_id, earlier, from, input.time_zone, to});
+                                 pqxx::params{input.location_id, earlier, from, input.time_zone, to});
     for (const auto& r : reviews) {
         domain::ReportReview review;
         review.location_id = r[0].as<std::int64_t>();
@@ -252,8 +247,8 @@ std::optional<ReportWork> load_report_work(pqxx::transaction_base& tx, std::int6
     const auto cases = tx.exec(
         "SELECT count(*) FILTER (WHERE k.opened_at >= $2::timestamptz AND k.opened_at < $3::timestamptz), "
         "count(*) FILTER (WHERE k.closed_at >= $2::timestamptz AND k.closed_at < $3::timestamptz) "
-        "FROM cases k JOIN reviews r ON r.id = k.review_id JOIN locations l ON l.id = r.location_id WHERE l.client_id = $1",
-        pqxx::params{input.client_id, from, to}).one_row();
+        "FROM cases k JOIN reviews r ON r.id = k.review_id WHERE r.location_id = $1",
+        pqxx::params{input.location_id, from, to}).one_row();
     input.escalations_opened = cases[0].as<std::int64_t>();
     input.escalations_closed = cases[1].as<std::int64_t>();
     return work;
@@ -276,7 +271,7 @@ void fail_report(pqxx::transaction_base& tx, std::int64_t report_id, const std::
 
 model::ReportList list_reports(pqxx::transaction_base& tx, const ReportFilter& filter) {
     db::Conditions where;
-    if (filter.client_id) where.add("p.client_id = " + where.bind(*filter.client_id));
+    if (filter.location_id) where.add("p.location_id = " + where.bind(*filter.location_id));
     if (!filter.status.empty()) where.add("p.status = " + where.bind(filter.status));
     // A list has no share links: they are read with one report.
     return db::page<model::Report>(tx, report_select(), std::move(where), "p.id DESC", filter.page, db::FilledLater{"share_links"});
@@ -305,15 +300,15 @@ std::optional<std::string> report_data(pqxx::transaction_base& tx, std::int64_t 
 // ---- sending, rejecting and share links ---------------------------------------------
 
 Result<std::string> check_send(pqxx::transaction_base& tx, std::int64_t report_id) {
-    const auto client = sendable(tx, report_id);
-    if (!client) return std::unexpected(client.error());
+    const auto location = sendable(tx, report_id);
+    if (!location) return std::unexpected(location.error());
     return report_html(tx, report_id).value();
 }
 
 Result<model::Report> mark_report_sent(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t report_id, const std::string& token,
                                        std::string_view link_base) {
-    const auto client = sendable(tx, report_id);
-    if (!client) return std::unexpected(client.error());
+    const auto location = sendable(tx, report_id);
+    if (!location) return std::unexpected(location.error());
     const auto user_id = audit.person_id();  // nothing: its schedule sends it
     const auto now = audit.now();
     const auto now_text = to_timestamptz(now);
@@ -326,10 +321,9 @@ Result<model::Report> mark_report_sent(pqxx::transaction_base& tx, audit::Writer
     const auto data = boost::json::value_to<domain::ReportData>(boost::json::parse(report_data(tx, report_id).value()));
     const auto link = std::string(link_base) + share_object_name(token);
     emit(tx,
-         {.type = std::string(kEventClientReport),
+         {.type = std::string(kEventLocationReport),
           .key = std::format("report:{}:sent", report_id),
-          .client_id = *client,
-          .location_id = std::nullopt,
+          .location_id = *location,
           .review_id = std::nullopt,
           .subject = std::format("Your Google reviews and visibility report, {}", domain::period_label(data.period_start, data.period_end)),
           .body = domain::render_report_email(data, link),
@@ -411,7 +405,7 @@ Result<model::ReportShareLink> revoke_share_link(pqxx::transaction_base& tx, aud
 
 model::ReportScheduleList list_schedules(pqxx::transaction_base& tx) {
     model::ReportScheduleList out;
-    out.items = db::rows_as<model::ReportSchedule>(tx, schedule_select() + " ORDER BY c.name, s.id");
+    out.items = db::rows_as<model::ReportSchedule>(tx, schedule_select() + " ORDER BY l.title, s.id");
     out.total = std::ssize(out.items);
     return out;
 }
@@ -425,9 +419,9 @@ std::optional<model::ReportSchedule> get_schedule(pqxx::transaction_base& tx, st
 }  // namespace
 
 Result<model::ReportSchedule> create_schedule(pqxx::transaction_base& tx, audit::Writer& audit, const NewSchedule& schedule) {
-    const auto client = tx.exec("SELECT archived FROM clients WHERE id = $1", pqxx::params{schedule.client_id});
-    if (client.empty()) return not_found("client");
-    if (client[0][0].as<bool>()) return invalid("The client is archived.");
+    const auto location = tx.exec("SELECT enabled FROM locations WHERE id = $1", pqxx::params{schedule.location_id});
+    if (location.empty()) return not_found("location");
+    if (!location[0][0].as<bool>()) return invalid("The location is switched off, so it gets no report.");
     model::ReportSchedule wanted{.frequency = schedule.frequency,
                                  .weekday = schedule.frequency == domain::kWeekly ? schedule.weekday.value() : std::nullopt,
                                  .month_day = schedule.frequency == domain::kMonthly ? schedule.month_day.value() : std::nullopt,
@@ -436,9 +430,9 @@ Result<model::ReportSchedule> create_schedule(pqxx::transaction_base& tx, audit:
     const auto rules = checked(wanted);
     if (!rules) return std::unexpected(rules.error());
     const auto id = tx.query_value<std::int64_t>(
-        "INSERT INTO report_schedules (client_id, frequency, weekday, month_day, minute_of_day, time_zone, auto_send, enabled, "
+        "INSERT INTO report_schedules (location_id, frequency, weekday, month_day, minute_of_day, time_zone, auto_send, enabled, "
         "created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::timestamptz, $9::timestamptz) RETURNING id",
-        pqxx::params{schedule.client_id, wanted.frequency, wanted.weekday, wanted.month_day, rules->minute_of_day, wanted.time_zone,
+        pqxx::params{schedule.location_id, wanted.frequency, wanted.weekday, wanted.month_day, rules->minute_of_day, wanted.time_zone,
                      schedule.auto_send.value_or(false), schedule.enabled.value_or(true), to_timestamptz(audit.now())});
     auto created = *get_schedule(tx, id);
     audit.record("report_schedule.create", "report_schedule", id, {.after = schedule_json(created)});
@@ -494,9 +488,9 @@ int fail_stalled_reports(pqxx::transaction_base& tx, core::TimePoint now) {
 int start_due_reports(pqxx::transaction_base& tx, core::TimePoint now) {
     int started = 0;
     const auto rows = tx.exec(std::format(
-        "SELECT s.id, s.client_id, s.frequency, coalesce(s.weekday, 0), coalesce(s.month_day, 0), s.minute_of_day, s.time_zone, "
-        "s.auto_send, s.last_run_on::text, {} FROM report_schedules s JOIN clients c ON c.id = s.client_id "
-        "WHERE s.enabled AND NOT c.archived ORDER BY s.id FOR UPDATE OF s",
+        "SELECT s.id, s.location_id, s.frequency, coalesce(s.weekday, 0), coalesce(s.month_day, 0), s.minute_of_day, s.time_zone, "
+        "s.auto_send, s.last_run_on::text, {} FROM report_schedules s JOIN locations l ON l.id = s.location_id "
+        "WHERE s.enabled AND l.enabled ORDER BY s.id FOR UPDATE OF s",
         micros("s.updated_at")));
     for (const auto& row : rows) {
         const domain::ReportSchedule schedule{.frequency = row[2].as<std::string>(),
@@ -514,7 +508,7 @@ int start_due_reports(pqxx::transaction_base& tx, core::TimePoint now) {
         tx.exec("UPDATE report_schedules SET last_run_on = $2::date WHERE id = $1", pqxx::params{id, domain::format_day(run->local_day)});
         audit::Writer audit{tx, audit::Actor::system("report-schedule"), now};
         const auto created = create_report(tx, audit,
-                                           {.client_id = row[1].as<std::int64_t>(),
+                                           {.location_id = row[1].as<std::int64_t>(),
                                             .period = domain::period_for(schedule.frequency, run->local_day),
                                             .time_zone = schedule.time_zone,
                                             .schedule_id = id,

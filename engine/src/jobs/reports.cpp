@@ -30,43 +30,38 @@ std::unexpected<repo::Failure> storage_failure(const google::ApiError& error) {
 
 std::string Reporter::link_base() const { return public_store_ ? public_store_->base_url() : std::string{}; }
 
-asio::awaitable<std::vector<domain::LocationPerformance>> Reporter::read_performance(const repo::ReportWork& work, bool last_attempt) {
+asio::awaitable<domain::LocationPerformance> Reporter::read_performance(const repo::ReportWork& work, bool last_attempt) {
     using namespace std::chrono;
     const auto& period = work.input.period;
     const auto from = domain::previous_period(period).start;
     const year_month_day end{period.end};
     const year_month month = end.year() / end.month();
+    const auto& location = work.location;
 
-    std::vector<domain::LocationPerformance> out;
-    for (const auto& location : work.locations) {
-        domain::LocationPerformance one{.location_id = location.id};
-        if (!location.accessible) {
-            one.error = "access to the location is lost";
-            out.push_back(std::move(one));
-            continue;
+    domain::LocationPerformance out{.location_id = location.id};
+    if (!location.accessible) {
+        out.error = "access to the location is lost";
+        co_return out;
+    }
+    auto days = co_await performance_.daily_metrics(location.gbp_location_id, from, period.end);
+    if (!days) {
+        log::warn("report: daily metrics not read", {{"location_id", location.id}, {"error", days.error().message}});
+        // An outage may pass: let the job try again, except on its last attempt.
+        if (passing(days.error()) && !last_attempt) {
+            throw std::runtime_error(std::format("the Performance API gave no answer: {}", days.error().message));
         }
-        auto days = co_await performance_.daily_metrics(location.gbp_location_id, from, period.end);
-        if (!days) {
-            log::warn("report: daily metrics not read", {{"location_id", location.id}, {"error", days.error().message}});
-            // An outage may pass: let the job try again, except on its last attempt.
-            if (passing(days.error()) && !last_attempt) {
-                throw std::runtime_error(std::format("the Performance API gave no answer: {}", days.error().message));
-            }
-            one.error = days.error().message;
-            out.push_back(std::move(one));
-            continue;
-        }
-        one.days = std::move(*days);
+        out.error = days.error().message;
+        co_return out;
+    }
+    out.days = std::move(*days);
 
-        // Keywords are monthly. The month the period ends in, or the one before while Google has nothing for it yet.
-        auto keywords = co_await newest_search_keywords(performance_, location.gbp_location_id, month, 2);
-        if (keywords) {
-            one.keywords_month = std::move(keywords->month);
-            one.keywords = std::move(keywords->keywords);
-        } else {
-            log::warn("report: search keywords not read", {{"location_id", location.id}, {"error", keywords.error().message}});
-        }
-        out.push_back(std::move(one));
+    // Keywords are monthly. The month the period ends in, or the one before while Google has nothing for it yet.
+    auto keywords = co_await newest_search_keywords(performance_, location.gbp_location_id, month, 2);
+    if (keywords) {
+        out.keywords_month = std::move(keywords->month);
+        out.keywords = std::move(keywords->keywords);
+    } else {
+        log::warn("report: search keywords not read", {{"location_id", location.id}, {"error", keywords.error().message}});
     }
     co_return out;
 }
@@ -87,6 +82,7 @@ asio::awaitable<void> Reporter::summarize(domain::ReportData& data) {
     }
     llm::ChatRequest request;
     request.task = "summary";
+    request.location_id = data.location_id;
     request.provider = settings.summary_provider;
     request.model = settings.summary_model;
     request.messages = domain::summary_messages(data, domain::make_nonce());
@@ -94,7 +90,7 @@ asio::awaitable<void> Reporter::summarize(domain::ReportData& data) {
     request.extras = repo::extras_for(settings, settings.summary_provider);
     const auto answer = co_await llm_.chat_json(std::move(request));
     if (!answer) {
-        // The client retried what is worth retrying. A report without a summary is still a report.
+        // llm::Client retried what is worth retrying. A report without a summary is still a report.
         data.summary_note = std::format("No summary: the model gave no answer ({}).", llm::to_string(answer.error().kind));
         co_return;
     }
@@ -110,13 +106,14 @@ asio::awaitable<void> Reporter::build_once(std::int64_t report_id, bool last_att
     auto work = co_await db_.tx([report_id, now = clock_.now()](pqxx::work& tx) { return repo::load_report_work(tx, report_id, now); });
     if (!work) co_return;  // built, failed or rejected already
 
-    work->input.performance = co_await read_performance(*work, last_attempt);
+    auto performance = co_await read_performance(*work, last_attempt);
+    work->input.performance = {std::move(performance)};
     auto data = domain::build_report(work->input);
     co_await summarize(data);
     const auto html = domain::render_report(data);
 
     const bool built = co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) { return repo::store_built_report(tx, report_id, data, html, now); });
-    log::info("report built", {{"report_id", report_id}, {"client_id", data.client_id}, {"summary", data.summary.has_value()}});
+    log::info("report built", {{"report_id", report_id}, {"location_id", data.location_id}, {"summary", data.summary.has_value()}});
     if (!built || !work->auto_send) co_return;
 
     // Its schedule sends by itself. If that can't be done the report waits for a person, with the reason.

@@ -394,25 +394,24 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
 // "Approval needed" for a draft that was on its way to an automatic post
 // and is back in the queue. Review text and the draft go in the body only.
 void emit_approval_needed(pqxx::transaction_base& tx, std::int64_t draft_id, const std::string& why, core::TimePoint now) {
-    const auto row = tx.exec("SELECT r.id, l.id, l.client_id, l.title, coalesce(r.rating, 0), coalesce(r.comment, ''), "
+    const auto row = tx.exec("SELECT r.id, l.id, l.title, coalesce(r.rating, 0), coalesce(r.comment, ''), "
                              "d.text FROM reply_drafts d JOIN reviews r ON r.id = d.review_id JOIN locations l ON l.id = r.location_id "
                              "WHERE d.id = $1",
                              pqxx::params{draft_id})
                          .one_row();
-    const auto place = row[3].as<std::string>();
-    const int stars = row[4].as<int>();
-    const auto comment = row[5].as<std::string>();
+    const auto place = row[2].as<std::string>();
+    const int stars = row[3].as<int>();
+    const auto comment = row[4].as<std::string>();
     emit(tx,
          {.type = std::string(kEventApprovalNeeded),
           .key = std::format("draft:{}:approval_needed", draft_id),
-          .client_id = row[2].as<std::optional<std::int64_t>>(),
           .location_id = row[1].as<std::int64_t>(),
           .review_id = row[0].as<std::int64_t>(),
           .subject = std::format("Approval needed: {}", place),
           .body = std::format("A reply to a review at {} was not posted automatically and is waiting for approval.\n\nWhy: {}\n\n"
                               "Rating: {}\n\nReview:\n{}\n\nDraft:\n{}\n\nNothing is posted until a person approves it.",
                               place, why, stars > 0 ? std::format("{} of 5 stars", stars) : std::string("none"),
-                              comment.empty() ? std::string("(no text)") : comment, row[6].as<std::string>()),
+                              comment.empty() ? std::string("(no text)") : comment, row[5].as<std::string>()),
           .link_path = std::format("/#/drafts/{}/show", row[0].as<std::int64_t>())},
          now);
 }
@@ -701,7 +700,6 @@ void settle_open_post_from_mirror(pqxx::transaction_base& tx, std::int64_t revie
 NotificationEvent post_problem(std::string key, std::int64_t location_id, std::int64_t review_id, std::string subject, std::string body) {
     return {.type = std::string(kEventSystemProblem),
             .key = std::move(key),
-            .client_id = std::nullopt,
             .location_id = location_id,
             .review_id = review_id,
             .subject = std::move(subject),

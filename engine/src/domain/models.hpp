@@ -684,9 +684,9 @@ using EscalationList = Paged<Escalation>;
 
 struct NotificationRule {
     std::int64_t id = 0;
-    std::string event_type;  // "escalation", "approval_needed", "system_problem" or "client_report"
-    std::optional<std::int64_t> client_id;  // nothing: every client
-    std::optional<std::string> client_name;
+    std::string event_type;  // "escalation", "approval_needed", "system_problem" or "location_report"
+    std::optional<std::int64_t> location_id;  // nothing: every location
+    std::optional<std::string> location_title;
     std::string channel;
     std::vector<std::string> recipients;
     bool enabled = true;
@@ -694,7 +694,7 @@ struct NotificationRule {
     std::string updated_at;
 };
 BOOST_DESCRIBE_STRUCT(NotificationRule, (),
-                      (id, event_type, client_id, client_name, channel, recipients, enabled, created_at, updated_at))
+                      (id, event_type, location_id, location_title, channel, recipients, enabled, created_at, updated_at))
 
 using NotificationRuleList = Paged<NotificationRule>;
 
@@ -712,8 +712,6 @@ BOOST_DESCRIBE_STRUCT(Device, (), (id, environment, app_version, created_at, las
 struct NotificationDelivery {
     std::int64_t id = 0;
     std::string event_type;
-    std::optional<std::int64_t> client_id;
-    std::optional<std::string> client_name;
     std::optional<std::int64_t> location_id;
     std::optional<std::int64_t> review_id;
     std::optional<std::int64_t> escalation_id;
@@ -728,8 +726,8 @@ struct NotificationDelivery {
     std::optional<std::string> sent_at;
 };
 BOOST_DESCRIBE_STRUCT(NotificationDelivery, (),
-                      (id, event_type, client_id, client_name, location_id, review_id, escalation_id, channel, recipient,
-                       subject, body, status, status_reason, attempts, created_at, sent_at))
+                      (id, event_type, location_id, review_id, escalation_id, channel, recipient, subject, body, status,
+                       status_reason, attempts, created_at, sent_at))
 
 using NotificationDeliveryList = Paged<NotificationDelivery>;
 
@@ -960,8 +958,9 @@ BOOST_DESCRIBE_STRUCT(ReportShareLink, (), (id, url, origin, created_by, created
 
 struct Report {
     std::int64_t id = 0;
-    std::int64_t client_id = 0;
-    std::string client_name;
+    // The location the report covers (D-102).
+    std::int64_t location_id = 0;
+    std::string location_title;
     // Both days are part of the period, in `time_zone`.
     std::string period_start;
     std::string period_end;
@@ -987,7 +986,7 @@ struct Report {
     std::vector<ReportShareLink> share_links;
 };
 BOOST_DESCRIBE_STRUCT(Report, (),
-                      (id, client_id, client_name, period_start, period_end, time_zone, schedule_id, requested_by, status, error,
+                      (id, location_id, location_title, period_start, period_end, time_zone, schedule_id, requested_by, status, error,
                        hold_reason, new_reviews, average_rating, response_rate, summary, summary_note, created_at, sent_at, sent_by,
                        share_links))
 
@@ -995,8 +994,8 @@ using ReportList = Paged<Report>;
 
 struct ReportSchedule {
     std::int64_t id = 0;
-    std::int64_t client_id = 0;
-    std::string client_name;
+    std::int64_t location_id = 0;
+    std::string location_title;
     std::string frequency;  // "daily", "weekly" or "monthly"
     std::optional<std::int64_t> weekday;    // 1 (Monday) to 7; weekly
     std::optional<std::int64_t> month_day;  // 1 to 28; monthly
@@ -1009,7 +1008,7 @@ struct ReportSchedule {
     std::string updated_at;
 };
 BOOST_DESCRIBE_STRUCT(ReportSchedule, (),
-                      (id, client_id, client_name, frequency, weekday, month_day, time, time_zone, auto_send, enabled, last_run_on,
+                      (id, location_id, location_title, frequency, weekday, month_day, time, time_zone, auto_send, enabled, last_run_on,
                        created_at, updated_at))
 
 using ReportScheduleList = Paged<ReportSchedule>;
