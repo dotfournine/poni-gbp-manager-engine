@@ -119,9 +119,11 @@ The owner's steps, in this order, once the system is deployed. The engine switch
 
 The first edits of a post at Google (D-099) are made on X Vision Media's own profile and watched, one of a live post and one of a scheduled post that is not published yet, because the edit was built without a trial. Three things nobody knows until then: which of the six fields Google takes in `updateMask` (try each: the text, the button, an event's title and dates, an offer's parts, another photo, the language); whether an edit sends a live post back to `PROCESSING` or can get it `REJECTED`; and whether a scheduled post can be edited at all. A field Google refuses comes back as a draft edit with Google's message and leaves the post as it was. What is found is written into D-099, and a field Google never takes is taken out of the mask.
 
-**Done when:** all three are done on the production system, and the two edits were made and what they showed is written down.
+Several photos and videos on one post (D-101) were built from what Google's own interface takes, without a trial through the API. Also on X Vision Media's own profile: a post with two photos, one with a photo and a video, one with ten files, and an edit that puts a post's files in another order; see what Google accepts, whether it keeps the order, and what the post shows. A number or mix Google refuses comes back as a draft with Google's message. What is found is written into D-101, and `domain::kLocalPostMediaMax` follows it.
 
-**Touches:** D-088, D-090, D-094, D-099.
+**Done when:** all three are done on the production system, the two edits were made, the posts with several files were sent, and what they showed is written down.
+
+**Touches:** D-088, D-090, D-094, D-099, D-101.
 
 ### Questions for the owner
 

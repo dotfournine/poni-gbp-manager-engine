@@ -64,13 +64,13 @@ domain::EditObstacle obstacle(const domain::LocalPostContent& post, const domain
 TEST(LocalPostEditMask, EachFieldThatDiffersIsNamedAndNoOther) {
     auto post = test::standard("Fall specials start Monday.");
     post.call_to_action = domain::LocalPostCallToAction{.action_type = "book", .url = "https://example.com/book"};
-    post.media_id = 7;
+    post.media_ids = {7};
     EXPECT_THAT(mask_after(post, [](auto& c) { c.summary = "Fall specials start Tuesday."; }), ElementsAre("summary"));
     EXPECT_THAT(mask_after(post, [](auto& c) { c.call_to_action->url = "https://example.com/reserve"; }), ElementsAre("callToAction"));
     EXPECT_THAT(mask_after(post, [](auto& c) { c.call_to_action->action_type = "order"; }), ElementsAre("callToAction"));
     EXPECT_THAT(mask_after(post, [](auto& c) { c.call_to_action.reset(); }), ElementsAre("callToAction")) << "the button taken away";
     EXPECT_THAT(mask_after(post, [](auto& c) { c.language_code = "es"; }), ElementsAre("languageCode"));
-    EXPECT_THAT(mask_after(post, [](auto& c) { c.media_id = 8; }), ElementsAre("media"));
+    EXPECT_THAT(mask_after(post, [](auto& c) { c.media_ids = {8}; }), ElementsAre("media"));
 
     const auto offer = an_offer();
     EXPECT_THAT(mask_after(offer, [](auto& c) { c.event->title = "Lunch fortnight"; }), ElementsAre("event"));
@@ -83,10 +83,10 @@ TEST(LocalPostEditMask, EachFieldThatDiffersIsNamedAndNoOther) {
 
 TEST(LocalPostEditMask, SeveralFieldsComeInTheOneOrderAndEachOnce) {
     auto post = an_offer();
-    post.media_id = 7;
+    post.media_ids = {7};
     const auto everything = mask_after(post, [](auto& c) {
         c.language_code = "zh-Hant";
-        c.media_id = 9;
+        c.media_ids = {9};
         c.offer->coupon_code = "THREE";
         c.event->title = "Lunch fortnight";
         c.summary = "Three for two.";
@@ -114,7 +114,7 @@ TEST(LocalPostEditMask, SeveralFieldsComeInTheOneOrderAndEachOnce) {
 
 TEST(LocalPostEditMask, AnEditThatSaysWhatThePostSaysHasAnEmptyMask) {
     auto post = an_offer();
-    post.media_id = 7;
+    post.media_ids = {7};
     post.scheduled_time = "2026-11-01T17:00:00.000000Z";  // long past: the post is live
     EXPECT_THAT(mask_after(post, [](auto&) {}), IsEmpty());
 
@@ -134,14 +134,39 @@ TEST(LocalPostEditMask, MediaIsNamedOnlyWhenTheUploadIsAnotherOrIsTakenAway) {
     const auto made_at_google = test::standard("Now open late on Fridays.");
     EXPECT_THAT(mask_after(made_at_google, [](auto& c) { c.summary = "Now open late on Saturdays."; }), ElementsAre("summary"))
         << "an edit without an upload never names the media of such a post";
-    EXPECT_THAT(mask_after(made_at_google, [](auto& c) { c.media_id = 4; }), ElementsAre("media")) << "a person gave it an upload";
+    EXPECT_THAT(mask_after(made_at_google, [](auto& c) { c.media_ids = {4}; }), ElementsAre("media")) << "a person gave it an upload";
 
     auto with_upload = test::standard("A look at the new room.");
-    with_upload.media_id = 7;
+    with_upload.media_ids = {7};
     EXPECT_THAT(mask_after(with_upload, [](auto& c) { c.summary = "A look at the new rooms."; }), ElementsAre("summary"))
         << "the post's own upload, named again, is no change";
-    EXPECT_THAT(mask_after(with_upload, [](auto& c) { c.media_id.reset(); }), ElementsAre("media")) << "the upload taken away";
-    EXPECT_THAT(mask_after(with_upload, [](auto& c) { c.media_id = 8; }), ElementsAre("media"));
+    EXPECT_THAT(mask_after(with_upload, [](auto& c) { c.media_ids.clear(); }), ElementsAre("media")) << "the upload taken away";
+    EXPECT_THAT(mask_after(with_upload, [](auto& c) { c.media_ids = {8}; }), ElementsAre("media"));
+}
+
+TEST(LocalPostEditMask, TheUploadsAreOneFieldAndTheirOrderIsPartOfIt) {
+    // Google replaces a post's media whole (D-101): any other list is a change of the media.
+    auto post = test::standard("Three rooms.");
+    post.media_ids = {7, 8, 9};
+    EXPECT_THAT(mask_after(post, [](auto& c) { c.media_ids = {9, 8, 7}; }), ElementsAre("media")) << "another order";
+    EXPECT_THAT(mask_after(post, [](auto& c) { c.media_ids = {7, 9}; }), ElementsAre("media")) << "one taken out";
+    EXPECT_THAT(mask_after(post, [](auto& c) { c.media_ids.push_back(10); }), ElementsAre("media")) << "one added";
+    EXPECT_THAT(mask_after(post, [](auto& c) { c.summary = "Three rooms, newly painted."; }), ElementsAre("summary"))
+        << "the same list is no change";
+}
+
+TEST(LocalPostContent, APostHasAtMostTenPhotosAndVideosEachOnce) {
+    auto content = test::standard("Ten rooms.");
+    for (std::int64_t id = 10; id >= 1; --id) content.media_ids.push_back(id);
+    const auto ten = domain::normalize_local_post(content);
+    ASSERT_TRUE(ten) << ten.error();
+    EXPECT_EQ(ten->media_ids, content.media_ids) << "kept in the order given";
+    content.media_ids.push_back(11);
+    EXPECT_THAT(domain::normalize_local_post(content).error(), HasSubstr("at most 10"));
+    content.media_ids = {4, 5, 4};
+    EXPECT_THAT(domain::normalize_local_post(content).error(), HasSubstr("twice"));
+    content.media_ids = {4, 0};
+    EXPECT_THAT(domain::normalize_local_post(content).error(), HasSubstr("media_ids"));
 }
 
 TEST(LocalPostEditMask, TheKindTheTimeAndTheRepeatAreNotAnEditsToChange) {
@@ -231,7 +256,7 @@ namespace {
 domain::LocalPostContent a_base() {
     auto base = test::standard("Open late on Fridays.");
     base.call_to_action = domain::LocalPostCallToAction{.action_type = "book", .url = "https://example.com/book"};
-    base.media_id = 7;
+    base.media_ids = {7};
     return base;
 }
 
@@ -251,12 +276,12 @@ TEST(LocalPostEditRequest, AFieldTheEditDidNotChangeIsNeverNamedWhateverGoogleHo
     const auto moved_on = with(base, [](auto& c) {
         c.call_to_action->url = "https://example.com/elsewhere";
         c.language_code = "en-US";
-        c.media_id = 9;
+        c.media_ids = {9};
     });
     EXPECT_THAT(domain::local_post_edit_request(base, edit, moved_on).value(), ElementsAre("summary"));
     auto no_button = moved_on;
     no_button.call_to_action.reset();
-    no_button.media_id.reset();
+    no_button.media_ids.clear();
     EXPECT_THAT(domain::local_post_edit_request(base, edit, no_button).value(), ElementsAre("summary"));
     // Against the post as it is, the plain mask would name them all: that is what must not be sent.
     EXPECT_THAT(domain::local_post_edit_mask(moved_on, edit).value(), ElementsAre("summary", "callToAction", "media", "languageCode"));
@@ -299,12 +324,12 @@ TEST(LocalPostEditRequest, AFieldChangedOnBothSidesHasNoMaskAndIsNamed) {
         {"call_to_action", [](auto& c, int n) { c.call_to_action->url = std::format("https://example.com/{}", n); }},
         {"event", [](auto& c, int n) { c.event->title = std::format("Title {}", n); }},
         {"offer", [](auto& c, int n) { c.offer->coupon_code = std::format("CODE{}", n); }},
-        {"media", [](auto& c, int n) { c.media_id = 100 + n; }},
+        {"media", [](auto& c, int n) { c.media_ids = {100 + n}; }},
         {"language_code", [](auto& c, int n) { c.language_code = n == 1 ? "es" : "fr"; }},
     };
     for (const auto& [member, change] : fields) {
         auto post = std::string_view(member) == "call_to_action" ? a_base() : an_offer();
-        post.media_id = 7;
+        post.media_ids = {7};
         const auto mine = with(post, [&](auto& c) { change(c, 1); });
         const auto theirs = with(post, [&](auto& c) { change(c, 2); });
         const auto stopped = domain::local_post_edit_request(post, mine, theirs);
@@ -337,7 +362,7 @@ TEST(LocalPostEditRequest, TheEditAsItIsShownIsThePostAsItIsNowWithTheChangedFie
     auto now = base;
     now.summary = "Open late on Fridays and Saturdays.";
     now.language_code = "en-US";
-    now.media_id = 9;
+    now.media_ids = {9};
     now.scheduled_time = "2026-12-20T17:00:00.000000Z";
     auto expected = now;
     expected.call_to_action->url = "https://example.com/reserve";
@@ -349,8 +374,8 @@ TEST(LocalPostEditRequest, TheEditAsItIsShownIsThePostAsItIsNowWithTheChangedFie
     EXPECT_EQ(domain::local_post_with_edit(base, edit, now).call_to_action->url, "https://example.com/reserve");
     // An edit that changes nothing shows the post as it is, and a field taken away is taken away.
     EXPECT_EQ(domain::local_post_with_edit(base, base, expected), expected);
-    const auto no_upload = with(base, [](auto& c) { c.media_id.reset(); });
-    EXPECT_FALSE(domain::local_post_with_edit(base, no_upload, expected).media_id);
+    const auto no_upload = with(base, [](auto& c) { c.media_ids.clear(); });
+    EXPECT_TRUE(domain::local_post_with_edit(base, no_upload, expected).media_ids.empty());
     // What is sent for it is the same question asked of the same three: only the changed field.
     EXPECT_THAT(domain::local_post_edit_request(base, edit, expected).value(), IsEmpty()) << "Google has it";
     auto elsewhere = expected;
@@ -377,7 +402,7 @@ TEST(LocalPostEditRequest, AnAnswerIsComparedInTheFieldsThatWereSentAndInNothing
     other.scheduled_time = "2031-01-01T00:00:00.000000Z";
     other.language_code = "fr";
     other.offer.reset();
-    other.media_id = 9;
+    other.media_ids = {9};
     EXPECT_THAT(domain::edit_fields_not_shown(sent, mask, other), IsEmpty());
     // An answer without the event at all does not show the title either; space around a text is no difference.
     auto bare = sent;
@@ -386,7 +411,7 @@ TEST(LocalPostEditRequest, AnAnswerIsComparedInTheFieldsThatWereSentAndInNothing
     EXPECT_THAT(domain::edit_fields_not_shown(sent, mask, bare), ElementsAre("event"));
     // The media is never compared: Google answers with addresses of its own.
     auto with_media = sent;
-    with_media.media_id = 7;
+    with_media.media_ids = {7};
     EXPECT_THAT(domain::edit_fields_not_shown(with_media, {"media"}, sent), IsEmpty());
 }
 
@@ -412,7 +437,7 @@ TEST(LocalPostEditChecks, AnEditIsNotCheckedForTheTimeAndTheRepeatItDoesNotSend)
                                                           {.now = kNow, .media_problem = "the uploaded file no longer exists", .edit_at_google = true});
     EXPECT_TRUE(with_media.passed()) << "no upload named, nothing to use";
     auto names_one = test::standard("With a picture.");
-    names_one.media_id = 4;
+    names_one.media_ids = {4};
     EXPECT_THAT(domain::run_local_post_checks(names_one, {.now = kNow, .media_problem = "the uploaded file no longer exists", .edit_at_google = true})
                     .failed(),
                 ElementsAre("media_usable"));

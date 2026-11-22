@@ -16,6 +16,7 @@
 #include "connectors/pubsub/subscriber.hpp"
 #include "connectors/storage/store.hpp"
 #include "core/json.hpp"
+#include "core/mapped_file.hpp"
 #include "domain/local_post.hpp"
 #include "http/client.hpp"
 
@@ -25,7 +26,10 @@
 #include <boost/json/value_from.hpp>
 #include <boost/system/system_error.hpp>
 
+#include <unistd.h>
+
 #include <algorithm>
+#include <cerrno>
 #include <cstdint>
 #include <deque>
 #include <format>
@@ -34,6 +38,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace poni::test {
@@ -265,7 +270,7 @@ inline domain::LocalPostContent standard(std::string summary = "Fall specials st
             .call_to_action = std::nullopt,
             .event = std::nullopt,
             .offer = std::nullopt,
-            .media_id = std::nullopt,
+            .media_ids = {},
             .scheduled_time = std::nullopt};
 }
 
@@ -824,6 +829,19 @@ public:
 };
 
 // A bucket held in memory: what was put under which name, the last write winning.
+// A nameless file holding these bytes, mapped: a body as the server hands a route that takes a file (D-101).
+inline std::shared_ptr<const core::MappedFile> mapped(std::string_view bytes) {
+    const int fd = core::nameless_file();
+    for (std::size_t written = 0; written < bytes.size();) {
+        const auto n = ::write(fd, bytes.data() + written, bytes.size() - written);
+        if (n < 0) throw std::system_error(errno, std::generic_category(), "write of a nameless file");
+        written += static_cast<std::size_t>(n);
+    }
+    auto file = core::MappedFile::map(fd);
+    ::close(fd);
+    return file;
+}
+
 class FakeStore final : public storage::ObjectStore {
 public:
     explicit FakeStore(std::string base = "https://storage.test/public/") : base_(std::move(base)) {}

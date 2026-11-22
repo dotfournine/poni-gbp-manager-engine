@@ -94,8 +94,9 @@ struct LocalPostContent {
     std::optional<LocalPostEvent> event;
     // With "offer".
     std::optional<LocalPostOffer> offer;
-    // The uploaded photo, a row of local_post_media.
-    std::optional<std::int64_t> media_id;
+    // The uploaded photos and videos, rows of local_post_media, in the order
+    // the post shows them (D-101). Empty: none.
+    std::vector<std::int64_t> media_ids;
     // When Google is to publish the post, a canonical timestamp; none: at once.
     std::optional<std::string> scheduled_time;
 
@@ -106,11 +107,14 @@ struct LocalPostContent {
     bool operator==(const LocalPostContent&) const = default;
 };
 BOOST_DESCRIBE_STRUCT(LocalPostContent, (),
-                      (topic_type, summary, language_code, call_to_action, event, offer, media_id, scheduled_time))
+                      (topic_type, summary, language_code, call_to_action, event, offer, media_ids, scheduled_time))
 
 // Google's limits, learned from its own validation errors (the spike of 2026-11-19).
 inline constexpr std::size_t kLocalPostSummaryMax = 1500;
 inline constexpr std::size_t kLocalPostTitleMax = 58;
+// Photos and videos of one post, mixed: what Google's own interface takes
+// (D-101). Google's API documents no number.
+inline constexpr std::size_t kLocalPostMediaMax = 10;
 
 // The content as the engine stores it, or why it is not a post at all (the
 // API answers 400 with that sentence). Text is trimmed, an optional string
@@ -118,8 +122,9 @@ inline constexpr std::size_t kLocalPostTitleMax = 58;
 // refused here is structure: a kind the engine does not write ("alert"),
 // parts that do not belong to the kind (an event on a "standard" post, a
 // button on an offer), a button outside Google's six, a day or a time that
-// is none, a text too long to be meant. Limits that a person can still fix
-// in a draft are checks, below.
+// is none, a text too long to be meant, more than kLocalPostMediaMax uploads
+// or one of them twice. Limits that a person can still fix in a draft are
+// checks, below.
 std::expected<LocalPostContent, std::string> normalize_local_post(LocalPostContent content);
 
 // A post's content fitted to what a draft can hold, and what was left out
@@ -133,17 +138,18 @@ struct DraftCopy {
 // What a new draft takes from a post's content as the engine holds it now
 // (D-094): an alert becomes an update, parts that do not belong to the kind
 // go, a button outside the six goes, and a time to publish at that is not
-// after `now` goes. An upload (`media_id`) is kept. `media_at_google` is the
-// format ("photo" or "video") of the first file the post shows at Google:
-// without an upload the copy has no media then, because Google's copy of a
-// file is not an upload. The result still goes through
-// normalize_local_post, which may refuse a part longer than a draft takes.
-DraftCopy fit_for_draft(LocalPostContent content, core::TimePoint now, std::optional<std::string> media_at_google);
+// after `now` goes. Uploads (`media_ids`) are kept. `media_at_google` is the
+// format ("photo" or "video") of each file the post shows at Google: without
+// uploads the copy has no media then, because Google's copy of a file is
+// not an upload. The result still goes through normalize_local_post, which
+// may refuse a part longer than a draft takes.
+DraftCopy fit_for_draft(LocalPostContent content, core::TimePoint now, const std::vector<std::string>& media_at_google);
 
 struct LocalPostCheckContext {
     core::TimePoint now;
-    // Why the post's uploaded photo can't be used, if it can't: decided by
-    // the caller, which knows the upload and the bucket.
+    // Why one of the post's uploads can't be used, if one can't, naming it
+    // when there are several ("file 3 of 5 (the photo): ..."): decided by
+    // the caller, which knows the uploads and the bucket.
     std::optional<std::string> media_problem;
     // The content is an edit of a post that is at Google (D-099). Its time to
     // publish at and its repeat are the post's own, which an edit does not
@@ -207,15 +213,15 @@ struct EditObstacle {
 // What an edit changes: the fields, out of kLocalPostEditFields and in that
 // order, in which `edit` differs from `post`, the post's content as the
 // engine held it when the edit was written (what Google returned, and in
-// `media_id` the upload the engine knows the post carries). `edit` has been
+// `media_ids` the uploads the engine knows the post carries). `edit` has been
 // through normalize_local_post. The two are compared as a draft would hold
 // them, so space around a text is no difference. An empty mask: the edit
 // says what the post says.
 //
-// "media" is named only when the two name different uploads: an edit with
-// an upload other than the post's, or with none where the post has one. A
-// post whose photo is Google's own copy has no upload, and an edit without
-// one leaves it alone.
+// "media" is named only when the two name different lists of uploads (the
+// order counts, D-101): Google replaces a post's media whole. A post whose
+// photos are Google's own copies has no uploads, and an edit without any
+// leaves them alone.
 //
 // The kind of post, the time Google publishes it at and its repeat are not
 // among the six: an edit that differs there has no mask (fixed_part), and

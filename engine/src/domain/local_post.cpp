@@ -8,6 +8,7 @@
 #include <array>
 #include <chrono>
 #include <format>
+#include <span>
 #include <utility>
 
 namespace poni::domain {
@@ -145,7 +146,15 @@ std::expected<LocalPostContent, std::string> normalize_local_post(LocalPostConte
         return bad("Only an \"offer\" has an \"offer\".");
     }
 
-    if (content.media_id && *content.media_id <= 0) return bad("\"media_id\" must be the id of an uploaded file, or null.");
+    if (content.media_ids.size() > kLocalPostMediaMax) {
+        return bad(std::format("\"media_ids\" has {} files; a post has at most {} photos and videos.", content.media_ids.size(), kLocalPostMediaMax));
+    }
+    for (std::size_t i = 0; i < content.media_ids.size(); ++i) {
+        if (content.media_ids[i] <= 0) return bad("\"media_ids\" must list ids of uploaded files.");
+        if (std::ranges::contains(std::span(content.media_ids).first(i), content.media_ids[i])) {
+            return bad("\"media_ids\" lists the same file twice.");
+        }
+    }
     if (content.scheduled_time) {
         auto scheduled = existing_moment(*content.scheduled_time);
         if (!scheduled) return bad("\"scheduled_time\" must be a time in UTC, such as 2026-12-19T17:00:00Z.");
@@ -154,7 +163,7 @@ std::expected<LocalPostContent, std::string> normalize_local_post(LocalPostConte
     return content;
 }
 
-DraftCopy fit_for_draft(LocalPostContent content, core::TimePoint now, std::optional<std::string> media_at_google) {
+DraftCopy fit_for_draft(LocalPostContent content, core::TimePoint now, const std::vector<std::string>& media_at_google) {
     DraftCopy out;
     const auto leave_out = [&](std::string what) { out.left_out.push_back(std::move(what)); };
 
@@ -190,11 +199,19 @@ DraftCopy fit_for_draft(LocalPostContent content, core::TimePoint now, std::opti
         leave_out("the time to publish at, which has passed");
         content.scheduled_time.reset();
     }
-    // An upload is the engine's own and is kept. Without one, what Google shows is its own copy of a file
-    // (of a video, a still), which is not an upload.
-    if (!content.media_id && media_at_google) {
-        leave_out(std::format("Google's copy of the {0}: upload the {0} again", *media_at_google == "video" ? "video" : "photo"));
-        content.media_id.reset();
+    // Uploads are the engine's own and are kept. Without them, what Google shows is its own copies of
+    // files (of a video, a still), which are not uploads.
+    if (content.media_ids.empty() && !media_at_google.empty()) {
+        const auto videos = std::ranges::count(media_at_google, std::string_view("video"));
+        const auto photos = std::ssize(media_at_google) - videos;
+        if (media_at_google.size() == 1) {
+            leave_out(std::format("Google's copy of the {0}: upload the {0} again", videos == 1 ? "video" : "photo"));
+        } else {
+            const auto what = videos == 0   ? std::format("{} photos", photos)
+                              : photos == 0 ? std::format("{} videos", videos)
+                                            : std::format("{} photos and videos", media_at_google.size());
+            leave_out(std::format("Google's copies of the {}: upload them again", what));
+        }
     }
     out.content = std::move(content);
     return out;
@@ -263,7 +280,7 @@ CheckReport run_local_post_checks(const LocalPostContent& content, const LocalPo
     add("scheduled_in_future", context.edit_at_google || !content.scheduled_time || still_ahead(*content.scheduled_time, context.now),
         "the time to publish at is in the past");
     add("language", is_post_language_tag(content.language_code), "the language must be a tag such as en or zh-Hant");
-    add("media_usable", !content.media_id || !context.media_problem, context.media_problem.value_or(""));
+    add("media_usable", content.media_ids.empty() || !context.media_problem, context.media_problem.value_or(""));
     return report;
 }
 
@@ -302,7 +319,7 @@ std::optional<std::pair<std::string_view, std::string_view>> fixed_difference(co
 // Which of the six fields differ between two contents a draft can hold, in the order of kLocalPostEditFields.
 std::array<bool, 6> differing(const LocalPostContent& a, const LocalPostContent& b) {
     return {a.summary != b.summary, a.call_to_action != b.call_to_action, a.event != b.event,
-            a.offer != b.offer,     a.media_id != b.media_id,             a.language_code != b.language_code};
+            a.offer != b.offer,     a.media_ids != b.media_ids,           a.language_code != b.language_code};
 }
 
 }  // namespace
@@ -339,7 +356,7 @@ void take_field(std::size_t i, const LocalPostContent& from, LocalPostContent& t
         case 1: to.call_to_action = from.call_to_action; break;
         case 2: to.event = from.event; break;
         case 3: to.offer = from.offer; break;
-        case 4: to.media_id = from.media_id; break;
+        case 4: to.media_ids = from.media_ids; break;
         case 5: to.language_code = from.language_code; break;
         default: break;
     }

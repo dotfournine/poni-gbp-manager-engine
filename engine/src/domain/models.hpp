@@ -1040,8 +1040,8 @@ struct LocalPostEdit {
     // "offer", "media" and "language_code", those in which the content differs from the post's as it was
     // when the edit was written.
     std::vector<std::string> fields;
-    // What the post would show with the edit applied: the edit's upload where it changes the media, what
-    // the post shows now where it does not.
+    // What the post would show with the edit applied: the edit's uploads, in order, where it changes the
+    // media, what the post shows now where it does not.
     std::vector<LocalPostMediaItem> media;
     // The checks on that content as of its last change.
     std::vector<domain::CheckResult> checks;
@@ -1080,10 +1080,10 @@ struct LocalPost {
     std::optional<domain::LocalPostCallToAction> call_to_action;
     std::optional<domain::LocalPostEvent> event;
     std::optional<domain::LocalPostOffer> offer;
-    std::optional<std::int64_t> media_id;
+    std::vector<std::int64_t> media_ids;
     std::optional<std::string> scheduled_time;
 
-    // What the post shows: at most one item for a post written here.
+    // What the post shows, in order: Google's copies once Google has the post, the uploads before.
     std::vector<LocalPostMediaItem> media;
     // The checks on the content as of its last change; empty for a post made at Google.
     std::vector<domain::CheckResult> checks;
@@ -1117,13 +1117,13 @@ struct LocalPost {
                 .call_to_action = call_to_action,
                 .event = event,
                 .offer = offer,
-                .media_id = media_id,
+                .media_ids = media_ids,
                 .scheduled_time = scheduled_time};
     }
 };
 BOOST_DESCRIBE_STRUCT(LocalPost, (),
                       (id, location_id, location_title, client_id, client_name, origin, status, status_reason, google_state,
-                       google_name, search_url, topic_type, summary, language_code, call_to_action, event, offer, media_id,
+                       google_name, search_url, topic_type, summary, language_code, call_to_action, event, offer, media_ids,
                        scheduled_time, media, checks, copied_from_id, copies, edit, created_by, edited_by, edited_at, decided_by, decided_at, sent_at,
                        removal_requested_by, removal_requested_at, removed_at, google_created_at, synced_at,
                        created_at, updated_at))

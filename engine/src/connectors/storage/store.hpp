@@ -10,6 +10,7 @@
 #pragma once
 
 #include "connectors/google/auth.hpp"
+#include "core/mapped_file.hpp"
 
 #include <boost/asio/awaitable.hpp>
 
@@ -29,9 +30,16 @@ struct Object {
     std::string name;
     std::string content_type;
     std::string body;
-    // The Cache-Control the object is served with. Cloud Storage caches a
+    // A file on disk instead of `body`: a post's photo or video, sent as it
+    // lies and never read into memory (D-101). It goes up as itself, without
+    // metadata of its own, so Cloud Storage serves it with its default for a
+    // public object, an hour in caches: what an upload is meant to have.
+    std::shared_ptr<const core::MappedFile> file;
+    // The Cache-Control a `body` is served with. Cloud Storage caches a
     // public object for an hour by default, which would keep a revoked page readable.
     std::string cache_control = "no-store";
+
+    std::string_view bytes() const { return file ? file->bytes() : std::string_view(body); }
 };
 
 class ObjectStore {

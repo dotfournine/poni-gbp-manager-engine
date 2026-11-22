@@ -55,20 +55,27 @@ std::string multipart_upload_body(const Object& object, std::string_view boundar
 
 asio::awaitable<Result<void>> GcsStore::put(Object object) {
     if (!valid_object_name(object.name)) co_return std::unexpected(refused("the object's name is not allowed"));
-    // 16 random bytes: a body that happens to contain the boundary is not a thing to plan for.
-    std::string boundary = "poni-";
-    for (const unsigned char byte : core::random_bytes(16)) boundary += std::format("{:02x}", byte);
     http::ClientRequest request;
     request.method = http::ClientMethod::post;
     request.url = google::url("https://storage.googleapis.com", {"upload", "storage", "v1", "b", bucket_, "o"});
-    request.url.params().append({"uploadType", "multipart"});
-    request.content_type = "multipart/related; boundary=" + boundary;
     // A page is sent in a moment; a post's video of 75 MB is given time by its size.
-    request.timeout = 60s + std::chrono::seconds(object.body.size() / kSlowestUploadBytesPerSecond);
-    request.body = multipart_upload_body(object, boundary);
-    // A video is 75 MB: from here on the request holds it, not the object as well.
-    // (Assigning an empty string would keep the buffer with libstdc++.)
-    std::string().swap(object.body);
+    request.timeout = 60s + std::chrono::seconds(object.bytes().size() / kSlowestUploadBytesPerSecond);
+    if (object.file) {
+        // The file is the request's body, sent from where it lies: nothing of it is copied into memory.
+        request.url.params().append({"uploadType", "media"});
+        request.url.params().append({"name", object.name});
+        request.content_type = object.content_type;
+        request.file = std::move(object.file);
+    } else {
+        // 16 random bytes: a body that happens to contain the boundary is not a thing to plan for.
+        std::string boundary = "poni-";
+        for (const unsigned char byte : core::random_bytes(16)) boundary += std::format("{:02x}", byte);
+        request.url.params().append({"uploadType", "multipart"});
+        request.content_type = "multipart/related; boundary=" + boundary;
+        request.body = multipart_upload_body(object, boundary);
+        // A page is small, but the request holds it now, not the object as well.
+        std::string().swap(object.body);
+    }
     const auto response = co_await google::send(api_, kStorageApi, std::move(request));
     if (!response) co_return std::unexpected(response.error());
     co_return Result<void>{};
@@ -85,8 +92,9 @@ asio::awaitable<Result<void>> FolderStore::put(Object object) {
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
     if (ec) co_return std::unexpected(refused(std::format("the folder can't be created: {}", ec.message())));
+    const auto content = object.bytes();
     std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    file.write(object.body.data(), static_cast<std::streamsize>(object.body.size()));
+    file.write(content.data(), static_cast<std::streamsize>(content.size()));
     file.close();
     if (!file) co_return std::unexpected(refused("the file can't be written"));
     co_return Result<void>{};

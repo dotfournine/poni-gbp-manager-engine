@@ -227,7 +227,9 @@ void add_local_post_routes(Router& router, const Api& api, storage::ObjectStore*
     // A photo or a video for posts: the body is the file. It goes into the public bucket exactly as
     // it was uploaded, under a name nobody can guess, because Google takes a post's media only from
     // a public address (D-088 point 9, D-090). The route's own body limit is the largest video
-    // Google takes; a photo's own limit is checked below.
+    // Google takes; a photo's own limit is checked below. The server has put the file on disk
+    // (request.file, D-101): it is read through its mapping and sent to the bucket from there.
+    // A post with several files uploads them one by one, each with a request of its own.
     router.add(verb::post, "/api/local-post-media", {Access::user, "local_posts.upload_media", domain::kVideoMaxBytes},
                [api, public_store](Request& request) -> asio::awaitable<Response> {
                    if (api.options.google_mock) co_return unavailable();
@@ -236,27 +238,29 @@ void add_local_post_routes(Router& router, const Api& api, storage::ObjectStore*
                                                  "The engine has no public bucket (PONI_PUBLIC_BUCKET), so a post can have no photo or video.");
                    }
                    // What the file says it is, from its own bytes: the Content-Type header is the browser's guess.
+                   // The server put the body on disk: a request without a file has no bytes.
+                   const auto bytes = request.file ? request.file->bytes() : std::string_view{};
                    repo::NewLocalPostMedia media;
                    std::string extension;
-                   if (domain::looks_like_video(request.body)) {
-                       const auto info = domain::inspect_video(request.body);
-                       if (const auto problem = domain::video_problem(request.body, info)) co_return invalid(*problem);
+                   if (domain::looks_like_video(bytes)) {
+                       const auto info = domain::inspect_video(bytes);
+                       if (const auto problem = domain::video_problem(bytes, info)) co_return invalid(*problem);
                        media = {.object_name = {},
                                 .format = "video",
                                 .content_type = info->content_type,
-                                .bytes = static_cast<std::int64_t>(request.body.size()),
+                                .bytes = static_cast<std::int64_t>(bytes.size()),
                                 .width = info->width,
                                 .height = info->height,
                                 .duration_ms = info->duration_ms};
                        extension = info->extension;
                    } else {
-                       const auto info = domain::inspect_image(request.body);
+                       const auto info = domain::inspect_image(bytes);
                        if (!info) co_return invalid("The file is neither a JPG or PNG photo nor an MP4 or QuickTime video.");
-                       if (const auto problem = domain::photo_problem(request.body, info)) co_return invalid(*problem);
+                       if (const auto problem = domain::photo_problem(bytes, info)) co_return invalid(*problem);
                        media = {.object_name = {},
                                 .format = "photo",
                                 .content_type = info->content_type,
-                                .bytes = static_cast<std::int64_t>(request.body.size()),
+                                .bytes = static_cast<std::int64_t>(bytes.size()),
                                 .width = info->width,
                                 .height = info->height,
                                 .duration_ms = std::nullopt};
@@ -266,11 +270,9 @@ void add_local_post_routes(Router& router, const Api& api, storage::ObjectStore*
                    // The bytes as they came: nothing is resized, converted or stripped.
                    std::string failure;
                    try {
-                       // The file is given to the store, not copied: nothing below reads the request's body.
-                       const auto stored = co_await public_store->put({.name = media.object_name,
-                                                                       .content_type = media.content_type,
-                                                                       .body = std::move(request.body),
-                                                                       .cache_control = "public, max-age=3600"});
+                       // The file is given to the store as the server put it on disk, not copied.
+                       const auto stored =
+                           co_await public_store->put({.name = media.object_name, .content_type = media.content_type, .file = std::move(request.file)});
                        if (!stored) failure = stored.error().message;
                    } catch (const std::exception& e) {
                        failure = e.what();

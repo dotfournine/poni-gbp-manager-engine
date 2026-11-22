@@ -59,7 +59,11 @@ bhttp::request<bhttp::string_body> build(ClientRequest& request, const std::stri
     out.set(bhttp::field::user_agent, std::format("poni-gbp-engine/{}", core::kVersion));
     out.set(bhttp::field::accept, "application/json");
     for (const auto& [name, value] : request.headers) out.set(name, value);
-    if (!request.body.empty() || verb != bhttp::verb::get) {
+    if (request.file) {
+        // The message carries the header alone; exchange() writes the file after it.
+        if (!request.content_type.empty()) out.set(bhttp::field::content_type, request.content_type);
+        out.content_length(request.file->size());
+    } else if (!request.body.empty() || verb != bhttp::verb::get) {
         if (!request.content_type.empty()) out.set(bhttp::field::content_type, request.content_type);
         out.body() = std::move(request.body);
         out.prepare_payload();
@@ -68,10 +72,17 @@ bhttp::request<bhttp::string_body> build(ClientRequest& request, const std::stri
 }
 
 template <class Stream>
-asio::awaitable<ClientResponse> exchange(Stream& stream, beast::tcp_stream& tcp_layer,
-                                         bhttp::request<bhttp::string_body>& request, std::chrono::seconds timeout) {
+asio::awaitable<ClientResponse> exchange(Stream& stream, beast::tcp_stream& tcp_layer, bhttp::request<bhttp::string_body>& request,
+                                         const core::MappedFile* file, std::chrono::seconds timeout) {
     tcp_layer.expires_after(timeout);
-    co_await bhttp::async_write(stream, request, asio::use_awaitable);
+    if (file) {
+        bhttp::request_serializer<bhttp::string_body> serializer{request};
+        co_await bhttp::async_write_header(stream, serializer, asio::use_awaitable);
+        tcp_layer.expires_after(timeout);
+        co_await asio::async_write(stream, asio::buffer(file->bytes().data(), file->size()), asio::use_awaitable);
+    } else {
+        co_await bhttp::async_write(stream, request, asio::use_awaitable);
+    }
 
     beast::flat_buffer buffer;
     bhttp::response_parser<bhttp::string_body> parser;
@@ -302,7 +313,8 @@ std::optional<std::string_view> why_refused(const ClientRequest& request) {
         if (breaks_a_line(name) || breaks_a_line(value)) return "the outbound client sends no header that holds a line break";
     }
     if (breaks_a_line(request.content_type)) return "the outbound client sends no header that holds a line break";
-    if (request.method == ClientMethod::del && !request.body.empty()) return "the outbound client sends a DELETE without a body";
+    if (request.method == ClientMethod::del && (!request.body.empty() || request.file)) return "the outbound client sends a DELETE without a body";
+    if (request.file && request.method != ClientMethod::post) return "the outbound client sends a file only in a POST";
     return std::nullopt;
 }
 
@@ -371,14 +383,14 @@ asio::awaitable<ClientResponse> NetClient::send(ClientRequest request) {
         beast::tcp_stream stream(ex);
         stream.expires_after(timeout);
         co_await stream.async_connect(endpoints, asio::use_awaitable);
-        auto response = co_await exchange(stream, stream, message, timeout);
+        auto response = co_await exchange(stream, stream, message, request.file.get(), timeout);
         boost::system::error_code ignored;
         stream.socket().shutdown(tcp::socket::shutdown_both, ignored);
         co_return response;
     }
 
     auto stream = co_await connect_tls(tls_, host, port, timeout);
-    auto response = co_await exchange(stream, beast::get_lowest_layer(stream), message, timeout);
+    auto response = co_await exchange(stream, beast::get_lowest_layer(stream), message, request.file.get(), timeout);
     co_await close_tls(stream);
     co_return response;
 }
@@ -389,6 +401,7 @@ asio::awaitable<std::vector<ClientResponse>> NetClient::send_h2(std::vector<Clie
         if (const auto refusal = why_refused(request)) throw std::invalid_argument(std::string(*refusal));
         // Apple's push service is the one server the engine speaks HTTP/2 to (D-097).
         if (!is_apns_device_url(request.url)) throw std::invalid_argument("the outbound client speaks HTTP/2 only to Apple's push service");
+        if (request.file) throw std::invalid_argument("the outbound client sends no file over HTTP/2");
         if (request.url.host() != requests.front().url.host()) throw std::invalid_argument("the requests of one HTTP/2 connection go to one host");
     }
     const std::string host = requests.front().url.host();

@@ -36,7 +36,7 @@ protected:
 };
 
 const std::string kPost = R"({"topic_type": "standard", "summary": "x", "language_code": "en", "call_to_action": null,
-                              "event": null, "offer": null, "media_id": null, "scheduled_time": null})";
+                              "event": null, "offer": null, "media_ids": [], "scheduled_time": null})";
 
 // Every route that takes a JSON body, as the spec lists them, each with a member of its body that can't be
 // null ("" where every member can). It is the body's first member, so that nothing is missing before it.
@@ -244,11 +244,11 @@ TEST_F(Bodies, APostsContentTravelsWhole) {
     const auto id = json(created).at("id").as_int64();
 
     auto content = boost::json::parse(kPost).as_object();
-    content.erase("media_id");
-    expect_refused(post(target, boost::json::serialize(content)), "media_id", "a member left out");
+    content.erase("media_ids");
+    expect_refused(post(target, boost::json::serialize(content)), "media_ids", "a member left out");
     // The approval carries every member too: a part of the content is no approval of it.
-    expect_refused(post(std::format("/api/local-posts/{}/approve", id), boost::json::serialize(content)), "media_id", "an approval in part");
-    expect_refused(put(std::format("/api/local-posts/{}", id), boost::json::serialize(content)), "media_id", "an edit in part");
+    expect_refused(post(std::format("/api/local-posts/{}/approve", id), boost::json::serialize(content)), "media_ids", "an approval in part");
+    expect_refused(put(std::format("/api/local-posts/{}", id), boost::json::serialize(content)), "media_ids", "an edit in part");
 
     content = boost::json::parse(kPost).as_object();
     content["call_to_action"] = boost::json::object{{"action_type", "call"}};

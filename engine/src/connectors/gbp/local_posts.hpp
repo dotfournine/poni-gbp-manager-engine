@@ -138,9 +138,9 @@ struct MediaSource {
     std::string url;
 };
 
-// The body of a create for `content`, with its media if it has one. The
-// caller has checked the content: this only spells it Google's way.
-boost::json::object create_body(const domain::LocalPostContent& content, const std::optional<MediaSource>& media);
+// The body of a create for `content`, with its media, in order, if it has
+// any. The caller has checked the content: this only spells it Google's way.
+boost::json::object create_body(const domain::LocalPostContent& content, const std::vector<MediaSource>& media);
 
 // The body of an update of the post `at_google` (as Google returned it a
 // moment ago) to what `edit` says, in the fields `mask` names and in no
@@ -153,12 +153,13 @@ boost::json::object create_body(const domain::LocalPostContent& content, const s
 //   - the days and times of an event's schedule that the edit does not
 //     change: Google leaves a time out that the engine reads as 00:00, and
 //     writing 00:00 back could give a time to an event that had none.
-// `media`: the edit's upload, when "media" is in the mask and the edit has
-// one; without it "media" is sent empty, which takes the post's media away.
+// `media`: the edit's uploads, in order, when "media" is in the mask; Google
+// replaces the post's media with them whole, and an empty list takes the
+// post's media away.
 boost::json::object update_body(const LocalPost& at_google, const domain::LocalPostContent& edit,
-                                const std::vector<std::string_view>& mask, const std::optional<MediaSource>& media);
+                                const std::vector<std::string_view>& mask, const std::vector<MediaSource>& media);
 
-// What a post at Google says, in the engine's terms. `media_id` is never
+// What a post at Google says, in the engine's terms. `media_ids` is never
 // set: Google knows nothing of the engine's uploads. An event is kept only
 // when it has both dates; a missing time is 00:00, which is how Google
 // writes midnight.
