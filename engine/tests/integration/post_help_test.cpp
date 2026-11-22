@@ -32,9 +32,10 @@ protected:
         gbp_.add_location("9003", "Nobody's Location");
         discover();
         link_spa_and_buffet();
-        unlinked_ = location_id("9003");
+        switch_location(spa_, true);
+        switched_off_ = location_id("9003");
         become_test_client(buffet_client_, "food_beverage");
-        exec(std::format("UPDATE clients SET audience = 'AUDIENCE-LINE: families from the neighbourhood' WHERE id = {}", buffet_client_));
+        exec(std::format("UPDATE locations SET audience = 'AUDIENCE-LINE: families from the neighbourhood' WHERE id = {}", buffet_));
         start();
     }
 
@@ -100,7 +101,7 @@ protected:
     FakeLlm llm_;
     test::FakePerformance performance_;
     std::optional<jobs::PostAdvisor> advisor_;
-    std::int64_t unlinked_ = 0;
+    std::int64_t switched_off_ = 0;
 };
 
 }  // namespace
@@ -196,8 +197,8 @@ TEST_F(PostHelp, AReviewTheHelpMayNotUseIsCountedAsWrittenAndNothingElse) {
     }
 }
 
-TEST_F(PostHelp, TheHighlightsOfALocationWithoutReviewsOrWithoutAClientAreEmpty) {
-    for (const auto location : {spa_, unlinked_}) {
+TEST_F(PostHelp, TheHighlightsOfALocationWithoutReviewsAreEmptyWhetherItIsSwitchedOnOrNot) {
+    for (const auto location : {buffet_, switched_off_}) {
         const auto found = highlights(location);
         EXPECT_EQ(found.at("reviews").as_int64(), 0);
         EXPECT_FALSE(found.at("enough_for_ideas").as_bool());
@@ -256,7 +257,6 @@ TEST_F(PostHelp, IdeasComeFromTheModelWithWhatIsKnownAboutTheLocation) {
     EXPECT_EQ(request.provider, "dashscope");
     EXPECT_EQ(request.model, "qwen3.7-plus");
     EXPECT_FALSE(request.temperature);
-    EXPECT_EQ(request.client_id.value(), buffet_client_);
     EXPECT_EQ(request.location_id.value(), buffet_);
     EXPECT_FALSE(request.review_id);
     EXPECT_EQ(request.extras.at("enable_thinking").as_bool(), false) << "the provider's extras";
@@ -366,9 +366,9 @@ TEST_F(PostHelp, ARequestThatIsNotOneIsRefusedBeforeAnyModelIsAsked) {
 
     EXPECT_EQ(draft(999999).status, 404u);
     EXPECT_EQ(ideas(999999).status, 404u);
-    EXPECT_EQ(error_code(draft(unlinked_)), "location_not_linked");
-    EXPECT_EQ(draft(unlinked_).status, 409u);
-    EXPECT_EQ(error_code(ideas(unlinked_)), "location_not_linked");
+    EXPECT_EQ(error_code(draft(switched_off_)), "location_not_synced") << "no help for a location that is switched off (D-102)";
+    EXPECT_EQ(draft(switched_off_).status, 409u);
+    EXPECT_EQ(error_code(ideas(switched_off_)), "location_not_synced");
     // Signed out, or without the page's token.
     EXPECT_EQ(call(verb::post, target, {}, with("standard", "en", "x", "")).status, 401u);
     EXPECT_EQ(call(verb::post, target, {.cookie = browser_.cookie, .csrf = ""}, with("standard", "en", "x", "")).status, 403u);

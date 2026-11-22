@@ -203,7 +203,7 @@ Visibility visibility(const ReportInput& input, const Period& previous, std::vec
 }
 
 std::optional<Keywords> keywords(const ReportInput& input) {
-    // The newest month any location has keywords for; locations of one client are asked for the same months.
+    // The newest month any location has keywords for; the locations of one report are asked for the same months.
     std::string month;
     for (const auto& location : input.performance) {
         if (!location.keywords.empty()) month = std::max(month, location.keywords_month);
@@ -312,8 +312,8 @@ VisibilityTotals sum_metrics(const std::vector<MetricDay>& days) {
 ReportData build_report(const ReportInput& input) {
     const auto previous = previous_period(input.period);
     ReportData out;
-    out.client_id = input.client_id;
-    out.client_name = input.client_name;
+    out.location_id = input.location_id;
+    out.location_title = input.location_title;
     out.period_start = format_day(input.period.start);
     out.period_end = format_day(input.period.end);
     out.previous_start = format_day(previous.start);

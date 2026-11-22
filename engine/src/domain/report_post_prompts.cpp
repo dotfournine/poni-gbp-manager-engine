@@ -76,7 +76,7 @@ std::vector<ChatMessage> summary_messages(const ReportData& report, std::string_
         if (numbers.response_rate) out["answered_percent"] = static_cast<std::int64_t>(*numbers.response_rate * 100 + 0.5);
         return out;
     };
-    boost::json::object data{{"business", report.client_name},
+    boost::json::object data{{"business", report.location_title},
                              // Dates in words: a model that copies "2026-10-28" into its summary would fail the phone check.
                              {"period", period_label(report.period_start, report.period_end)},
                              {"period_before", period_label(report.previous_start, report.previous_end)},

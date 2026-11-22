@@ -995,11 +995,9 @@ TEST_F(AutoPosting, TheSettingsAreCheckedBeforeAnythingIsStored) {
     // And the zone can't be taken away while it is.
     EXPECT_THAT(update(spa_, {.time_zone = std::nullopt}).error().message, HasSubstr("time zone"));
 
-    // A location that isn't linked to a client can't auto-post.
-    exec("INSERT INTO locations (gbp_location_id, gbp_account_id, title, raw, first_seen_at, last_seen_at, updated_at) "
-         "VALUES ('9003', '1', 'Unlinked', '{}'::jsonb, now(), now(), now())");
-    const auto unlinked = value<std::int64_t>("SELECT id FROM locations WHERE gbp_location_id = '9003'");
-    EXPECT_THAT(update(unlinked, {.enabled = true, .five_star = true}).error().message, HasSubstr("linked"));
+    // A location that is switched off can't auto-post (D-102).
+    switch_location(buffet_, false);
+    EXPECT_THAT(update(buffet_, {.enabled = true, .five_star = true}).error().message, HasSubstr("switched on"));
 }
 
 TEST_F(AutoPosting, TheOverviewShowsEveryLocationsSwitchesAndPause) {
@@ -1109,14 +1107,28 @@ TEST_F(AutoPosting, AReplyPolicyChangedAfterSchedulingStopsThePost) {
     EXPECT_EQ(approvals_needed(), 1);
 }
 
-TEST_F(AutoPosting, LinkingALocationToAnotherClientSwitchesAutoPostingOff) {
+// D-102 point 2: switching the location off switches its auto-posting off,
+// and a post that was scheduled stops at the claim, which reads the switch.
+TEST_F(AutoPosting, SwitchingTheLocationOffSwitchesAutoPostingOffAndStopsAScheduledPost) {
     switch_on(spa_, true, true);
-    const auto other = make_client("Another Client");
-    link(std::string(kSpa), other);
+    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    const auto draft_id = drafted("r1");
+    ASSERT_EQ(draft(draft_id, "status"), "scheduled");
+
+    switch_location(spa_, false);
     EXPECT_EQ(location_value(spa_, "auto_post_enabled"), "false");
     EXPECT_EQ(location_value(spa_, "auto_post_five_star"), "false");
     EXPECT_EQ(location_value(spa_, "auto_post_four_star"), "false");
-    // Linking it back does not bring the switch back: a person switches it on again.
-    link(std::string(kSpa), spa_client_);
+    clock_.advance(30min);
+    run_jobs();
+    EXPECT_TRUE(gbp_.puts.empty());
+    EXPECT_EQ(draft(draft_id, "status"), "draft");
+    EXPECT_THAT(draft(draft_id, "status_reason"), HasSubstr("no longer synced")) << "the location's switch, read before auto-posting's";
+
+    // Switching it on again brings neither auto-posting nor the post back: a person decides again.
+    switch_location(spa_, true);
     EXPECT_EQ(location_value(spa_, "auto_post_enabled"), "false");
+    clock_.advance(3h);
+    run_jobs();
+    EXPECT_TRUE(gbp_.puts.empty());
 }

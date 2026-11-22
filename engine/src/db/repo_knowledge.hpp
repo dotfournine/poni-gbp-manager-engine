@@ -46,13 +46,13 @@ std::optional<std::string> knowledge_problem(pqxx::transaction_base& tx);
 
 // The profile `key` with the flags every industry shares added, enabled
 // flags only: what a review of that industry is analyzed against. Nothing
-// if the knowledge base has no such industry: its clients are not analyzed.
+// if the knowledge base has no such industry: its locations are not analyzed.
 std::optional<domain::IndustryRules> industry_rules(pqxx::transaction_base& tx, const std::string& key);
 
-// Is this an industry a client can be given?
+// Is this an industry a location can be given?
 bool industry_supported(pqxx::transaction_base& tx, const std::string& key);
 
-// The industry's test corpus: what a go-live test runs besides the client's own reviews.
+// The industry's test corpus: what a go-live test runs besides the location's own reviews.
 std::optional<domain::Corpus> industry_corpus(pqxx::transaction_base& tx, const std::string& key);
 
 // One case by its id, as a running test reads it; nothing if a reseed took it away.
@@ -60,7 +60,7 @@ std::optional<domain::CorpusCase> corpus_case(pqxx::transaction_base& tx, const 
 
 // ---- defaults and prices ---------------------------------------------------------------
 
-// What the first location of a client starts with (D-093), and the default
+// What every location starts with when it is discovered (D-093, D-102), and the default
 // of every analysis setting. Empty objects when nothing is seeded.
 struct KnowledgeDefaults {
     boost::json::object voice;

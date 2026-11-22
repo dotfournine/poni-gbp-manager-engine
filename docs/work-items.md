@@ -4,26 +4,6 @@ The engine's backlog: what is not built or not done yet, by area, the most urgen
 
 An item is removed when it ships. A change of direction is proposed to the owner and recorded as a new entry in [decisions.md](decisions.md); this file then follows it. Each item says what and why, what done looks like, and which rules in `CLAUDE.md` and which decisions it touches. "The owner's" marks an item only the owner can do or decide.
 
-## Next: locations as the unit of work
-
-### A location is switched on by itself; a client only groups locations
-
-**What and why.** D-102. Linking a location to a client did two things at once: it grouped the location, and it switched it on (the review poll, analysis, auto-posting and the copy of reply settings all asked for a linked location of a client that is not archived). The client also held the industry, the start day of analysis, the audience for help with posts, the go-live test, the reports and their schedules, and the scope of notification rules. Google has no clients. Everything moves to the location, a location has a switch of its own that is off at discovery, and a client keeps a name, notes, an archived flag and its locations. Do this before the phone app's first release, because it changes the contract under the app.
-
-**What to build** (D-102):
-
-- **Spec first.** `Location` gains `enabled`, `industry_key`, `analyze_from` and `audience`; `LocationUpdate` gains the same four, and `Client` and its create and update lose the last three. `POST /api/locations/{id}/go-live-test` and the location's reports and schedules replace `/api/clients/{id}/go-live-test` and `/api/clients/{id}/reports`. The event type `client_report` becomes `location_report` in `NotificationEventType`, `NotificationRule.event_type` and the deliveries. `GoLiveRun`, `Report`, `ReportSchedule`, `NotificationRule` and the model-cost rows name a location (`location_id`, `location_title`) instead of a client. The `client_id` filter of `/api/reviews`, `/api/reports`, `/api/local-posts` and `/api/escalations` becomes `location_id`; `/api/locations?client_id=` stays. A response may keep naming the client a location is grouped under, for display. The removals are breaking changes under D-095 point 8, which is why this goes before the app's first release.
-- **Migration 0008.** `locations.enabled` (default false), `industry_key`, `analyze_from` and `audience` on `locations`, filled from each linked location's client, and `enabled = true` for every location linked to a client that is not archived (D-102 point 9). Every location without reply settings gets the defaults. `go_live_runs`, `reports` and `report_schedules` name a location; nothing is deployed, so a development database's runs, reports and schedules go to the client's earliest-linked location. `notification_rules` name a location or none; a client's `client_report` rule becomes a `location_report` rule per linked location, and existing deliveries take the new name; the checks on `notification_rules` and `notification_deliveries` (including the one `0003_push.sql` wrote) name `location_report`, and the check that such a rule names a location replaces `notification_rules_client_report_check`. `llm_calls` drops `client_id`. The poll index asks for `enabled`. The three columns leave `clients`.
-- **Engine.** `enabled` gates the review poll and full sync, analysis (`repo_analysis.cpp`, which also takes the industry and start day from the location), the sync and the send of local posts, help with posts (`repo_post_help.cpp`), the go-live start, report schedules and builds, and auto-posting (`repo_auto_posting.cpp`: switching on needs an enabled location, switching the location off switches auto-posting off). The claims of a reply (`repo::claim_post`), a local post and an edit read it as they read the posting switches; `local_posts.remove` does not. Switching on starts a full sync. `repo::update_location` changes the link and nothing else: `copy_reply_settings_on_link` and `remove_reply_settings` go, and discovery writes the defaults row of a new location. `repo_go_live.cpp` starts a run for one location at its policy's width, with that location's reviews; `repo_reports.cpp` and `jobs/reports.cpp` build, schedule and send per location, to the rules that name it; `repo_notifications.cpp` matches rules by location. The rename runs through the code: `kEventClientReport` becomes `kEventLocationReport`, and the comments and messages that say "client report" say a location's report (`domain/report.hpp`, `repo_reports`, `repo_notifications`, `api_reports`, `jobs/reports`). Nothing in the engine joins `clients` except to show a name. Where `reply_name` is empty, the business is named by the location's title (D-102 point 10: `domain::business_name`'s callers in `repo_go_live.cpp`, `jobs/post_advisor.cpp` and the pipeline); `ReplySettingsGolden` tests the reader, so it keeps passing the name its file holds and stays green with the file untouched, and the fallback gets a test of its own. Say in the pull request that those locations need a new go-live test.
-- **Tools.** `poni-tools seed` prints the locations whose fingerprint changes and the locations whose industry is gone.
-- **Tests.** The fixtures give a location its industry and settings (`become_test_client` and the API fixture's sign-in data); `ReplySettingsGolden.*` stays green with its file untouched; `posting_test`, `auto_posting_test`, `go_live_test`, the local post tests and the report tests stay green, and each gets a case for a location that is switched off. A test that a newly discovered location does nothing until a person switches it on.
-- **Docs.** `architecture.md`, and the rules in `CLAUDE.md` that say "linked" or "client": reply settings now change in two ways (a person's save, and the defaults written at discovery), the `location_report` rule names a location, "client report" becomes a location's report (FR-8 in `architecture.md` included), and the go-live test reads the location's reviews.
-- **The other side.** Once merged, a message to the web app's builder and to the phone app's side: the members moved, the routes replaced, the new switch, and that a newly discovered location does nothing until a person switches it on.
-
-**Done when:** a newly discovered location is listed and does nothing until a person switches it on; a location with no client is analyzed, tested, reported on and auto-posts like any other; linking, unlinking and moving a location changes nothing but its client; the macOS tests, the Linux container build, the tools' checks and the contract check pass.
-
-**Touches:** D-102; D-037, D-063, D-066, D-070, D-074, D-075, D-078 point 5, D-084, D-085, D-093; the rules in `CLAUDE.md` on reply settings, reports, the go-live test and the switches only a person flips.
-
 ## Next: the phone app
 
 The app's requests are in the app repository (`poni-gbp-manager-ios/docs/design/engine-requests-app-v1.md`). Sign-in with a one-time code and PKCE, the bearer token, the developer sign-in that returns a token, and sign-out of a token are built (D-095, migration `0002_app_sign_in.sql`). Copying a post, deleting a draft and the list filters are built in the form D-094 settled; replacing a post in one step was declined there. The second round's list order, `google_state=none` and the link from a copy to its source are built (D-098), and so are a location's time zone and the time of its last failed read of posts, a report's average rating and response rate, an escalation's deliveries by its id, and the contract's account of what a push says (D-098 points 6 to 9). The app's sign-in answers the attempt limit with a redirect to the app (D-098 point 10). Push is settled by D-097. Editing a post at Google in place is built (D-099, migration `0005_local_post_edits.sql`), from Google's documentation and without a trial: the first real edits are watched (see "The first real local posts").
@@ -91,7 +71,7 @@ The system runs locally only. The owner postponed the first deployment (D-052); 
 
 ## Going live with the MVP clients
 
-The owner's steps, in this order, once the system is deployed. The engine switches nothing on by itself: the posting switches, email sending, auto-posting and "send automatically" are a person's (`CLAUDE.md`, rules that protect clients).
+The owner's steps, in this order, once the system is deployed. The engine switches nothing on by itself: a location (`enabled`, D-102), the posting switches, email sending, auto-posting and "send automatically" are a person's (`CLAUDE.md`, rules that protect clients).
 
 ### The first real reply, and a week of replies through the system
 
@@ -111,7 +91,7 @@ The owner's steps, in this order, once the system is deployed. The engine switch
 
 ### The live adversarial suite on the current prompts
 
-**What.** The analyzer's and the writer's prompts changed since the last live run, which changes every client's fingerprint. Run `engine/scripts/linux.sh ai-live` (or the AI live workflow) once with the seeded configuration.
+**What.** The analyzer's and the writer's prompts changed since the last live run, which changes every location's fingerprint. Run `engine/scripts/linux.sh ai-live` (or the AI live workflow) once with the seeded configuration.
 
 **Done when:** a live run passes in which no case reaches auto-post, before the first go-live test is started.
 
@@ -119,7 +99,7 @@ The owner's steps, in this order, once the system is deployed. The engine switch
 
 ### Go-live tests and the auto-posting rollout
 
-**What.** Before anything auto-posts: the judge's provider in the engine's environment (`PONI_LLM_ANTHROPIC_BASE_URL`, `_API_KEY`, `_PROTOCOL=anthropic`; the judge has never been called from this code); the owner's rating of the 58 replies of the spike, compared with the judge's; a first real go-live test of each MVP client, started by the owner, which also shows what a test costs and how long it takes. Then a go-ahead per location: Gangnam AYCE Buffet 5★ first, then all three locations, then 4★, and two weeks of watching. Two known costs are accepted until then and stay open: nothing checks the Chinese script of a reply (D-056), and an offer or a promise in a reply is noticed only by the model (D-058).
+**What.** Before anything auto-posts: the judge's provider in the engine's environment (`PONI_LLM_ANTHROPIC_BASE_URL`, `_API_KEY`, `_PROTOCOL=anthropic`; the judge has never been called from this code); the owner's rating of the 58 replies of the spike, compared with the judge's; a first real go-live test of each MVP location, started by the owner, which also shows what a test costs and how long it takes. Then a go-ahead per location: Gangnam AYCE Buffet 5★ first, then all three locations, then 4★, and two weeks of watching. Two known costs are accepted until then and stay open: nothing checks the Chinese script of a reply (D-056), and an offer or a promise in a reply is noticed only by the model (D-058).
 
 **Done when:** two weeks of auto-posting with no incident, and the typical reply time for 4 and 5★ reviews is under an hour.
 
@@ -127,15 +107,15 @@ The owner's steps, in this order, once the system is deployed. The engine switch
 
 ### The first real reports
 
-**What.** The owner approves the report layout (two PDFs of the local trial were handed over). The first report built with the models on shows what the summary says and costs (one call per report; it has never been asked for). The first reports are sent once sending is on and each client has recipients.
+**What.** The owner approves the report layout (two PDFs of the local trial were handed over). The first report built with the models on shows what the summary says and costs (one call per report; it has never been asked for). The first reports are sent once sending is on and each location has recipients.
 
-**Done when:** a monthly report of each MVP client was sent to its recipients.
+**Done when:** a monthly report of each MVP location was sent to its recipients.
 
 **Touches:** D-085, D-086; a report is sent only by a person or a schedule a person set to send.
 
 ### The first real local posts
 
-**What.** A post for each MVP client drafted, approved and published through the dashboard; a scheduled one removed again; ideas and texts from the model used on a real location. Posts were run once by hand on X Vision Media's own profile only.
+**What.** A post for each MVP location drafted, approved and published through the dashboard; a scheduled one removed again; ideas and texts from the model used on a real location. Posts were run once by hand on X Vision Media's own profile only.
 
 The first edits of a post at Google (D-099) are made on X Vision Media's own profile and watched, one of a live post and one of a scheduled post that is not published yet, because the edit was built without a trial. Three things nobody knows until then: which of the six fields Google takes in `updateMask` (try each: the text, the button, an event's title and dates, an offer's parts, another photo, the language); whether an edit sends a live post back to `PROCESSING` or can get it `REJECTED`; and whether a scheduled post can be edited at all. A field Google refuses comes back as a draft edit with Google's message and leaves the post as it was. What is found is written into D-099, and a field Google never takes is taken out of the mask.
 
@@ -165,9 +145,9 @@ In the suggested order.
 
 ### Onboard the other clients
 
-**What.** The other 50 to 100 locations, in batches. A client of a new business type needs a complete industry pack first: profile, test corpus with the cases the complete-pack rule asks for, a made-up business, and a live run of the suite (FR-13). Each client then needs its reply settings and a go-live test before it auto-posts.
+**What.** The other 50 to 100 locations, in batches. A client of a new business type needs a complete industry pack first: profile, test corpus with the cases the complete-pack rule asks for, a made-up business, and a live run of the suite (FR-13). Each location is then switched on, given its industry, and needs its reply settings reviewed and a go-live test before it auto-posts.
 
-**Done when:** each batch is linked, has settings, and runs through the approval queue.
+**Done when:** each batch is switched on, has settings, and runs through the approval queue.
 
 **Touches:** D-078, D-082, D-093; `knowledge/README.md`; an industry is supported only with a complete pack.
 

@@ -23,9 +23,9 @@ namespace {
 
 class Notifications : public test::ReplyTest {
 protected:
-    std::int64_t rule(const std::string& event_type, std::optional<std::int64_t> client_id, std::vector<std::string> recipients) {
+    std::int64_t rule(const std::string& event_type, std::optional<std::int64_t> location_id, std::vector<std::string> recipients) {
         return as_test([&](pqxx::work& tx, audit::Writer& audit) {
-            return repo::create_rule(tx, audit, {.event_type = event_type, .client_id = client_id, .recipients = recipients}, false).value().id;
+            return repo::create_rule(tx, audit, {.event_type = event_type, .location_id = location_id, .recipients = recipients}, false).value().id;
         });
     }
 
@@ -46,7 +46,7 @@ protected:
     }
 
     static repo::NotificationEvent problem(std::string key) {
-        return {.type = "system_problem", .key = std::move(key), .client_id = std::nullopt, .location_id = std::nullopt,
+        return {.type = "system_problem", .key = std::move(key), .location_id = std::nullopt,
                 .review_id = std::nullopt, .subject = "Something broke", .body = "Details.", .link_path = "/#/status"};
     }
 };
@@ -111,7 +111,7 @@ TEST_F(Notifications, AnEscalationAlertsOncePerOpening) {
 
 TEST_F(Notifications, EveryDeliveryOfAnEscalationCarriesItsIdAndTheFilterReturnsThoseOnly) {
     rule("escalation", std::nullopt, {"owner@xvisionmediaus.com", "manager@xvisionmediaus.com"});
-    rule("approval_needed", spa_client_, {"spa-team@xvisionmediaus.com"});
+    rule("approval_needed", spa_, {"spa-team@xvisionmediaus.com"});
     waiting_draft("r1", kSpa);
     const auto id = flagged_review();
     await(pipeline_->process(id, false, false));
@@ -225,13 +225,13 @@ TEST_F(Notifications, AFlaggedReviewThatAlreadyHasAReplyOpensNothing) {
 
 // ---- approval needed ------------------------------------------------------------------
 
-TEST_F(Notifications, ANewDraftTellsTheClientsRecipientsThatApprovalIsNeeded) {
-    rule("approval_needed", spa_client_, {"spa-team@xvisionmediaus.com"});
+TEST_F(Notifications, ANewDraftTellsTheLocationsRecipientsThatApprovalIsNeeded) {
+    rule("approval_needed", spa_, {"spa-team@xvisionmediaus.com"});
     rule("approval_needed", std::nullopt, {"everyone@xvisionmediaus.com", "spa-team@xvisionmediaus.com"});
     rule("escalation", std::nullopt, {"owner@xvisionmediaus.com"});
     waiting_draft("r1", kSpa);
     run_jobs();
-    // The client's rule and the rule for all clients both apply; an address named twice is written to once.
+    // The location's rule and the rule for every location both apply; an address named twice is written to once.
     ASSERT_EQ(channel_.sent.size(), 2u);
     EXPECT_EQ(count("notification_deliveries WHERE event_type = 'approval_needed' AND status = 'sent'"), 2);
     const auto& message = channel_.sent[0];
@@ -328,7 +328,7 @@ TEST_F(Notifications, ARefusalAndTheLastFailedAttemptEndAsFailed) {
     EXPECT_EQ(value<std::string>("SELECT last_error FROM integration_status WHERE name = 'email'"), "HTTP 503");
 }
 
-TEST_F(Notifications, RulesTakeOnlyRealAddressesAndOneRulePerEventAndClient) {
+TEST_F(Notifications, RulesTakeOnlyRealAddressesAndOneRulePerEventAndLocation) {
     const auto create = [&](repo::NewRule rule) {
         return as_test([&](pqxx::work& tx, audit::Writer& audit) {
             auto result = repo::create_rule(tx, audit, rule, false);
@@ -336,23 +336,26 @@ TEST_F(Notifications, RulesTakeOnlyRealAddressesAndOneRulePerEventAndClient) {
             return result;
         });
     };
-    const auto made = create({.event_type = "escalation", .client_id = std::nullopt, .recipients = {" Owner@XVisionMediaUS.com ", "owner@xvisionmediaus.com"}});
+    const auto made = create({.event_type = "escalation", .location_id = std::nullopt, .recipients = {" Owner@XVisionMediaUS.com ", "owner@xvisionmediaus.com"}});
     ASSERT_TRUE(made);
     EXPECT_THAT(made->recipients, testing::ElementsAre("owner@xvisionmediaus.com"));
-    EXPECT_EQ(create({.event_type = "escalation", .client_id = std::nullopt, .recipients = {"x@example.com"}}).error().code, "rule_exists");
-    EXPECT_EQ(create({.event_type = "escalation", .client_id = 99999, .recipients = {"x@example.com"}}).error().code,
-              "client_not_found");
-    EXPECT_EQ(create({.event_type = "test", .client_id = std::nullopt, .recipients = {"x@example.com"}}).error().kind, repo::Failure::Kind::invalid);
+    EXPECT_EQ(create({.event_type = "escalation", .location_id = std::nullopt, .recipients = {"x@example.com"}}).error().code, "rule_exists");
+    EXPECT_EQ(create({.event_type = "escalation", .location_id = 99999, .recipients = {"x@example.com"}}).error().code,
+              "location_not_found");
+    // A location's own rule beside the rule for every location.
+    EXPECT_TRUE(create({.event_type = "escalation", .location_id = spa_, .recipients = {"x@example.com"}}));
+    EXPECT_EQ(create({.event_type = "escalation", .location_id = spa_, .recipients = {"y@example.com"}}).error().code, "rule_exists");
+    EXPECT_EQ(create({.event_type = "test", .location_id = std::nullopt, .recipients = {"x@example.com"}}).error().kind, repo::Failure::Kind::invalid);
     for (const auto* bad : {"nobody", "a@b", "a b@example.com", "x@example.com\r\nBcc: evil@example.com", "<x@example.com>", "x@@example.com"}) {
         EXPECT_FALSE(repo::valid_email(bad)) << bad;
-        EXPECT_EQ(create({.event_type = "approval_needed", .client_id = std::nullopt, .recipients = {bad}}).error().kind, repo::Failure::Kind::invalid);
+        EXPECT_EQ(create({.event_type = "approval_needed", .location_id = std::nullopt, .recipients = {bad}}).error().kind, repo::Failure::Kind::invalid);
     }
     EXPECT_TRUE(repo::valid_email("host@xvisionmediaus.com"));
 }
 
 // ---- system problems ------------------------------------------------------------------
 
-TEST_F(Notifications, LosingAccessToAClientsLocationIsReported) {
+TEST_F(Notifications, LosingAccessToAnEnabledLocationIsReported) {
     rule("system_problem", std::nullopt, {"ops@xvisionmediaus.com"});
     std::erase_if(gbp_.locations, [](const gbp::Location& location) { return location.name == "locations/9002"; });
     await(sync_->discover_locations());

@@ -3,7 +3,7 @@
 // industry's pack in the knowledge base has one (knowledge/industries/<key>/
 // corpus.json, D-078); the engine reads it from the kb_corpus_cases table
 // (db/repo_knowledge.hpp), and a go-live test (D-074) runs the cases of the
-// client's industry against the client's real configuration. The offline
+// location's industry against the location's real configuration. The offline
 // suite and the live suite read the same files.
 #pragma once
 
@@ -14,7 +14,7 @@
 namespace poni::domain {
 
 inline constexpr std::string_view kCaseControl = "control";
-// One of the client's own reviews (D-075); never in a corpus.
+// One of the location's own reviews (D-075); never in a corpus.
 inline constexpr std::string_view kCaseReal = "real";
 
 struct CorpusCase {

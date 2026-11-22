@@ -5,15 +5,12 @@
 #include "db/repo_settings.hpp"
 #include "jobs/queue.hpp"
 
-#include <boost/json/parse.hpp>
 #include <boost/json/serialize.hpp>
 #include <boost/json/value_from.hpp>
-#include <boost/json/value_to.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <format>
-#include <map>
 
 namespace poni::repo {
 
@@ -37,18 +34,18 @@ const db::FilledLater kCases{"cases"};
 // The columns of a model::GoLiveRun.
 std::string run_select() {
     return std::format(R"sql(
-        SELECT g.id, g.client_id, g.fingerprint, g.status, g.summary, g.auto_post_positive,
+        SELECT g.id, g.location_id, l.title AS location_title, g.fingerprint, g.status, g.summary, g.auto_post_positive,
                g.auto_post_rating_only, g.auto_post_min_stars, g.corpus_version,
-               -- Is the corpus the run used the one its client's industry has now?
-               coalesce(g.corpus_version = (SELECT i.corpus_version FROM kb_industries i JOIN clients c ON c.industry_key = i.key
-                                             WHERE c.id = g.client_id), false) AS corpus_current,
+               -- Is the corpus the run used the one its location's industry has now?
+               coalesce(g.corpus_version = (SELECT i.corpus_version FROM kb_industries i WHERE i.key = l.industry_key), false)
+                   AS corpus_current,
                g.kb_version, g.repeats, g.real_reviews,
                (SELECT count(*) FROM go_live_cases k WHERE k.run_id = g.id) AS cases_total,
                (SELECT count(*) FROM go_live_cases k WHERE k.run_id = g.id AND k.verdict <> 'pending') AS cases_done,
                (SELECT count(*) FROM llm_calls c WHERE c.go_live_run_id = g.id) AS model_calls,
                (SELECT sum(c.estimated_cost_usd)::float8 FROM llm_calls c WHERE c.go_live_run_id = g.id) AS spent_usd,
                (SELECT u.email FROM users u WHERE u.id = g.started_by) AS started_by, {} AS started_at, {} AS finished_at
-          FROM go_live_runs g)sql",
+          FROM go_live_runs g JOIN locations l ON l.id = g.location_id)sql",
                        iso("g.started_at"), iso("g.finished_at"));
 }
 
@@ -64,19 +61,18 @@ struct RealReview {
     bool has_text = false;
 };
 
-// The client's own recent praise (D-075): the newest 4 and 5 star reviews of
-// these locations, most of them with text, a few without.
-std::vector<RealReview> real_reviews(pqxx::transaction_base& tx, const std::vector<std::int64_t>& location_ids) {
+// The location's own recent praise (D-075): its newest 4 and 5 star
+// reviews, most of them with text, a few without.
+std::vector<RealReview> real_reviews(pqxx::transaction_base& tx, std::int64_t location_id) {
     std::vector<RealReview> out;
-    const auto locations = db::json_list(location_ids);
     for (const bool with_text : {true, false}) {
         const auto rows = tx.exec(
             std::format("SELECT r.id, r.rating FROM reviews r "
-                        "WHERE r.location_id IN (SELECT jsonb_array_elements_text($1::jsonb)::bigint) AND r.rating >= 4 "
+                        "WHERE r.location_id = $1 AND r.rating >= 4 "
                         "AND r.removed_at IS NULL AND r.ignored_at IS NULL AND btrim(coalesce(r.original_text, '')) {} '' "
                         "ORDER BY r.created_time DESC, r.id DESC LIMIT $2",
                         with_text ? "<>" : "="),
-            pqxx::params{locations, with_text ? kGoLiveRealWithText : kGoLiveRealWithoutText});
+            pqxx::params{location_id, with_text ? kGoLiveRealWithText : kGoLiveRealWithoutText});
         for (const auto& row : rows) out.push_back({row[0].as<std::int64_t>(), row[1].as<int>(), with_text});
     }
     return out;
@@ -103,7 +99,7 @@ void queue_cases(pqxx::transaction_base& tx, std::int64_t run_id, int count, cor
 // a pass switches nothing on.
 void end_run(pqxx::transaction_base& tx, std::int64_t run_id, std::string_view status, const std::string& summary, core::TimePoint now) {
     const auto rows = tx.exec("UPDATE go_live_runs SET status = $2, summary = $3, finished_at = $4::timestamptz "
-                              "WHERE id = $1 AND status = 'running' RETURNING fingerprint, client_id",
+                              "WHERE id = $1 AND status = 'running' RETURNING fingerprint, location_id",
                               pqxx::params{run_id, std::string(status), summary, to_timestamptz(now)});
     if (rows.empty()) return;
     audit::record(tx, tester(),
@@ -113,7 +109,7 @@ void end_run(pqxx::transaction_base& tx, std::int64_t run_id, std::string_view s
                    .after = {{"status", std::string(status)},
                              {"summary", summary},
                              {"fingerprint", rows[0][0].as<std::string>()},
-                             {"client_id", rows[0][1].as<std::int64_t>()}}},
+                             {"location_id", rows[0][1].as<std::int64_t>()}}},
                   now);
 }
 
@@ -121,10 +117,10 @@ std::string plural(std::int64_t n, std::string_view one, std::string_view many) 
     return std::format("{} {}", n, n == 1 ? one : many);
 }
 
-// What the client's own reviews added to the test, for the summary (D-075).
+// What the location's own reviews added to the test, for the summary (D-075).
 std::string real_words(std::int64_t real) {
-    if (real == 0) return "No real reviews were tested: the client has no reviews with 4 or 5 stars yet.";
-    return std::format("{} of the client's own reviews were among the cases.", real);
+    if (real == 0) return "No real reviews were tested: the location has no reviews with 4 or 5 stars yet.";
+    return std::format("{} of the location's own reviews were among the cases.", real);
 }
 
 // The run has no case left to run: passed or failed.
@@ -194,11 +190,10 @@ Histories histories(pqxx::transaction_base& tx) {
     return out;
 }
 
-model::GoLiveEstimate estimate(pqxx::transaction_base& tx, const GoLiveSetup& setup, const std::vector<std::int64_t>& location_ids,
-                               const Histories& history, int parallel) {
-    // The cases of the client's industry: a supported industry always has a complete corpus (D-078 point 6).
+model::GoLiveEstimate estimate(pqxx::transaction_base& tx, const GoLiveSetup& setup, const Histories& history, int parallel) {
+    // The cases of the location's industry: a supported industry always has a complete corpus (D-078 point 6).
     const auto corpus = industry_corpus(tx, setup.industry.key).value_or(domain::Corpus{}).cases;
-    const auto real = real_reviews(tx, location_ids);
+    const auto real = real_reviews(tx, setup.location_id);
     std::int64_t with_text = 0, judged = 0;
     for (const auto& one : corpus) {
         if (!one.text.empty()) ++with_text;
@@ -215,7 +210,7 @@ model::GoLiveEstimate estimate(pqxx::transaction_base& tx, const GoLiveSetup& se
     const std::int64_t writer_calls = out.cases * domain::kGoLiveRepeats;
     out.model_calls = analyzer_calls + writer_calls;
     out.judge_calls = judged;
-    if (real.empty()) out.notes.emplace_back("The client has no reviews with 4 or 5 stars yet, so no real reviews will be tested.");
+    if (real.empty()) out.notes.emplace_back("The location has no reviews with 4 or 5 stars yet, so no real reviews will be tested.");
 
     struct Part {
         std::string_view name;
@@ -252,70 +247,26 @@ model::GoLiveEstimate estimate(pqxx::transaction_base& tx, const GoLiveSetup& se
 
 // ---- reading -----------------------------------------------------------------------------
 
-struct LinkedLocation {
-    std::int64_t id = 0;
-    std::string title;
-};
-
-std::vector<LinkedLocation> linked_locations(pqxx::transaction_base& tx, std::int64_t client_id) {
-    std::vector<LinkedLocation> out;
-    for (const auto& row : tx.exec("SELECT id, title FROM locations WHERE client_id = $1 AND access_status = 'active' ORDER BY lower(title), id",
-                                   pqxx::params{client_id})) {
-        out.push_back({row[0].as<std::int64_t>(), row[1].as<std::string>()});
-    }
-    return out;
-}
-
-// The client's locations by fingerprint, in the order of the first location of each.
-struct Group {
-    GoLiveSetup setup;  // of the first location
-    std::vector<std::int64_t> location_ids;
-    std::vector<std::string> titles;
-};
-
-std::expected<std::vector<Group>, std::string> groups(pqxx::transaction_base& tx, const std::vector<LinkedLocation>& locations) {
-    std::vector<Group> out;
-    const auto ai = get_ai_settings(tx);
-    for (const auto& location : locations) {
-        auto setup = go_live_setup(tx, location.id, ai);
-        if (!setup) return std::unexpected(setup.error().reason);
-        const auto same = std::ranges::find_if(out, [&](const Group& g) { return g.setup.fingerprint.hash == setup->fingerprint.hash; });
-        if (same != out.end()) {
-            same->location_ids.push_back(location.id);
-            same->titles.push_back(location.title);
-            // The widest policy among them is what the test must cover.
-            if (!same->setup.scope.covers(setup->scope)) {
-                same->setup.scope = {.positive = same->setup.scope.positive || setup->scope.positive,
-                                     .rating_only = same->setup.scope.rating_only || setup->scope.rating_only,
-                                     .min_stars = std::min(same->setup.scope.min_stars, setup->scope.min_stars)};
-            }
-        } else {
-            out.push_back({std::move(*setup), {location.id}, {location.title}});
-        }
-    }
-    return out;
-}
-
-// Opens a run for the group and queues its first cases. Nothing if the
-// fingerprint already has one running (the index allows one; a submission
-// that loses that race starts nothing).
-std::optional<std::int64_t> open_run(pqxx::transaction_base& tx, std::int64_t client_id, const Group& group,
-                                     std::optional<std::int64_t> user_id, int parallel, core::TimePoint now) {
-    const auto& fingerprint = group.setup.fingerprint;
+// Opens a run of the location's configuration at its policy's width and
+// queues its first cases. Nothing if the fingerprint already has one running
+// (the index allows one; a submission that loses that race starts nothing).
+std::optional<std::int64_t> open_run(pqxx::transaction_base& tx, const GoLiveSetup& setup, std::optional<std::int64_t> user_id, int parallel,
+                                     core::TimePoint now) {
+    const auto& fingerprint = setup.fingerprint;
     // The setup was read from the same knowledge base a moment ago; an industry that a seed took away since starts nothing.
-    const auto corpus = industry_corpus(tx, group.setup.industry.key);
+    const auto corpus = industry_corpus(tx, setup.industry.key);
     const auto meta = knowledge_meta(tx);
     if (!corpus || !meta) return std::nullopt;
-    const auto real = real_reviews(tx, group.location_ids);
+    const auto real = real_reviews(tx, setup.location_id);
     const int at_a_time = std::clamp(parallel, 1, 64);
     const auto inserted = tx.exec(
-        "INSERT INTO go_live_runs (client_id, fingerprint, fingerprint_inputs, location_ids, status, auto_post_positive, "
-        "auto_post_rating_only, auto_post_min_stars, corpus_version, repeats, real_reviews, started_by, started_at, parallel, "
-        "kb_version) VALUES ($1, $2, $3::jsonb, $4::jsonb, 'running', $5, $6, $7, $8, $9, $10, $11, $12::timestamptz, $13, $14) "
+        "INSERT INTO go_live_runs (location_id, fingerprint, fingerprint_inputs, status, auto_post_positive, auto_post_rating_only, "
+        "auto_post_min_stars, corpus_version, repeats, real_reviews, started_by, started_at, parallel, kb_version) "
+        "VALUES ($1, $2, $3::jsonb, 'running', $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12, $13) "
         "ON CONFLICT (fingerprint) WHERE status = 'running' DO NOTHING RETURNING id",
-        pqxx::params{client_id, fingerprint.hash, boost::json::serialize(fingerprint.inputs), db::json_list(group.location_ids),
-                     group.setup.scope.positive, group.setup.scope.rating_only, group.setup.scope.min_stars, corpus->version,
-                     domain::kGoLiveRepeats, static_cast<int>(real.size()), user_id, to_timestamptz(now), at_a_time, meta->version});
+        pqxx::params{setup.location_id, fingerprint.hash, boost::json::serialize(fingerprint.inputs), setup.scope.positive,
+                     setup.scope.rating_only, setup.scope.min_stars, corpus->version, domain::kGoLiveRepeats, static_cast<int>(real.size()),
+                     user_id, to_timestamptz(now), at_a_time, meta->version});
     if (inserted.empty()) return std::nullopt;
     const auto run_id = inserted[0][0].as<std::int64_t>();
     for (const auto& one : corpus->cases) {
@@ -332,31 +283,27 @@ std::optional<std::int64_t> open_run(pqxx::transaction_base& tx, std::int64_t cl
     return run_id;
 }
 
-// A setting was changed under a running test. The run is cancelled, and the
-// same locations are tested again as they are now, in the name of the person
-// who submitted the test. Returns how many runs were started.
-std::size_t restart(pqxx::transaction_base& tx, std::int64_t old_run, std::int64_t client_id, const std::vector<std::int64_t>& location_ids,
-                    std::optional<std::int64_t> user_id, int parallel, core::TimePoint now) {
-    auto locations = linked_locations(tx, client_id);
-    std::erase_if(locations, [&](const LinkedLocation& one) { return !std::ranges::contains(location_ids, one.id); });
-    const auto grouped = groups(tx, locations);
-    if (!grouped) return 0;
-    std::size_t started = 0;
-    for (const auto& group : *grouped) {
-        const auto run_id = open_run(tx, client_id, group, user_id, parallel, now);
-        if (!run_id) continue;
-        audit::record(tx, tester(),
-                      {.action = "go_live.restart",
-                       .object_type = "go_live_run",
-                       .object_id = std::to_string(*run_id),
-                       .before = {{"run_id", old_run}},
-                       .after = {{"client_id", client_id},
-                                 {"fingerprint", group.setup.fingerprint.hash},
-                                 {"location_ids", boost::json::value_from(group.location_ids)}}},
-                      now);
-        ++started;
-    }
-    return started;
+bool enabled(pqxx::transaction_base& tx, std::int64_t location_id) {
+    return !tx.exec("SELECT 1 FROM locations WHERE id = $1 AND enabled", pqxx::params{location_id}).empty();
+}
+
+// A setting was changed under a running test of a location that is switched
+// on (the caller asked). The run is cancelled, and the location is tested
+// again as it is now, in the name of the person who submitted the test, if
+// it can be tested.
+void restart(pqxx::transaction_base& tx, std::int64_t old_run, std::int64_t location_id, std::optional<std::int64_t> user_id, int parallel,
+             core::TimePoint now) {
+    const auto setup = go_live_setup(tx, location_id);
+    if (!setup) return;
+    const auto run_id = open_run(tx, *setup, user_id, parallel, now);
+    if (!run_id) return;
+    audit::record(tx, tester(),
+                  {.action = "go_live.restart",
+                   .object_type = "go_live_run",
+                   .object_id = std::to_string(*run_id),
+                   .before = {{"run_id", old_run}},
+                   .after = {{"location_id", location_id}, {"fingerprint", setup->fingerprint.hash}}},
+                  now);
 }
 
 }  // namespace
@@ -369,15 +316,11 @@ std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, st
 
 std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, std::int64_t location_id, const model::AiSettings& ai) {
     const auto none = [](std::string reason) { return std::unexpected(NoSetup{.reason = std::move(reason), .settings_error = {}}); };
-    const auto rows = tx.exec("SELECT l.title, l.client_id, c.name, c.industry_key FROM locations l "
-                              "LEFT JOIN clients c ON c.id = l.client_id WHERE l.id = $1",
-                              pqxx::params{location_id});
+    const auto rows = tx.exec("SELECT title, industry_key FROM locations WHERE id = $1", pqxx::params{location_id});
     if (rows.empty()) return none("The location no longer exists.");
-    const auto client_id = rows[0][1].as<OptId>();
-    if (!client_id) return none("The location is not linked to a client.");
-    const auto industry_key = rows[0][3].as<OptString>();
+    const auto industry_key = rows[0][1].as<OptString>();
     auto industry = industry_key ? industry_rules(tx, *industry_key) : std::nullopt;
-    if (!industry) return none("The client has no industry profile.");
+    if (!industry) return none("The location has no industry profile.");
     auto settings = stored_reply_settings(tx, location_id);
     if (!settings) {
         return std::unexpected(NoSetup{.reason = unreadable_reply_settings(settings.error()), .settings_error = settings.error()});
@@ -385,10 +328,8 @@ std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, st
 
     GoLiveSetup setup;
     setup.location_id = location_id;
-    setup.client_id = *client_id;
-    setup.client_name = rows[0][2].as<std::string>();
     setup.location_title = rows[0][0].as<std::string>();
-    setup.business_name = domain::business_name(settings->voice, setup.client_name);
+    setup.business_name = domain::business_name(settings->voice, setup.location_title);
     setup.industry = std::move(*industry);
     setup.settings = std::move(*settings);
     setup.analyzer = {.provider = ai.analyzer_provider,
@@ -489,41 +430,37 @@ model::GoLiveOverview go_live_overview(pqxx::transaction_base& tx, const std::ve
     out.providers_configured = std::ranges::contains(configured_providers, history.settings.analyzer_provider) &&
                                std::ranges::contains(configured_providers, history.settings.generator_provider) &&
                                std::ranges::contains(configured_providers, history.settings.judge_provider);
-    for (const auto& row : tx.exec("SELECT c.id, c.name FROM clients c WHERE NOT c.archived "
-                                   "AND EXISTS (SELECT 1 FROM locations l WHERE l.client_id = c.id AND l.access_status = 'active') "
-                                   "ORDER BY lower(c.name), c.id")) {
-        model::GoLiveClient client;
-        client.client_id = row[0].as<std::int64_t>();
-        client.client_name = row[1].as<std::string>();
-        const auto grouped = groups(tx, linked_locations(tx, client.client_id));
-        if (!grouped) {
-            client.problem = grouped.error();
-            out.clients.push_back(std::move(client));
+    for (const auto& row : tx.exec("SELECT l.id, l.title, l.client_id, c.name FROM locations l LEFT JOIN clients c ON c.id = l.client_id "
+                                   "WHERE l.enabled ORDER BY lower(l.title), l.id")) {
+        model::GoLiveLocation location;
+        location.location_id = row[0].as<std::int64_t>();
+        location.location_title = row[1].as<std::string>();
+        location.client_id = row[2].as<OptId>();
+        location.client_name = row[3].as<OptString>();
+        const auto setup = go_live_setup(tx, location.location_id, history.settings);
+        if (!setup) {
+            location.problem = setup.error().reason;
+            location.state = "not_tested";
+            out.locations.push_back(std::move(location));
             continue;
         }
-        for (const auto& group : *grouped) {
-            model::GoLiveConfiguration configuration;
-            configuration.fingerprint = group.setup.fingerprint.hash;
-            configuration.location_titles = group.titles;
-            const auto state = go_live_state(tx, configuration.fingerprint, group.setup.scope);
-            configuration.state = state.state;
-            configuration.state_detail = state.detail;
-            if (state.pass_run_id) configuration.pass = run_without_cases(tx, *state.pass_run_id);
-            if (state.latest_run_id) configuration.latest_run = run_without_cases(tx, *state.latest_run_id);
-            configuration.estimate = estimate(tx, group.setup, group.location_ids, history, parallel);
-            client.configurations.push_back(std::move(configuration));
-        }
-        out.clients.push_back(std::move(client));
+        location.fingerprint = setup->fingerprint.hash;
+        const auto state = go_live_state(tx, setup->fingerprint.hash, setup->scope);
+        location.state = state.state;
+        location.state_detail = state.detail;
+        if (state.pass_run_id) location.pass = run_without_cases(tx, *state.pass_run_id);
+        if (state.latest_run_id) location.latest_run = run_without_cases(tx, *state.latest_run_id);
+        location.estimate = estimate(tx, *setup, history, parallel);
+        out.locations.push_back(std::move(location));
     }
     return out;
 }
 
-Result<std::vector<model::GoLiveRun>> start_go_live(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t client_id,
-                                                    const std::vector<std::string>& configured_providers, int parallel) {
-    // The client's row is the lock: two people who press the button together start one test.
-    const auto clients = tx.exec("SELECT archived FROM clients WHERE id = $1 FOR UPDATE", pqxx::params{client_id});
-    if (clients.empty()) return not_found("client");
-    if (clients[0][0].as<bool>()) return invalid("The client is archived.");
+Result<model::GoLiveRun> start_go_live(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
+                                       const std::vector<std::string>& configured_providers, int parallel) {
+    // The location's row is the lock: a switch-off at the same moment waits for the start, or the start sees it.
+    const auto locations = tx.exec("SELECT enabled FROM locations WHERE id = $1 FOR UPDATE", pqxx::params{location_id});
+    if (locations.empty()) return not_found("location");
     const auto settings = get_ai_settings(tx);
     for (const auto& [task, provider] : {std::pair<std::string_view, const std::string&>{"analyzer", settings.analyzer_provider},
                                          {"writer", settings.generator_provider},
@@ -533,23 +470,14 @@ Result<std::vector<model::GoLiveRun>> start_go_live(pqxx::transaction_base& tx, 
                                                      task, provider));
         }
     }
-    const auto locations = linked_locations(tx, client_id);
-    if (locations.empty()) return invalid("The client has no linked location to test.");
-    const auto grouped = groups(tx, locations);
-    if (!grouped) return invalid(grouped.error());
+    if (!locations[0][0].as<bool>()) return invalid("The location is switched off, so it can't be tested.");
+    const auto setup = go_live_setup(tx, location_id, settings);
+    if (!setup) return invalid(setup.error().reason);
 
-    std::vector<model::GoLiveRun> started;
-    for (const auto& group : *grouped) {
-        const auto run_id = open_run(tx, client_id, group, audit.user_id(), parallel, audit.now());
-        if (!run_id) continue;
-        audit.record("go_live.start", "go_live_run", *run_id,
-                     {.after = {{"client_id", client_id},
-                                {"fingerprint", group.setup.fingerprint.hash},
-                                {"location_ids", boost::json::value_from(group.location_ids)}}});
-        started.push_back(*run_without_cases(tx, *run_id));
-    }
-    if (started.empty()) return conflict("go_live_running", "A go-live test of this client is already running.");
-    return started;
+    const auto run_id = open_run(tx, *setup, audit.user_id(), parallel, audit.now());
+    if (!run_id) return conflict("go_live_running", "A go-live test of this location's configuration is already running.");
+    audit.record("go_live.start", "go_live_run", *run_id, {.after = {{"location_id", location_id}, {"fingerprint", setup->fingerprint.hash}}});
+    return *run_without_cases(tx, *run_id);
 }
 
 Result<model::GoLiveRun> cancel_go_live(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t run_id) {
@@ -584,8 +512,8 @@ std::optional<model::GoLiveRun> get_go_live_run(pqxx::transaction_base& tx, std:
 
 std::optional<GoLiveCaseWork> go_live_case(pqxx::transaction_base& tx, std::int64_t case_id, core::TimePoint now) {
     const auto rows = tx.exec("SELECT k.run_id, k.case_key, k.category, k.stars, k.review_id, k.verdict, g.status, g.fingerprint, "
-                              "g.location_ids::text, g.repeats, coalesce(r.original_text, ''), g.auto_post_positive, "
-                              "g.auto_post_rating_only, g.auto_post_min_stars, g.client_id, g.started_by, g.parallel "
+                              "g.location_id, g.repeats, coalesce(r.original_text, ''), g.auto_post_positive, "
+                              "g.auto_post_rating_only, g.auto_post_min_stars, g.started_by, g.parallel "
                               "FROM go_live_cases k JOIN go_live_runs g ON g.id = k.run_id LEFT JOIN reviews r ON r.id = k.review_id "
                               "WHERE k.id = $1",
                               pqxx::params{case_id});
@@ -601,26 +529,31 @@ std::optional<GoLiveCaseWork> go_live_case(pqxx::transaction_base& tx, std::int6
     work.stars = row[3].as<int>();
     work.review_id = row[4].as<OptId>();
     work.repeats = row[9].as<int>();
-    const auto location_ids = boost::json::value_to<std::vector<std::int64_t>>(boost::json::parse(row[8].as<std::string>()));
+    const auto location_id = row[8].as<std::int64_t>();
 
+    // A location that was switched off is not tested (D-102 point 2).
+    if (!enabled(tx, location_id)) {
+        end_run(tx, work.run_id, domain::kRunCancelled,
+                "The location was switched off while the test was running, so it was cancelled. The result counts for nothing.", now);
+        return std::nullopt;
+    }
     // The run tests one fingerprint. If a setting was changed since, what the
     // remaining cases would run with is no longer what the run says it tested.
-    std::expected<GoLiveSetup, NoSetup> setup = std::unexpected(NoSetup{.reason = "the run names no location", .settings_error = {}});
-    if (!location_ids.empty()) setup = go_live_setup(tx, location_ids.front());
+    auto setup = go_live_setup(tx, location_id);
     if (!setup || setup->fingerprint.hash != row[7].as<std::string>()) {
         // Cancelled first, so the new run of a configuration that was set back is not refused as a second one.
         end_run(tx, work.run_id, domain::kRunCancelled,
                 "A setting was changed while the test was running, so it was cancelled: its remaining cases would have tested "
                 "something else. A new test of the configuration as it is now was started in its place, if it can be tested.",
                 now);
-        restart(tx, work.run_id, row[14].as<std::int64_t>(), location_ids, row[15].as<OptId>(), row[16].as<int>(), now);
+        restart(tx, work.run_id, location_id, row[14].as<OptId>(), row[15].as<int>(), now);
         return std::nullopt;
     }
     work.setup = std::move(*setup);
     // The cases are routed with the policy width the run recorded when it
-    // started, the widest among its locations, whatever this one location's
-    // policy is or has become since: a pass must not claim to cover what no
-    // case was routed with.
+    // started, whatever the location's policy has become since (the policy is
+    // not in the fingerprint): a pass must not claim to cover what no case
+    // was routed with.
     work.setup.settings.policy.auto_post_positive = row[11].as<bool>();
     work.setup.settings.policy.auto_post_rating_only = row[12].as<bool>();
     work.setup.settings.policy.auto_post_min_stars = row[13].as<std::int64_t>();

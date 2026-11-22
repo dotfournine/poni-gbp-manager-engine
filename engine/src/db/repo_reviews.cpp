@@ -23,8 +23,7 @@ using OptString = std::optional<std::string>;
 
 // The locations whose reviews are synced, as SyncLocation; `more` narrows them and may order them.
 std::string sync_select(std::string_view more) {
-    return std::format("SELECT l.id, l.gbp_location_id, l.gbp_account_id FROM locations l JOIN clients c ON c.id = l.client_id "
-                       "WHERE l.access_status = 'active' AND NOT c.archived {}",
+    return std::format("SELECT l.id, l.gbp_location_id, l.gbp_account_id FROM locations l WHERE l.enabled AND l.access_status = 'active' {}",
                        more);
 }
 
@@ -337,7 +336,6 @@ void record_sync_error(pqxx::transaction_base& tx, const std::vector<std::int64_
 
 model::ReviewList list_reviews(pqxx::transaction_base& tx, const ReviewFilter& filter) {
     db::Conditions where;
-    if (filter.client_id) where.add(std::format("l.client_id = {}", where.bind(*filter.client_id)));
     if (filter.location_id) where.add(std::format("r.location_id = {}", where.bind(*filter.location_id)));
     if (!filter.ratings.empty()) {
         where.add(std::format("r.rating IN (SELECT jsonb_array_elements_text({}::jsonb)::smallint)",

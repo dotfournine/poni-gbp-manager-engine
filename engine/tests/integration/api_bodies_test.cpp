@@ -52,8 +52,8 @@ const std::map<std::string, std::string> kRoutesWithBody = {
     {"POST /api/drafts/{id}/reject", "reason"},
     {"POST /api/drafts/{id}/regenerate", "instructions"},
     {"PATCH /api/locations/{id}/auto-posting", "enabled"},
-    {"POST /api/clients/{id}/reports", "period_start"},
-    {"POST /api/report-schedules", "client_id"},
+    {"POST /api/locations/{id}/reports", "period_start"},
+    {"POST /api/report-schedules", "location_id"},
     {"PATCH /api/report-schedules/{id}", "frequency"},
     {"PUT /api/local-posts/{id}", "topic_type"},
     {"POST /api/local-posts/{id}/approve", "topic_type"},
@@ -80,7 +80,7 @@ const std::vector<std::string> kRoutesWithoutBody = {
     "POST /api/drafts/{id}/unschedule",
     "POST /api/auto-posting/resume",
     "POST /api/locations/{id}/auto-posting/resume",
-    "POST /api/clients/{id}/go-live-test",
+    "POST /api/locations/{id}/go-live-test",
     "POST /api/go-live-runs/{id}/cancel",
     "POST /api/reports/{id}/send",
     "POST /api/reports/{id}/reject",
@@ -91,6 +91,7 @@ const std::vector<std::string> kRoutesWithoutBody = {
     "POST /api/local-post-media",  // the body is the file
     "POST /api/locations/{id}/local-posts/refresh",
     "POST /api/locations/{id}/local-post-ideas",
+    "DELETE /api/clients/{id}",
     "DELETE /api/notification-rules/{id}",
     "DELETE /api/devices/{id}",
     "DELETE /api/report-schedules/{id}",
@@ -157,24 +158,25 @@ TEST_F(Bodies, NullClearsWhatCanBeEmptyAndAMemberLeftOutStays) {
     EXPECT_EQ(json(patch(target, R"({"daily_cap": 7})")).at("time_zone").as_string(), "America/New_York");
     EXPECT_TRUE(json(patch(target, R"({"time_zone": null})")).at("time_zone").is_null());
 
-    // A client's industry and the day its analysis starts from.
-    ASSERT_EQ(patch(client_path(), R"({"industry_key": "wellness", "analyze_from": "2026-06-01"})").status, 200u);
-    const auto renamed = json(patch(client_path(), R"({"notes": "x"})"));
-    EXPECT_EQ(renamed.at("industry_key").as_string(), "wellness");
-    EXPECT_EQ(renamed.at("analyze_from").as_string(), "2026-06-01");
-    const auto cleared = json(patch(client_path(), R"({"industry_key": null, "analyze_from": null})"));
+    // A location's industry and the day its analysis starts from.
+    ASSERT_EQ(patch(spa_path(), R"({"industry_key": "wellness", "analyze_from": "2026-06-01"})").status, 200u);
+    const auto kept = json(patch(spa_path(), R"({"audience": "x"})"));
+    EXPECT_EQ(kept.at("industry_key").as_string(), "wellness");
+    EXPECT_EQ(kept.at("analyze_from").as_string(), "2026-06-01");
+    const auto cleared = json(patch(spa_path(), R"({"industry_key": null, "analyze_from": null})"));
     EXPECT_TRUE(cleared.at("industry_key").is_null());
     EXPECT_TRUE(cleared.at("analyze_from").is_null());
     // What can't be empty can't be cleared.
+    expect_refused(patch(spa_path(), R"({"audience": null})"), "audience", "a location's audience");
+    expect_refused(patch(spa_path(), R"({"enabled": null})"), "enabled", "a location's switch");
     expect_refused(patch(client_path(), R"({"notes": null})"), "notes", "a client's notes");
     expect_refused(patch(client_path(), R"({"archived": null})"), "archived", "a client's archived");
     // A day the calendar lacks is no day.
-    EXPECT_EQ(patch(client_path(), R"({"analyze_from": "2026-02-30"})").status, 400u);
-    EXPECT_EQ(patch(client_path(), R"({"analyze_from": "June"})").status, 400u);
-    EXPECT_EQ(post("/api/clients", R"({"name": "Another", "analyze_from": "2026-13-01"})").status, 400u);
-    const auto created = post("/api/clients", R"({"name": "Another", "analyze_from": null})");
-    ASSERT_EQ(created.status, 201u) << created.body;
-    EXPECT_TRUE(json(created).at("analyze_from").is_null());
+    EXPECT_EQ(patch(spa_path(), R"({"analyze_from": "2026-02-30"})").status, 400u);
+    EXPECT_EQ(patch(spa_path(), R"({"analyze_from": "June"})").status, 400u);
+    // A client has none of these any more (D-102).
+    expect_refused(patch(client_path(), R"({"industry_key": "wellness"})"), "industry_key", "a client's industry");
+    expect_refused(post("/api/clients", R"({"name": "Another", "analyze_from": null})"), "analyze_from", "a client's start day");
 
     // A location's client.
     EXPECT_EQ(json(patch(spa_path(), R"({"review_poll_interval_s": 600})")).at("client_id").as_int64(), spa_client_);
@@ -266,16 +268,16 @@ TEST_F(Bodies, APostsContentTravelsWhole) {
 TEST_F(Bodies, MembersOfAnotherBodyAreNotTaken) {
     // Each of these was ignored until D-092: the caller believed it was saved.
     expect_refused(post("/api/drafts/999999999/reject", R"({"reason": "x", "note": "y"})"), "note", "a note on a draft's rejection");
-    expect_refused(patch("/api/notification-rules/999999999", R"({"enabled": true, "client_id": 3})"), "client_id", "a rule's client");
+    expect_refused(patch("/api/notification-rules/999999999", R"({"enabled": true, "location_id": 3})"), "location_id", "a rule's location");
     expect_refused(patch("/api/notification-rules/999999999", R"({"event_type": "escalation"})"), "event_type", "a rule's event");
-    expect_refused(patch("/api/report-schedules/999999999", R"({"client_id": 3})"), "client_id", "a schedule's client");
+    expect_refused(patch("/api/report-schedules/999999999", R"({"location_id": 3})"), "location_id", "a schedule's location");
     // A schedule's weekday is dropped by the engine when the frequency does not use it; a caller can't clear it.
     expect_refused(patch("/api/report-schedules/999999999", R"({"weekday": null})"), "weekday", "a null weekday");
     // On a new schedule null says "none", as leaving it out does.
     const auto schedule = post("/api/report-schedules",
-                               std::format(R"({{"client_id": {}, "frequency": "daily", "weekday": null, "month_day": null, "time": "09:00",
+                               std::format(R"({{"location_id": {}, "frequency": "daily", "weekday": null, "month_day": null, "time": "09:00",
                                                "time_zone": "America/New_York"}})",
-                                           spa_client_));
+                                           spa_));
     EXPECT_EQ(schedule.status, 201u) << schedule.body;
     // The body may be left out where the spec says so, and is read like any other where it is sent.
     EXPECT_EQ(post("/api/reviews/999999999/ignore", "").status, 404u);

@@ -32,7 +32,8 @@ protected:
         discover_spa_and_buffet();
         spa_client_ = make_client("LU DREAM SPA");
         spa_ = link(test::kSpa, spa_client_);
-        buffet_ = location_id(test::kBuffet);
+        switch_location(spa_, true);
+        buffet_ = location_id(test::kBuffet);  // discovered, and nothing else
         pipeline_.emplace(db(), clock_, llm_, queue(), jobs::AnalysisOptions{});
     }
 
@@ -41,8 +42,8 @@ protected:
         ApiTest::TearDown();
     }
 
-    void set_industry(std::int64_t client_id, const std::string& key) {
-        ASSERT_EQ(patch("/api/clients/" + std::to_string(client_id), R"({"industry_key": ")" + key + R"("})").status, 200u);
+    void set_industry(std::int64_t location, const std::string& key) {
+        ASSERT_EQ(patch("/api/locations/" + std::to_string(location), R"({"industry_key": ")" + key + R"("})").status, 200u);
     }
 
     std::int64_t store(const std::string& review_id, std::string_view stars, std::optional<std::string> comment,
@@ -51,19 +52,11 @@ protected:
                                               "2026-11-09T10:00:00Z", std::move(reply)));
     }
 
-    // Links a location to a client, or takes its client away, as a person does on the location's page.
-    http::Response link_through_api(std::int64_t location, std::optional<std::int64_t> client) {
-        return patch("/api/locations/" + std::to_string(location),
-                     boost::json::serialize(boost::json::object{{"client_id", client ? boost::json::value(*client) : boost::json::value(nullptr)}}));
-    }
-    // One more location of the fake Google, discovered and not linked.
+    // One more location of the fake Google, discovered and nothing else.
     std::int64_t another_location(const std::string& gbp_id, const std::string& title) {
         gbp_.add_location(gbp_id, title);
         discover();
         return location_id(gbp_id);
-    }
-    std::int64_t variants(std::int64_t client_id) {
-        return read("/api/clients/" + std::to_string(client_id)).at("reply_settings_variants").as_int64();
     }
     // What the newest audit entry of an action holds as `what` ("before" or "after").
     boost::json::value audit_json(const std::string& action, const std::string& what) {
@@ -114,7 +107,7 @@ TEST_F(AnalysisApi, TheKnowledgeBaseIsShownAsItWasSeeded) {
     EXPECT_EQ(food.at("label").as_string(), "Food and beverage");
     EXPECT_EQ(food.at("topics").as_array().size(), 10u);
     EXPECT_EQ(food.at("test_client_name").as_string(), "Golden Harbor Buffet");
-    EXPECT_EQ(food.at("client_count").as_int64(), 0);
+    EXPECT_EQ(food.at("location_count").as_int64(), 0);
     std::vector<std::string> flags;
     for (const auto& flag : food.at("severity_flags").as_array()) {
         flags.emplace_back(flag.at("id").as_string());
@@ -141,9 +134,10 @@ TEST_F(AnalysisApi, TheKnowledgeBaseIsShownAsItWasSeeded) {
     EXPECT_EQ(defaults.at("analysis").at("analyzer_model").as_string(), "qwen3.7-plus");
     EXPECT_DOUBLE_EQ(knowledge.at("model_prices").at("qwen3.7-plus").at("output_per_mtok").as_double(), 1.6);
 
-    // A client that names an industry is counted with it.
-    set_industry(spa_client_, "wellness");
-    EXPECT_EQ(read("/api/knowledge").at("industries").as_array()[1].at("client_count").as_int64(), 1);
+    // An enabled location that names an industry is counted with it; one that is switched off is not.
+    set_industry(spa_, "wellness");
+    set_industry(buffet_, "wellness");
+    EXPECT_EQ(read("/api/knowledge").at("industries").as_array()[1].at("location_count").as_int64(), 1);
 }
 
 TEST_F(AnalysisApi, AnIndustrysCorpusCanBeRead) {
@@ -184,9 +178,9 @@ TEST_F(AnalysisApi, NoRouteWritesTheKnowledgeBase) {
     ASSERT_EQ(prices.status, 400u) << "a member the settings do not have is refused, not passed over (D-092)";
     EXPECT_THAT(prices.body, testing::HasSubstr("model_prices"));
     EXPECT_EQ(audited("ai_settings.update"), 0) << "nothing the settings hold was changed";
-    // A save and a link copy from the knowledge base; they write the location's row only.
+    // A save and a discovery copy from the knowledge base; they write the location's row only.
     ASSERT_EQ(save_settings(spa_, "voice", R"({"sign_off": "The team"})").status, 200u);
-    ASSERT_EQ(link_through_api(buffet_, spa_client_).status, 200u);
+    another_location("9003", "LU DREAM SPA - Midtown");
     EXPECT_EQ(value<std::string>(
                   "SELECT md5(coalesce((SELECT string_agg(i::text, '') FROM kb_industries i), '') || (SELECT c::text FROM kb_common c) || "
                   "coalesce((SELECT string_agg(t::text, '') FROM kb_voice_templates t), '') || (SELECT d::text FROM kb_defaults d) || "
@@ -194,8 +188,8 @@ TEST_F(AnalysisApi, NoRouteWritesTheKnowledgeBase) {
               before);
 }
 
-TEST_F(AnalysisApi, AClientsIndustryIsSetAndChecked) {
-    const auto target = "/api/clients/" + std::to_string(spa_client_);
+TEST_F(AnalysisApi, ALocationsIndustryIsSetAndChecked) {
+    const auto target = "/api/locations/" + std::to_string(spa_);
     EXPECT_TRUE(read(target).at("industry_key").is_null());
     const auto set = patch(target, R"({"industry_key": "wellness"})");
     ASSERT_EQ(set.status, 200u) << set.body;
@@ -206,27 +200,27 @@ TEST_F(AnalysisApi, AClientsIndustryIsSetAndChecked) {
     EXPECT_THAT(error_message(unknown), HasSubstr("knowledge base"));
     EXPECT_EQ(patch(target, R"({"industry_key": "common"})").status, 400u) << "the shared flags are not an industry";
     EXPECT_EQ(patch(target, R"({"industry_key": 5})").status, 400u);
-    EXPECT_EQ(json(patch(target, R"({"notes": "x"})")).at("industry_key").as_string(), "wellness") << "a field that isn't sent stays";
+    EXPECT_EQ(json(patch(target, R"({"audience": "x"})")).at("industry_key").as_string(), "wellness") << "a field that isn't sent stays";
     const auto none = json(patch(target, R"({"industry_key": null})"));
     EXPECT_TRUE(none.at("industry_key").is_null());
 }
 
-// A client names its industry by key and the engine reads that profile from
+// A location names its industry by key and the engine reads that profile from
 // the knowledge base every time. A new version that no longer has the
-// industry leaves the client as it is and unanalyzed until it is given another
+// industry leaves the location as it is and unanalyzed until it is given another
 // industry or its own comes back (D-078 point 5, D-084).
-TEST_F(AnalysisApi, AClientWhoseIndustryLeftTheKnowledgeBaseIsNotAnalyzedAndSaysSo) {
-    set_industry(spa_client_, "wellness");
+TEST_F(AnalysisApi, ALocationWhoseIndustryLeftTheKnowledgeBaseIsNotAnalyzedAndSaysSo) {
+    set_industry(spa_, "wellness");
     const auto id = store("r1", "FIVE", "Lovely!");
     reseed("DELETE FROM kb_industries WHERE key = 'wellness'");
 
-    const auto target = "/api/clients/" + std::to_string(spa_client_);
-    const auto client = read(target);
-    EXPECT_EQ(client.at("industry_key").as_string(), "wellness") << "the seed changes no client";
-    EXPECT_FALSE(client.as_object().contains("industry_supported")) << "the dashboard compares the key with the industries of /api/knowledge";
+    const auto target = "/api/locations/" + std::to_string(spa_);
+    const auto location = read(target);
+    EXPECT_EQ(location.at("industry_key").as_string(), "wellness") << "the seed changes no location";
+    EXPECT_FALSE(location.as_object().contains("industry_supported")) << "the dashboard compares the key with the industries of /api/knowledge";
     // Changing something else leaves the industry it has; it can't be given again while it is gone.
-    EXPECT_EQ(patch(target, R"({"notes": "x"})").status, 200u);
-    EXPECT_EQ(patch("/api/clients/" + std::to_string(make_client("Another Spa")), R"({"industry_key": "wellness"})").status, 400u);
+    EXPECT_EQ(patch(target, R"({"audience": "x"})").status, 200u);
+    EXPECT_EQ(patch("/api/locations/" + std::to_string(buffet_), R"({"industry_key": "wellness"})").status, 400u);
 
     EXPECT_EQ(await(pipeline_->enqueue_pending()), 0u) << "the pipeline does not pick up a review it has no profile for";
     await(pipeline_->process(id, false, false));
@@ -239,7 +233,7 @@ TEST_F(AnalysisApi, AClientWhoseIndustryLeftTheKnowledgeBaseIsNotAnalyzedAndSays
         EXPECT_FALSE(repo::go_live_setup(tx, spa_)) << "a location without a profile has no fingerprint, so it never auto-posts";
     }
 
-    // The industry comes back with a later version, and the client is analyzed again without anyone touching it.
+    // The industry comes back with a later version, and the location is analyzed again without anyone touching it.
     reseed("INSERT INTO kb_industries SELECT * FROM (SELECT 'wellness' AS key, position, label, topics, item_types, severity_flags, "
            "test_client, corpus_version FROM kb_industries WHERE key = 'food_beverage') restored");
     EXPECT_EQ(await(pipeline_->enqueue_pending()), 1u);
@@ -247,60 +241,53 @@ TEST_F(AnalysisApi, AClientWhoseIndustryLeftTheKnowledgeBaseIsNotAnalyzedAndSays
     EXPECT_EQ(count("review_analyses"), 1);
 }
 
-// ---- voices ----------------------------------------------------------------------
-
-TEST_F(AnalysisApi, AClientsAnalysisStartDateIsSetCheckedAndAudited) {
-    const auto target = "/api/clients/" + std::to_string(spa_client_);
+TEST_F(AnalysisApi, ALocationsAnalysisStartDateIsSetCheckedAndAudited) {
+    const auto target = "/api/locations/" + std::to_string(spa_);
     EXPECT_TRUE(read(target).at("analyze_from").is_null()) << "without a date every review is analyzed";
     const auto set = patch(target, R"({"analyze_from": "2026-11-01"})");
     ASSERT_EQ(set.status, 200u) << set.body;
     EXPECT_EQ(json(set).at("analyze_from").as_string(), "2026-11-01");
-    EXPECT_EQ(value<std::string>("SELECT after->>'analyze_from' FROM audit_log WHERE action = 'client.update' ORDER BY id DESC LIMIT 1"),
+    EXPECT_EQ(value<std::string>("SELECT after->>'analyze_from' FROM audit_log WHERE action = 'location.update' ORDER BY id DESC LIMIT 1"),
               "2026-11-01");
     for (const auto* bad : {R"({"analyze_from": "2026-02-30"})", R"({"analyze_from": "11/01/2026"})", R"({"analyze_from": 20261101})"}) {
         EXPECT_EQ(patch(target, bad).status, 400u) << bad;
     }
-    EXPECT_EQ(json(patch(target, R"({"notes": "x"})")).at("analyze_from").as_string(), "2026-11-01") << "a field that isn't sent stays";
+    EXPECT_EQ(json(patch(target, R"({"audience": "x"})")).at("analyze_from").as_string(), "2026-11-01") << "a field that isn't sent stays";
     EXPECT_TRUE(json(patch(target, R"({"analyze_from": null})")).at("analyze_from").is_null());
-
-    const auto created = post("/api/clients", R"({"name": "New Client", "analyze_from": "2026-11-11"})");
-    ASSERT_EQ(created.status, 201u) << created.body;
-    EXPECT_EQ(json(created).at("analyze_from").as_string(), "2026-11-11");
-    EXPECT_EQ(post("/api/clients", R"({"name": "Bad Date", "analyze_from": "soon"})").status, 400u);
 }
 
 // ---- a location's reply settings (D-093) -----------------------------------------
 
-// A location gets its settings when it is linked: the first of a client starts with a copy of the defaults.
-TEST_F(AnalysisApi, ALinkedLocationStartsWithACopyOfTheDefaultsAndAClientHasNoSettings) {
+// A location gets its settings when it is discovered, a copy of the defaults, whatever client it has (D-102).
+TEST_F(AnalysisApi, EveryLocationStartsWithACopyOfTheDefaultsAndAClientHasNoSettings) {
     const auto defaults = read("/api/knowledge").at("defaults");
-    const auto settings = read(settings_path(spa_));
-    EXPECT_EQ(settings.at("voice"), defaults.at("voice"));
-    EXPECT_EQ(settings.at("localization"), defaults.at("localization"));
-    EXPECT_EQ(settings.at("policy"), defaults.at("policy"));
-    EXPECT_EQ(settings.at("client_id").as_int64(), spa_client_);
-    EXPECT_EQ(settings.at("client_name").as_string(), "LU DREAM SPA");
-    EXPECT_EQ(settings.at("location_title").as_string(), "LU DREAM SPA - Chelsea");
-    EXPECT_TRUE(settings.at("industry_key").is_null());
-    EXPECT_FALSE(settings.at("updated_at").as_string().empty());
-    EXPECT_EQ(audit_json("location.link", "after").at("reply_settings_from").as_string(), "defaults");
-    EXPECT_EQ(variants(spa_client_), 1);
+    for (const auto location : {spa_, buffet_}) {
+        const auto settings = read(settings_path(location));
+        EXPECT_EQ(settings.at("voice"), defaults.at("voice"));
+        EXPECT_EQ(settings.at("localization"), defaults.at("localization"));
+        EXPECT_EQ(settings.at("policy"), defaults.at("policy"));
+        EXPECT_TRUE(settings.at("industry_key").is_null());
+        EXPECT_FALSE(settings.at("updated_at").as_string().empty());
+    }
+    const auto spa = read(settings_path(spa_));
+    EXPECT_EQ(spa.at("client_id").as_int64(), spa_client_);
+    EXPECT_EQ(spa.at("client_name").as_string(), "LU DREAM SPA");
+    EXPECT_EQ(spa.at("location_title").as_string(), "LU DREAM SPA - Chelsea");
+    EXPECT_TRUE(read(settings_path(buffet_)).at("client_id").is_null());
 
-    // A client has no settings of its own: a new one changes nothing, and has no location to differ.
+    // A client has no settings of its own: a new one changes nothing.
     const auto created = post("/api/clients", R"({"name": "Corner Cafe"})");
     ASSERT_EQ(created.status, 201u) << created.body;
-    const auto cafe = json(created).at("id").as_int64();
-    EXPECT_EQ(json(created).at("reply_settings_variants").as_int64(), 0);
-    EXPECT_EQ(count("reply_settings"), 1);
+    EXPECT_EQ(count("reply_settings"), 2);
 
     // A later version of the knowledge base with other defaults does not reach a location that has its settings.
     reseed(R"(UPDATE kb_defaults SET voice = voice || '{"sign_off": "The team"}'::jsonb, policy = policy || '{"auto_post_min_stars": 5}'::jsonb)");
     EXPECT_EQ(read(settings_path(spa_)).at("voice").at("sign_off").as_string(), "");
     EXPECT_EQ(read(settings_path(spa_)).at("policy").at("auto_post_min_stars").as_int64(), 4);
-    // The first location of a client that is linked after it starts from the new ones.
-    ASSERT_EQ(link_through_api(buffet_, cafe).status, 200u);
-    EXPECT_EQ(read(settings_path(buffet_)).at("voice").at("sign_off").as_string(), "The team");
-    EXPECT_EQ(read(settings_path(buffet_)).at("policy").at("auto_post_min_stars").as_int64(), 5);
+    // A location discovered after it starts from the new ones.
+    const auto midtown = another_location("9003", "LU DREAM SPA - Midtown");
+    EXPECT_EQ(read(settings_path(midtown)).at("voice").at("sign_off").as_string(), "The team");
+    EXPECT_EQ(read(settings_path(midtown)).at("policy").at("auto_post_min_stars").as_int64(), 5);
 }
 
 TEST_F(AnalysisApi, ASaveReplacesALocationsSettingsWhole) {
@@ -349,15 +336,14 @@ TEST_F(AnalysisApi, ASaveReplacesALocationsSettingsWhole) {
     EXPECT_EQ(audited("reply_settings.update"), 1);
     EXPECT_EQ(read(settings_path(spa_)).at("voice"), body.at("voice"));
 
-    // Only a location that is linked to a client has settings; the answer does not say that the location is unknown.
-    for (const auto& unlinked : {get(settings_path(buffet_), browser_), save_settings(buffet_, body)}) {
-        EXPECT_EQ(unlinked.status, 409u);
-        EXPECT_EQ(error_code(unlinked), "location_not_linked");
-        EXPECT_THAT(error_message(unlinked), HasSubstr("not linked to a client"));
-    }
+    // A location with no client and switched off has settings of its own like any other (D-102).
+    const auto own = save_settings(buffet_, body);
+    ASSERT_EQ(own.status, 200u) << own.body;
+    EXPECT_TRUE(json(own).at("client_id").is_null());
+    EXPECT_TRUE(json(own).at("client_name").is_null());
     EXPECT_EQ(get(settings_path(999999), browser_).status, 404u);
     EXPECT_EQ(save_settings(999999, body).status, 404u);
-    EXPECT_EQ(count("reply_settings"), 1);
+    EXPECT_EQ(count("reply_settings"), 2);
 }
 
 // Taking a voice template is the dashboard filling the form from the knowledge base and saving (D-093 point 2).
@@ -390,93 +376,6 @@ TEST_F(AnalysisApi, TakingAVoiceTemplateIsAnOrdinarySave) {
     EXPECT_EQ(read(settings_path(spa_)).at("voice").at("emoji").at("max").as_int64(), 2);
 }
 
-// A location that is linked to a client starts with what that client's other locations use (D-093 point 3).
-TEST_F(AnalysisApi, ANewlyLinkedLocationCopiesTheClientsEarliestLinkedLocation) {
-    ASSERT_EQ(save_settings(spa_, "voice", R"({"reply_name": "Willow Moon", "sign_off": "— Chelsea"})").status, 200u);
-    const auto midtown = another_location("9003", "LU DREAM SPA - Midtown");
-    clock_.advance(std::chrono::minutes(1));
-    ASSERT_EQ(link_through_api(midtown, spa_client_).status, 200u);
-    const auto copied = read(settings_path(midtown));
-    EXPECT_EQ(copied.at("voice"), read(settings_path(spa_)).at("voice"));
-    EXPECT_EQ(copied.at("localization"), read(settings_path(spa_)).at("localization"));
-    EXPECT_EQ(copied.at("policy"), read(settings_path(spa_)).at("policy"));
-    EXPECT_EQ(audit_json("location.link", "after").at("reply_settings_from").at("location_id").as_int64(), spa_);
-    // The copy is a save by nobody: it records no change of settings and starts no go-live test.
-    EXPECT_EQ(audited("reply_settings.update"), 1);
-    EXPECT_EQ(count("go_live_runs"), 0);
-    EXPECT_EQ(variants(spa_client_), 1) << "the client's two locations have the same settings";
-
-    // The second location is changed; the client's page can now say that its locations differ.
-    ASSERT_EQ(save_settings(midtown, "voice", R"({"sign_off": "— Midtown"})").status, 200u);
-    EXPECT_EQ(read(settings_path(spa_)).at("voice").at("sign_off").as_string(), "— Chelsea") << "a save is one location's";
-    EXPECT_EQ(variants(spa_client_), 2);
-
-    // A third copies the earliest-linked, not the one that was linked or changed last.
-    const auto uptown = another_location("9004", "LU DREAM SPA - Uptown");
-    clock_.advance(std::chrono::minutes(1));
-    ASSERT_EQ(link_through_api(uptown, spa_client_).status, 200u);
-    EXPECT_EQ(read(settings_path(uptown)).at("voice").at("sign_off").as_string(), "— Chelsea");
-    EXPECT_EQ(audit_json("location.link", "after").at("reply_settings_from").at("location_id").as_int64(), spa_);
-    EXPECT_EQ(variants(spa_client_), 2);
-
-    // Copying the settings to another location is one save for that location, as the dashboard does it after a save.
-    ASSERT_EQ(save_settings(midtown, settings_body(spa_)).status, 200u);
-    EXPECT_EQ(variants(spa_client_), 1);
-    EXPECT_EQ(read("/api/clients/" + std::to_string(spa_client_)).at("location_count").as_int64(), 3);
-}
-
-// The settings belong to the link: a voice describes one business.
-TEST_F(AnalysisApi, UnlinkingRemovesTheSettingsAndAMoveStartsFromTheNewClient) {
-    ASSERT_EQ(save_settings(spa_, "voice", R"({"reply_name": "Willow Moon", "business_facts": ["Open daily from 10 to 8."]})").status, 200u);
-    ASSERT_EQ(link_through_api(spa_, std::nullopt).status, 200u);
-    EXPECT_EQ(count("reply_settings"), 0);
-    EXPECT_EQ(error_code(get(settings_path(spa_), browser_)), "location_not_linked");
-    // What was removed is in the audit entry, so a mistaken unlink can be repaired by hand.
-    EXPECT_EQ(audit_json("location.unlink", "before").at("reply_settings").at("voice").at("reply_name").as_string(), "Willow Moon");
-    EXPECT_EQ(variants(spa_client_), 0);
-
-    // Linking again is a first link: the defaults, not what the location had.
-    ASSERT_EQ(link_through_api(spa_, spa_client_).status, 200u);
-    EXPECT_EQ(read(settings_path(spa_)).at("voice").at("reply_name").as_string(), "");
-    ASSERT_EQ(save_settings(spa_, "voice", R"({"reply_name": "Willow Moon", "business_facts": ["Open daily from 10 to 8."]})").status, 200u);
-
-    // A move to another client: the spa's facts do not follow the location to the buffet's business.
-    const auto buffet_client = make_client("Gangnam AYCE Buffet");
-    ASSERT_EQ(link_through_api(buffet_, buffet_client).status, 200u);
-    ASSERT_EQ(save_settings(buffet_, "voice", R"({"reply_name": "Gangnam Buffet", "sign_off": "The buffet team"})").status, 200u);
-    clock_.advance(std::chrono::minutes(1));
-    ASSERT_EQ(link_through_api(spa_, buffet_client).status, 200u);
-    const auto moved = read(settings_path(spa_));
-    EXPECT_EQ(moved.at("client_id").as_int64(), buffet_client);
-    EXPECT_EQ(moved.at("voice"), read(settings_path(buffet_)).at("voice"));
-    EXPECT_TRUE(moved.at("voice").at("business_facts").as_array().empty());
-    const auto before = audit_json("location.link", "before");
-    EXPECT_EQ(before.at("client_id").as_int64(), spa_client_);
-    EXPECT_EQ(before.at("reply_settings").at("voice").at("reply_name").as_string(), "Willow Moon");
-    EXPECT_EQ(audit_json("location.link", "after").at("reply_settings_from").at("location_id").as_int64(), buffet_);
-    EXPECT_EQ(count("reply_settings"), 2) << "one row per linked location";
-    EXPECT_EQ(variants(buffet_client), 1);
-    EXPECT_EQ(variants(spa_client_), 0);
-    // A change of a location that is not its link leaves the settings alone.
-    ASSERT_EQ(patch("/api/locations/" + std::to_string(spa_), R"({"review_poll_interval_s": 600})").status, 200u);
-    EXPECT_EQ(read(settings_path(spa_)).at("voice"), moved.at("voice"));
-}
-
-// A row a location without a client should not have (left by a restored backup or a hand edit) does not stand in
-// the way of a link, and is not what the location gets.
-TEST_F(AnalysisApi, ALinkReplacesARowTheLocationShouldNotHaveHad) {
-    ASSERT_EQ(save_settings(spa_, "voice", R"({"reply_name": "Willow Moon"})").status, 200u);
-    exec(std::format("UPDATE locations SET client_id = NULL WHERE id = {}", spa_));
-    ASSERT_EQ(count("reply_settings"), 1);
-
-    const auto other = make_client("Gangnam AYCE Buffet");
-    const auto linked = link_through_api(spa_, other);
-    ASSERT_EQ(linked.status, 200u) << linked.body;
-    EXPECT_EQ(read(settings_path(spa_)).at("voice").at("reply_name").as_string(), "") << "the new client's first location starts with the defaults";
-    EXPECT_EQ(audit_json("location.link", "before").at("reply_settings").at("voice").at("reply_name").as_string(), "Willow Moon");
-    EXPECT_EQ(count("reply_settings"), 1);
-}
-
 // A field added later reaches the rows by a migration (D-093 point 7). A row that lacks one is not filled in from a
 // default: reading it says what is missing, and a save of complete settings repairs it.
 TEST_F(AnalysisApi, ARowThatLacksAFieldIsReportedAndASaveRepairsIt) {
@@ -486,28 +385,21 @@ TEST_F(AnalysisApi, ARowThatLacksAFieldIsReportedAndASaveRepairsIt) {
     EXPECT_EQ(lacking.status, 409u);
     EXPECT_EQ(error_code(lacking), "reply_settings_incomplete");
     EXPECT_THAT(error_message(lacking), HasSubstr("voice: missing field 'sign_off'"));
-    EXPECT_EQ(variants(spa_client_), 1) << "the client can still be read";
     ASSERT_EQ(save_settings(spa_, whole).status, 200u);
     EXPECT_EQ(read(settings_path(spa_)).at("voice").at("sign_off").as_string(), "");
 
-    // A linked location without a row at all: the same, and it counts as settings of its own for the client.
-    const auto midtown = another_location("9003", "LU DREAM SPA - Midtown");
-    ASSERT_EQ(link_through_api(midtown, spa_client_).status, 200u);
-    exec(std::format("DELETE FROM reply_settings WHERE location_id = {}", midtown));
-    EXPECT_EQ(error_code(get(settings_path(midtown), browser_)), "reply_settings_incomplete");
-    EXPECT_THAT(error_message(get(settings_path(midtown), browser_)), HasSubstr("has no reply settings"));
-    EXPECT_EQ(variants(spa_client_), 2);
-    ASSERT_EQ(save_settings(midtown, whole).status, 200u);
-    EXPECT_EQ(variants(spa_client_), 1);
+    // A location without a row at all: the same.
+    exec(std::format("DELETE FROM reply_settings WHERE location_id = {}", buffet_));
+    EXPECT_EQ(error_code(get(settings_path(buffet_), browser_)), "reply_settings_incomplete");
+    EXPECT_THAT(error_message(get(settings_path(buffet_), browser_)), HasSubstr("has no reply settings"));
+    ASSERT_EQ(save_settings(buffet_, whole).status, 200u);
 
     // A member the code no longer knows is read past, and gone with the next save, also one that changes nothing else.
     exec(std::format("UPDATE reply_settings SET voice = voice || '{{\"other_business_names\": [\"Glow Spa\"]}}'::jsonb WHERE location_id = {}", spa_));
     EXPECT_FALSE(read(settings_path(spa_)).at("voice").as_object().contains("other_business_names"));
-    EXPECT_EQ(variants(spa_client_), 2) << "as stored, the two rows differ";
     ASSERT_EQ(save_settings(spa_, settings_body(spa_)).status, 200u);
     EXPECT_EQ(value<std::string>(std::format("SELECT (voice ? 'other_business_names')::text FROM reply_settings WHERE location_id = {}", spa_)),
               "false");
-    EXPECT_EQ(variants(spa_client_), 1);
 }
 
 // ---- pipeline settings -----------------------------------------------------------
@@ -532,7 +424,7 @@ TEST_F(AnalysisApi, TheModelPerTaskIsASetting) {
     EXPECT_EQ(audited("ai_settings.update"), 1);
 
     // The next review is analyzed with the new model: no code change, no restart.
-    set_industry(spa_client_, "wellness");
+    set_industry(spa_, "wellness");
     await(pipeline_->process(store("r1", "FIVE", "Lovely!"), false, false));
     EXPECT_EQ(llm_.requests[0].model, "qwen3.8-flash");
     EXPECT_EQ(llm_.requests[1].model, "qwen3.7-plus");
@@ -566,7 +458,7 @@ TEST_F(AnalysisApi, TheProviderPerTaskIsASetting) {
     EXPECT_EQ(audited("ai_settings.update"), 1);
 
     // The next review: the analyzer asks DashScope, the generator asks OpenAI, each with its own extras.
-    set_industry(spa_client_, "wellness");
+    set_industry(spa_, "wellness");
     await(pipeline_->process(store("r1", "FIVE", "Lovely!"), false, false));
     ASSERT_EQ(llm_.requests.size(), 2u);
     EXPECT_EQ(llm_.requests[0].provider, "dashscope");
@@ -595,7 +487,7 @@ TEST_F(AnalysisApi, TheProviderPerTaskIsASetting) {
 // ---- reviews, analyses and drafts ------------------------------------------------
 
 TEST_F(AnalysisApi, ReviewsCarryTheirAnalysisAndDraft) {
-    set_industry(spa_client_, "wellness");
+    set_industry(spa_, "wellness");
     const auto happy = store("happy", "FIVE", "Lovely head spa with Eva!");
     const auto replied = store("replied", "FIVE", "Great massage.", "Thank you!");
     const auto untouched = store("untouched", "FOUR", "Nice place.");
@@ -656,7 +548,7 @@ TEST_F(AnalysisApi, StaffCanAskForAFreshAnalysis) {
     EXPECT_EQ(error_code(refused), "not_analyzable");
     EXPECT_EQ(count("jobs WHERE kind = 'reviews.analyze'"), 0);
 
-    set_industry(spa_client_, "wellness");
+    set_industry(spa_, "wellness");
     const auto queued = post(target);
     ASSERT_EQ(queued.status, 202u) << queued.body;
     EXPECT_TRUE(json(queued).at("enqueued").as_bool());
@@ -673,7 +565,6 @@ TEST_F(AnalysisApi, LlmUsageIsSummedAndListed) {
             repo::record_llm_call(tx, {.at = clock_.now() - std::chrono::hours(24 * i),
                                        .task = i == 0 ? "generator" : "analyzer",
                                        .model = "qwen3.7-plus",
-                                       .client_id = spa_client_,
                                        .attempt = 1,
                                        .ok = i != 2,
                                        .error = i == 2 ? "unavailable: HTTP 503" : "",
@@ -690,7 +581,6 @@ TEST_F(AnalysisApi, LlmUsageIsSummedAndListed) {
     EXPECT_NEAR(usage.at("total").at("cost_usd").as_double(), 3 * 0.00056, 1e-9);
     EXPECT_EQ(usage.at("by_day").as_array().size(), 3u);
     EXPECT_EQ(usage.at("by_task").as_array().size(), 2u);
-    EXPECT_EQ(usage.at("by_client").as_array()[0].at("label").as_string(), "LU DREAM SPA");
     EXPECT_EQ(usage.at("by_location").as_array()[0].at("label").as_string(), "No location") << "these calls name no location";
     // The default range is the last 30 days, today included.
     EXPECT_EQ(usage.at("from").as_string(), "2026-10-12T00:00:00Z");
@@ -705,7 +595,6 @@ TEST_F(AnalysisApi, LlmUsageIsSummedAndListed) {
     const auto calls = read("/api/llm/calls");
     EXPECT_EQ(calls.at("total").as_int64(), 3);
     EXPECT_EQ(calls.at("items").as_array()[0].at("task").as_string(), "generator") << "newest first";
-    EXPECT_EQ(calls.at("items").as_array()[0].at("client_name").as_string(), "LU DREAM SPA");
     const auto& items = calls.at("items").as_array();
     const auto failed = std::ranges::find_if(items, [](const boost::json::value& call) { return call.at("status").as_string() == "error"; });
     ASSERT_NE(failed, items.end());
@@ -715,7 +604,7 @@ TEST_F(AnalysisApi, LlmUsageIsSummedAndListed) {
 }
 
 TEST_F(AnalysisApi, TheStatusPageShowsThePipeline) {
-    set_industry(spa_client_, "wellness");
+    set_industry(spa_, "wellness");
     const auto drafted = store("r1", "FIVE", "Lovely!");
     store("r2", "FIVE", "Also lovely!");
     await(pipeline_->process(drafted, false, false));

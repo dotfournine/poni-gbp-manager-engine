@@ -412,20 +412,20 @@ TEST_F(RepliesApi, EscalationsAreListedAssignedAndClosed) {
 }
 
 TEST_F(RepliesApi, NotificationRulesAreManagedAndTheLogShowsWhatHappened) {
-    const auto client = std::to_string(spa_client_);
+    const auto location = std::to_string(spa_);
     EXPECT_EQ(post("/api/notification-rules", R"({"event_type": "escalation", "recipients": []})").status, 400u);
     EXPECT_EQ(post("/api/notification-rules", R"({"event_type": "escalation", "recipients": ["not an address"]})").status, 400u);
-    EXPECT_EQ(error_code(post("/api/notification-rules", R"({"event_type": "escalation", "client_id": 4242, "recipients": ["a@example.com"]})")),
-              "client_not_found");
+    EXPECT_EQ(error_code(post("/api/notification-rules", R"({"event_type": "escalation", "location_id": 4242, "recipients": ["a@example.com"]})")),
+              "location_not_found");
     const auto created = post("/api/notification-rules",
-                              R"({"event_type": "approval_needed", "client_id": )" + client + R"(, "recipients": ["Team@XVisionMediaUS.com"]})");
+                              R"({"event_type": "approval_needed", "location_id": )" + location + R"(, "recipients": ["Team@XVisionMediaUS.com"]})");
     ASSERT_EQ(created.status, 201u) << created.body;
     const auto rule = json(created);
     const auto path = "/api/notification-rules/" + std::to_string(rule.at("id").as_int64());
-    EXPECT_EQ(rule.at("client_name").as_string(), "LU DREAM SPA");
+    EXPECT_EQ(rule.at("location_title").as_string(), "LU DREAM SPA - Chelsea");
     EXPECT_EQ(rule.at("recipients").as_array().at(0).as_string(), "team@xvisionmediaus.com");
     EXPECT_EQ(error_code(post("/api/notification-rules",
-                              R"({"event_type": "approval_needed", "client_id": )" + client + R"(, "recipients": ["b@example.com"]})")),
+                              R"({"event_type": "approval_needed", "location_id": )" + location + R"(, "recipients": ["b@example.com"]})")),
               "rule_exists");
     EXPECT_EQ(read("/api/notification-rules").at("total").as_int64(), 1);
     EXPECT_EQ(read(path).at("event_type").as_string(), "approval_needed");
@@ -555,20 +555,24 @@ TEST_F(RepliesApi, AutoPostingIsOffAndNothingGoesOutBeforeTheGoLiveTestPassed) {
     const auto untested = read("/api/go-live");
     EXPECT_TRUE(untested.at("providers_configured").as_bool());
     EXPECT_EQ(untested.at("judge_model").as_string(), "claude-opus-5-5");
-    ASSERT_EQ(untested.at("clients").as_array().size(), 1u);
-    const auto& configuration = untested.at("clients").as_array()[0].at("configurations").as_array()[0];
+    ASSERT_EQ(untested.at("locations").as_array().size(), 1u);
+    const auto& configuration = untested.at("locations").as_array()[0];
+    EXPECT_EQ(configuration.at("location_id").as_int64(), spa_);
+    EXPECT_EQ(configuration.at("client_name").as_string(), "LU DREAM SPA");
+    EXPECT_TRUE(configuration.at("problem").is_null());
     EXPECT_EQ(configuration.at("state").as_string(), "not_tested");
     EXPECT_TRUE(configuration.at("pass").is_null());
     EXPECT_EQ(configuration.at("estimate").at("real_reviews").as_int64(), 1);
     EXPECT_GT(configuration.at("estimate").at("model_calls").as_int64(), 100);
 
-    const auto submit = "/api/clients/" + std::to_string(spa_client_) + "/go-live-test";
-    EXPECT_EQ(post("/api/clients/999999/go-live-test").status, 404u);
+    const auto submit = "/api/locations/" + std::to_string(spa_) + "/go-live-test";
+    EXPECT_EQ(post("/api/locations/999999/go-live-test").status, 404u);
     const auto submitted = post(submit);
     ASSERT_EQ(submitted.status, 201u) << submitted.body;
-    ASSERT_EQ(json(submitted).at("total").as_int64(), 1);
-    const auto run_id = json(submitted).at("items").as_array()[0].at("id").as_int64();
-    EXPECT_EQ(json(submitted).at("items").as_array()[0].at("status").as_string(), "running");
+    const auto run_id = json(submitted).at("id").as_int64();
+    EXPECT_EQ(json(submitted).at("status").as_string(), "running");
+    EXPECT_EQ(json(submitted).at("location_id").as_int64(), spa_);
+    EXPECT_EQ(json(submitted).at("location_title").as_string(), "LU DREAM SPA - Chelsea");
     EXPECT_EQ(audited("go_live.start"), 1);
     EXPECT_EQ(error_code(post(submit)), "go_live_running") << "one test of a configuration at a time";
     EXPECT_EQ(auto_posting_of(spa_).at("go_live_state").as_string(), "running");
@@ -590,8 +594,8 @@ TEST_F(RepliesApi, AutoPostingIsOffAndNothingGoesOutBeforeTheGoLiveTestPassed) {
     EXPECT_EQ(error_code(post(run_target + "/cancel")), "go_live_not_running");
     EXPECT_EQ(post("/api/go-live-runs/999999/cancel").status, 404u);
     EXPECT_EQ(get("/api/go-live-runs/999999", browser_).status, 404u);
-    EXPECT_TRUE(json(submitted).at("items").as_array()[0].at("cases").is_null()) << "the runs a start returns carry no cases";
-    const auto tested = read("/api/go-live").at("clients").as_array()[0].at("configurations").as_array()[0];
+    EXPECT_TRUE(json(submitted).at("cases").is_null()) << "the run a start returns carries no cases";
+    const auto tested = read("/api/go-live").at("locations").as_array()[0];
     EXPECT_EQ(tested.at("state").as_string(), "passed");
     EXPECT_EQ(tested.at("pass").at("id").as_int64(), run_id);
     EXPECT_EQ(auto_posting_of(spa_).at("go_live_state").as_string(), "passed");
@@ -623,17 +627,17 @@ TEST_F(RepliesApi, AutoPostingIsOffAndNothingGoesOutBeforeTheGoLiveTestPassed) {
 }
 
 TEST_F(RepliesApi, AGoLiveTestCanBeCancelledAndNeedsTheJudgesProvider) {
-    const auto submit = "/api/clients/" + std::to_string(spa_client_) + "/go-live-test";
+    const auto submit = "/api/locations/" + std::to_string(spa_) + "/go-live-test";
     const auto submitted = post(submit);
     ASSERT_EQ(submitted.status, 201u) << submitted.body;
-    const auto run_target = "/api/go-live-runs/" + std::to_string(json(submitted).at("items").as_array()[0].at("id").as_int64());
+    const auto run_target = "/api/go-live-runs/" + std::to_string(json(submitted).at("id").as_int64());
     const auto cancelled = post(run_target + "/cancel");
     ASSERT_EQ(cancelled.status, 200u) << cancelled.body;
     EXPECT_EQ(json(cancelled).at("status").as_string(), "cancelled");
     EXPECT_EQ(audited("go_live.cancel"), 1);
     run_jobs();
     EXPECT_TRUE(llm_.requests.empty()) << "cancelled before a case ran: no model was asked";
-    EXPECT_EQ(read("/api/go-live").at("clients").as_array()[0].at("configurations").as_array()[0].at("state").as_string(), "cancelled");
+    EXPECT_EQ(read("/api/go-live").at("locations").as_array()[0].at("state").as_string(), "cancelled");
 
     // An engine without the judge's provider can't run a test, and says so.
     api_options_.llm_providers = {"dashscope"};
@@ -698,16 +702,16 @@ TEST_F(RepliesApi, APersonResumesAPausedLocationAndAPauseOnEverything) {
 
 // A location that lost its client lost its reply settings with it (D-093): a draft that waited there can't be
 // checked against a voice any more, and is refused for what is the matter, not for unreadable settings.
-TEST_F(RepliesApi, ADraftOfALocationThatLostItsClientCanNeitherBeEditedNorApproved) {
+// The location keeps its settings while it is switched off (D-102), so a draft can still be edited; it can't be approved.
+TEST_F(RepliesApi, ADraftOfALocationThatIsSwitchedOffCannotBeApproved) {
     posting(true);
     const auto draft_id = draft_for("r1");
-    const auto target = "/api/drafts/" + std::to_string(draft_id);
-    ASSERT_EQ(patch("/api/locations/" + std::to_string(spa_), R"({"client_id": null})").status, 200u);
-    for (const auto& refused : {patch(target, body_of("text", "Thanks!")), approve(draft_id)}) {
-        EXPECT_EQ(refused.status, 409u);
-        EXPECT_EQ(error_code(refused), "review_not_postable");
-        EXPECT_THAT(error_message(refused), HasSubstr("no longer synced"));
-    }
+    ASSERT_EQ(patch("/api/locations/" + std::to_string(spa_), R"({"enabled": false})").status, 200u);
+    const auto refused = approve(draft_id);
+    EXPECT_EQ(refused.status, 409u);
+    EXPECT_EQ(error_code(refused), "review_not_postable");
+    EXPECT_THAT(error_message(refused), HasSubstr("no longer synced"));
+    EXPECT_EQ(count("jobs WHERE kind = 'replies.post'"), 0);
     EXPECT_TRUE(gbp_.puts.empty());
 }
 
@@ -736,23 +740,22 @@ TEST_F(RepliesApi, ThePolicyCarriesTheDelayAndTheWindow) {
 }
 
 // The delivery log's filter takes every event type a delivery can have, the
-// client's report among them (the handler once kept a list of its own, which lacked it).
+// location's report among them (the handler once kept a list of its own, which lacked it).
 TEST_F(RepliesApi, TheDeliveryLogFiltersByEveryEventType) {
     tx([&](pqxx::work& tx) {
         ASSERT_TRUE(repo::emit_to(tx,
-                                  {.type = std::string(repo::kEventClientReport),
+                                  {.type = std::string(repo::kEventLocationReport),
                                    .key = "report:1",
-                                   .client_id = spa_client_,
-                                   .location_id = std::nullopt,
+                                   .location_id = spa_,
                                    .review_id = std::nullopt,
                                    .subject = "Your report",
                                    .body = "A made-up report.",
                                    .link_path = "/#/reports/1"},
                                   "owner@example.com", clock_.now()));
     });
-    const auto reports = read("/api/notification-deliveries?event_type=client_report");
+    const auto reports = read("/api/notification-deliveries?event_type=location_report");
     ASSERT_EQ(reports.at("total").as_int64(), 1);
-    EXPECT_EQ(reports.at("items").as_array().at(0).at("event_type").as_string(), "client_report");
+    EXPECT_EQ(reports.at("items").as_array().at(0).at("event_type").as_string(), "location_report");
     for (const auto* type : {"escalation", "approval_needed", "system_problem", "test"}) {
         const auto others = get(std::format("/api/notification-deliveries?event_type={}", type), browser_);
         ASSERT_EQ(others.status, 200u) << type;

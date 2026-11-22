@@ -45,12 +45,13 @@ inline constexpr std::string_view kEventEscalation = "escalation";
 inline constexpr std::string_view kEventApprovalNeeded = "approval_needed";
 inline constexpr std::string_view kEventSystemProblem = "system_problem";
 inline constexpr std::string_view kEventTest = "test";
-// A report sent to a client's own recipients (D-085). A rule for it must name
-// a client: one for every client would send a report to another client's list.
-inline constexpr std::string_view kEventClientReport = "client_report";
+// A location's report sent to its own recipients (D-085, D-102). A rule for it
+// must name a location: one for every location would send a report to another
+// location's list.
+inline constexpr std::string_view kEventLocationReport = "location_report";
 // Every event type, as notification_deliveries.event_type holds them. A rule can be for any but the test message.
 inline constexpr std::array<std::string_view, 5> kEventTypes{kEventEscalation, kEventApprovalNeeded, kEventSystemProblem, kEventTest,
-                                                             kEventClientReport};
+                                                             kEventLocationReport};
 // The values of notification_deliveries.status.
 inline constexpr std::array<std::string_view, 4> kDeliveryStatuses{"pending", "sent", "failed", "not_sent"};
 
@@ -59,7 +60,7 @@ struct NotificationEvent {
     // What it is about. One key reaches one recipient once, so code that
     // raises the same event again (a job that runs twice) sends nothing new.
     std::string key;
-    std::optional<std::int64_t> client_id;
+    // The rules that name this location apply, and the rules for every location.
     std::optional<std::int64_t> location_id;
     std::optional<std::int64_t> review_id;
     std::string subject;
@@ -74,7 +75,7 @@ struct NotificationEvent {
 };
 
 // Writes one delivery for every recipient of every enabled rule that matches
-// the event's type and client, and enqueues the job that sends it. With no
+// the event's type and location, and enqueues the job that sends it. With no
 // matching recipient one row with an empty recipient is written as not sent,
 // so the event still shows in the log. Returns how many deliveries are new.
 int emit(pqxx::transaction_base& tx, const NotificationEvent& event, core::TimePoint now);
@@ -130,11 +131,11 @@ void mark_delivery(pqxx::transaction_base& tx, std::int64_t id, std::string_view
 struct NewRule {
     std::string event_type;
     std::optional<std::string> channel;      // nothing: email
-    core::Nullable<std::int64_t> client_id;  // null or left out: every client
+    core::Nullable<std::int64_t> location_id;  // null or left out: every location
     std::vector<std::string> recipients;
     std::optional<bool> enabled;  // nothing: enabled
 };
-BOOST_DESCRIBE_STRUCT(NewRule, (), (event_type, channel, client_id, recipients, enabled))
+BOOST_DESCRIBE_STRUCT(NewRule, (), (event_type, channel, location_id, recipients, enabled))
 struct RulePatch {
     std::optional<std::vector<std::string>> recipients;
     std::optional<bool> enabled;

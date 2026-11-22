@@ -31,7 +31,7 @@ asio::awaitable<repo::Result<PostAdvisor::Prepared>> PostAdvisor::prepare(std::i
     auto loaded = co_await db_.tx([location_id, now](pqxx::work& tx) { return repo::load_post_help(tx, location_id, now); });
     if (!loaded) co_return repo::not_found("location");
     auto& help = *loaded;
-    if (!help.client_id) co_return repo::conflict("location_not_linked", "The location is not linked to a client.");
+    if (!help.enabled) co_return repo::conflict("location_not_synced", "The location is switched off.");
     if (for_ideas && std::ssize(help.usable) < domain::kPostHelpMinReviews) {
         co_return repo::conflict("too_few_reviews",
                                  std::format("Ideas need at least {} analysed reviews from the last {} days; this location has {}.",
@@ -42,12 +42,12 @@ asio::awaitable<repo::Result<PostAdvisor::Prepared>> PostAdvisor::prepare(std::i
         co_return no_model(std::format("The model provider '{}' is not configured.", help.settings.posts_provider));
     }
     auto& settings = help.reply_settings;
-    // A save is checked and a link copies complete settings, which prevent this.
+    // A save is checked and discovery writes complete settings, which prevent this.
     if (!settings) throw std::runtime_error(std::format("post help: the location's reply settings can't be read: {}", settings.error()));
 
     const auto* industry = help.industry ? &*help.industry : nullptr;
     domain::PostHelpInput input;
-    input.business_name = settings->voice.reply_name.empty() ? help.client_name : settings->voice.reply_name;
+    input.business_name = domain::business_name(settings->voice, help.location_title);
     input.location_title = help.location_title;
     input.industry_label = industry ? industry->label : std::string{};
     if (industry) {
@@ -109,7 +109,6 @@ asio::awaitable<repo::Result<llm::ChatResult>> PostAdvisor::ask(const repo::Post
     request.messages = std::move(messages);
     request.max_tokens = settings.max_output_tokens;
     request.extras = repo::extras_for(settings, settings.posts_provider);
-    request.client_id = help.client_id;
     request.location_id = help.location_id;
     auto answer = co_await llm_.chat_json(std::move(request));
     if (!answer) {

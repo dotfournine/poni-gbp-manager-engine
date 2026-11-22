@@ -46,9 +46,6 @@ double random_roll() {
 
 bool review_has_text(const repo::ReviewContext& context) { return !text::trim(context.text).empty(); }
 
-// How a notification names the review's location (a setup has a client, and a client has a name).
-std::string place_of(const repo::GoLiveSetup& setup) { return std::format("{} ({})", setup.location_title, setup.client_name); }
-
 // What a failed model call means for the pipeline: stop and retry the job
 // later, or go on without an answer. A wrong key or address is never a
 // property of the review.
@@ -62,8 +59,8 @@ std::string review_lines(const repo::ReviewContext& context) {
 }
 
 // Reply settings that can't be read are a fault in the stored row, which the
-// check of a save and the copy on a link prevent: raised, so the job fails and says so, where
-// a location without a client or an industry profile is only skipped.
+// check of a save and the defaults written at discovery prevent: raised, so the job fails and says so, where
+// a location without an industry profile is only skipped.
 void raise_broken_settings(const repo::ReviewContext& context) {
     if (context.setup || !context.setup.error().settings_error) return;
     throw std::runtime_error(
@@ -80,7 +77,6 @@ llm::ChatRequest request_for(const domain::ModelSetup& model, std::string task, 
     request.temperature = model.temperature;
     request.max_tokens = model.max_tokens;
     request.extras = model.extras;
-    request.client_id = setup.client_id;
     request.location_id = setup.location_id;
     request.review_id = ids.review_id;
     request.go_live_run_id = ids.go_live_run_id;
@@ -183,7 +179,7 @@ asio::awaitable<void> ReviewPipeline::process(std::int64_t review_id, bool force
     }
     raise_broken_settings(context);
     if (!context.setup) {
-        // No client, or a client without an industry profile.
+        // A location without an industry profile.
         skip(context.setup.error().reason);
         co_return;
     }
@@ -279,8 +275,8 @@ asio::awaitable<void> ReviewPipeline::escalate(const repo::ReviewContext& contex
     const auto& setup = *context.setup;
     auto body = std::format("A review at {} was flagged: {}.\n\n{}\n\nFlags:\n{}\n"
                             "A holding reply is being drafted for approval. Nothing has been posted.",
-                            place_of(setup), labels, review_lines(context), details);
-    auto subject = std::format("Escalation: {} - {}", setup.client_name, labels);
+                            setup.location_title, labels, review_lines(context), details);
+    auto subject = std::format("Escalation: {} - {}", setup.location_title, labels);
 
     const auto opened = co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) {
         if (!repo::review_is_current(tx, context.review_id, context.updated_time)) return repo::OpenedCase{};
@@ -290,7 +286,6 @@ asio::awaitable<void> ReviewPipeline::escalate(const repo::ReviewContext& contex
                        {.type = std::string(repo::kEventEscalation),
                         // The analysis is part of the key: a case that is opened again alerts again.
                         .key = std::format("case:{}:opened:{}", opened_case.id, analysis_id),
-                        .client_id = setup.client_id,
                         .location_id = setup.location_id,
                         .review_id = context.review_id,
                         .subject = subject,
@@ -318,7 +313,7 @@ asio::awaitable<std::optional<repo::NewDraft>> ReviewPipeline::compose_draft(
     if (regeneration) input.staff_instructions = regeneration->instructions;
 
     std::optional<domain::GeneratorAnswer> answer;
-    // The writer's temperature is the voice's (D-074), so a client or a location may have its own: it is in the setup.
+    // The writer's temperature is the voice's (D-074), so a location may have its own: it is in the setup.
     auto request = writer_request(setup, input, {.review_id = review_id, .go_live_run_id = {}});
     const auto result = co_await ask(std::move(request));
     if (!result) {
@@ -375,7 +370,7 @@ asio::awaitable<bool> ReviewPipeline::store_own_draft(const repo::ReviewContext&
                                                       const repo::NewDraft& draft) {
     const auto& setup = *context.setup;
     // The words of the "approval needed" message. The review and the draft are in the body only.
-    const auto place = place_of(setup);
+    const auto& place = setup.location_title;
     std::string reasons;
     for (const auto& reason : draft.outcome.route_reasons) reasons += (reasons.empty() ? "" : ", ") + reason;
     auto notice_body = std::format(
@@ -409,7 +404,6 @@ asio::awaitable<bool> ReviewPipeline::store_own_draft(const repo::ReviewContext&
             repo::emit(tx,
                        {.type = std::string(repo::kEventApprovalNeeded),
                         .key = std::format("draft:{}:approval_needed", *id),
-                        .client_id = setup.client_id,
                         .location_id = setup.location_id,
                         .review_id = draft.review_id,
                         .subject = notice_subject,
@@ -481,7 +475,7 @@ asio::awaitable<repo::Result<std::int64_t>> ReviewPipeline::regenerate(std::int6
     } else if (context.ignored) {
         obstacle = "The review is marked as needing no reply.";
     } else if (!context.synced || context.unsupported()) {
-        obstacle = "The review's location isn't synced, or its client has no industry profile.";
+        obstacle = "The review's location isn't synced, or it has no industry profile.";
     } else if (!context.analysis || context.analysis->id != loaded->analysis_id) {
         obstacle = "The review was edited or analyzed again; a new draft replaces this one.";
     }

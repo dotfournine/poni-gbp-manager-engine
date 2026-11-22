@@ -34,8 +34,7 @@ inline constexpr std::string_view kSourceNotification = "notification";
 // The posting job, which reads a review just before and after it posts.
 inline constexpr std::string_view kSourcePosting = "posting";
 
-// A location whose reviews are synced: linked to a client that isn't
-// archived, and still accessible.
+// A location whose reviews are synced: switched on (D-102) and still accessible.
 struct SyncLocation {
     std::int64_t id = 0;
     std::string gbp_location_id;
@@ -116,7 +115,6 @@ inline constexpr std::array<std::string_view, 9> kDraftStatuses{"draft",  "sched
 inline constexpr std::array<std::string_view, 4> kReviewSorts{"created_time", "updated_time", "rating", "draft_time"};
 
 struct ReviewFilter {
-    std::optional<std::int64_t> client_id;
     std::optional<std::int64_t> location_id;
     std::vector<int> ratings;  // empty: any
     std::string status = "active";  // one of kReviewStatuses

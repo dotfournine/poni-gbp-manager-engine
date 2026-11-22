@@ -16,7 +16,6 @@ using db::to_timestamptz;
 namespace {
 
 using OptString = std::optional<std::string>;
-using OptId = std::optional<std::int64_t>;
 
 constexpr std::size_t kPastPosts = 10;
 constexpr std::size_t kPastPostLength = 400;
@@ -35,22 +34,20 @@ BOOST_DESCRIBE_STRUCT(PeriodReview, (), (usable, review))
 }  // namespace
 
 std::optional<PostHelp> load_post_help(pqxx::transaction_base& tx, std::int64_t location_id, core::TimePoint now) {
-    const auto rows = tx.exec("SELECT l.client_id, coalesce(c.name, ''), l.title, l.gbp_location_id, "
-                              "l.access_status = 'active' AND c.id IS NOT NULL AND NOT c.archived, coalesce(c.audience, ''), c.industry_key "
-                              "FROM locations l LEFT JOIN clients c ON c.id = l.client_id WHERE l.id = $1",
+    const auto rows = tx.exec("SELECT l.title, l.gbp_location_id, l.enabled, l.access_status = 'active', l.audience, l.industry_key "
+                              "FROM locations l WHERE l.id = $1",
                               pqxx::params{location_id});
     if (rows.empty()) return std::nullopt;
     const auto row = rows[0];
     PostHelp help;
     help.location_id = location_id;
-    help.client_id = row[0].as<OptId>();
-    help.client_name = row[1].as<std::string>();
-    help.location_title = row[2].as<std::string>();
-    help.gbp_location_id = row[3].as<std::string>();
-    help.accessible = row[4].as<bool>();
-    help.audience = row[5].as<std::string>();
-    if (const auto industry = row[6].as<OptString>()) help.industry = industry_rules(tx, *industry);
-    if (help.client_id) help.reply_settings = stored_reply_settings(tx, location_id);
+    help.location_title = row[0].as<std::string>();
+    help.gbp_location_id = row[1].as<std::string>();
+    help.enabled = row[2].as<bool>();
+    help.accessible = row[3].as<bool>();
+    help.audience = row[4].as<std::string>();
+    if (const auto industry = row[5].as<OptString>()) help.industry = industry_rules(tx, *industry);
+    help.reply_settings = stored_reply_settings(tx, location_id);
     help.settings = get_ai_settings(tx);
 
     help.period_end = std::chrono::floor<std::chrono::days>(now);

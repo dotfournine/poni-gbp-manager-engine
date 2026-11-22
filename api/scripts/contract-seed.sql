@@ -1,16 +1,17 @@
 -- Rows for the contract check (check-contract.mjs) in a database that has
--- never synced with Google: one client, one location, two reviews. Made-up
+-- never synced with Google: one client, one location grouped under it and
+-- switched on, as a person would (D-102), and two reviews. Made-up
 -- data; safe to apply more than once. engine/scripts/linux.sh applies it to
 -- the poni_linux database, never to a database with real data.
 INSERT INTO clients (name, notes, created_at, updated_at)
 VALUES ('Contract Check Spa', 'Seeded for the contract check', now(), now())
 ON CONFLICT DO NOTHING;
 
-INSERT INTO locations (gbp_location_id, gbp_account_id, client_id, title, primary_category, address, locality,
+INSERT INTO locations (gbp_location_id, gbp_account_id, client_id, enabled, title, primary_category, address, locality,
                        administrative_area, postal_code, region_code, phone, website_uri, maps_uri, raw,
                        first_seen_at, last_seen_at, updated_at, reviews_polled_at, reviews_full_synced_at,
                        last_sync_error, last_sync_error_at)
-SELECT 'contract-location-1', 'contract-account-1', c.id, 'Contract Check Spa - Downtown', 'Spa',
+SELECT 'contract-location-1', 'contract-account-1', c.id, true, 'Contract Check Spa - Downtown', 'Spa',
        '1 Example Street', 'New York', 'NY', '10001', 'US', '(212) 555-0100', 'https://example.invalid/',
        'https://maps.example.invalid/1', '{"name": "locations/contract-location-1"}'::jsonb,
        now(), now(), now(), now(), now(), 'HTTP 503 (seeded example)', now()
@@ -18,9 +19,9 @@ SELECT 'contract-location-1', 'contract-account-1', c.id, 'Contract Check Spa - 
  WHERE c.name = 'Contract Check Spa'
 ON CONFLICT (gbp_location_id) DO NOTHING;
 
--- The location's reply settings (D-093): what linking gives the first
--- location of a client, a copy of the knowledge base's defaults. The
--- knowledge base is seeded by the time this file is applied.
+-- The location's reply settings (D-093): what discovery gives every
+-- location, a copy of the knowledge base's defaults (D-102). The knowledge
+-- base is seeded by the time this file is applied.
 INSERT INTO reply_settings (location_id, voice, localization, policy, created_at, updated_at)
 SELECT l.id, d.voice, d.localization, d.policy, now(), now()
   FROM locations l, kb_defaults d
@@ -51,10 +52,10 @@ SELECT r.id, 'discovered', 'full_sync', now(), '{"rating": 5, "has_text": true, 
  WHERE r.gbp_review_id = 'contract-review-1'
    AND NOT EXISTS (SELECT 1 FROM review_events e WHERE e.review_id = r.id);
 
--- Phase 2: the client's industry, an analysis of both reviews, a draft for
+-- Phase 2: the location's industry, an analysis of both reviews, a draft for
 -- the one without a reply, and one model call, so the check has every shape
 -- to validate without an LLM.
-UPDATE clients SET industry_key = 'wellness' WHERE name = 'Contract Check Spa' AND industry_key IS NULL;
+UPDATE locations SET industry_key = 'wellness' WHERE gbp_location_id = 'contract-location-1' AND industry_key IS NULL;
 
 INSERT INTO review_analyses (review_id, review_updated_time, status, language, script, sentiment, contains_complaint,
                              topics, items, severity_flags, manipulation_suspected, manipulation_evidence, summary_en, industry_key, model, prompt_version, raw, created_at)
@@ -93,9 +94,9 @@ SELECT r.id, 'severity_flag', a.id, a.severity_flags, now(), now()
  WHERE r.gbp_review_id = 'contract-review-2'
     ON CONFLICT (review_id) DO NOTHING;
 
-INSERT INTO llm_calls (occurred_at, task, model, client_id, location_id, review_id, attempt, status, error, http_status,
+INSERT INTO llm_calls (occurred_at, task, model, location_id, review_id, attempt, status, error, http_status,
                        prompt_tokens, completion_tokens, latency_ms, estimated_cost_usd, finish_reason)
-SELECT now(), v.task, 'seeded-model', l.client_id, l.id, r.id, v.attempt, v.status, v.error, v.http_status, v.prompt_tokens,
+SELECT now(), v.task, 'seeded-model', l.id, r.id, v.attempt, v.status, v.error, v.http_status, v.prompt_tokens,
        v.completion_tokens, 3200, v.cost, v.finish
   FROM reviews r JOIN locations l ON l.id = r.location_id,
        (VALUES ('analyzer', 1, 'error', 'unavailable: HTTP 503', 503, 0, 0, NULL::numeric, NULL),
@@ -106,16 +107,16 @@ SELECT now(), v.task, 'seeded-model', l.client_id, l.id, r.id, v.attempt, v.stat
 
 -- Phase 4.1: a finished go-live test with two cases, so its endpoints have
 -- something to answer with. A made-up fingerprint: it gives nothing a pass,
--- and no configuration on GET /api/go-live shows it, so it has a fixed id
--- that check-contract.mjs reads it by.
-INSERT INTO go_live_runs (id, client_id, fingerprint, fingerprint_inputs, location_ids, status, summary, auto_post_positive,
+-- and no location on GET /api/go-live shows it, so it has a fixed id that
+-- check-contract.mjs reads it by. It was submitted for the seeded location.
+INSERT INTO go_live_runs (id, location_id, fingerprint, fingerprint_inputs, status, summary, auto_post_positive,
                           auto_post_rating_only, auto_post_min_stars, corpus_version, repeats, real_reviews, started_at, finished_at)
 OVERRIDING SYSTEM VALUE
-SELECT 900000001, c.id, 'contract-seeded', '{}'::jsonb, (SELECT coalesce(jsonb_agg(l.id), '[]'::jsonb) FROM locations l WHERE l.client_id = c.id),
+SELECT 900000001, l.id, 'contract-seeded', '{}'::jsonb,
        'failed', '1 of 2 cases failed: 1 reply that would have been posted the judge rated unacceptable.', true, true, 4,
        'seeded', 3, 1, now() - interval '20 minutes', now() - interval '10 minutes'
-  FROM clients c
- WHERE c.name = 'Contract Check Spa'
+  FROM locations l
+ WHERE l.gbp_location_id = 'contract-location-1'
    AND NOT EXISTS (SELECT 1 FROM go_live_runs g WHERE g.id = 900000001);  -- also where an older seed left one under another id
 
 INSERT INTO go_live_cases (run_id, case_key, category, review_id, stars, queued, verdict, detail, attempts, finished_at)

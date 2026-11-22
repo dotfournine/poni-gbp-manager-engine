@@ -58,7 +58,7 @@ struct AutoPostingPatch {
 };
 BOOST_DESCRIBE_STRUCT(AutoPostingPatch, (), (enabled, five_star, four_star, daily_cap, pause_after_failures, time_zone))
 
-// The global state and every location that is linked to a client.
+// The global state and every enabled location.
 model::AutoPostingOverview auto_posting_overview(pqxx::transaction_base& tx, core::TimePoint now);
 
 // A person changes a location's auto-posting settings. Switching it on is

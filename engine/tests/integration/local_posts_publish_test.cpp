@@ -305,21 +305,29 @@ TEST_F(LocalPostsPublish, ALocationsOwnSwitchStopsThatLocationOnly) {
     EXPECT_EQ(post(stopped, "status"), "draft");
 }
 
-TEST_F(LocalPostsPublish, NothingIsWrittenOrSentForALocationThatIsNotLinked) {
+TEST_F(LocalPostsPublish, NothingIsWrittenOrSentForALocationThatIsSwitchedOff) {
     const auto id = draft(buffet_);
-    exec(std::format("UPDATE clients SET archived = true WHERE id = {}", buffet_client_));
+    switch_location(buffet_, false);
     EXPECT_EQ(approve(id).error().code, "location_not_synced");
     EXPECT_EQ(create(buffet_, standard()).error().code, "location_not_synced");
     EXPECT_EQ(create(999999, standard()).error().kind, repo::Failure::Kind::not_found);
 
-    // Unlinked between the approval and the send.
-    exec(std::format("UPDATE clients SET archived = false WHERE id = {}", buffet_client_));
+    // Switched off between the approval and the send: the claim reads the switch (D-102).
+    switch_location(buffet_, true);
     ASSERT_TRUE(approve(id));
-    exec(std::format("UPDATE locations SET client_id = NULL WHERE id = {}", buffet_));
+    switch_location(buffet_, false);
     run_jobs();
     EXPECT_TRUE(google_.creates.empty());
     EXPECT_EQ(post(id, "status"), "draft");
     EXPECT_THAT(post(id, "status_reason"), HasSubstr("Nothing was sent"));
+
+    // Without a client it is sent like any other.
+    exec(std::format("UPDATE locations SET client_id = NULL WHERE id = {}", buffet_));
+    switch_location(buffet_, true);
+    clock_.advance(1min);
+    ASSERT_TRUE(approve(id));
+    run_jobs();
+    EXPECT_EQ(google_.creates.size(), 1u);
 }
 
 // ---- what a person may approve (D-088 points 3 and 10) ---------------------------------------

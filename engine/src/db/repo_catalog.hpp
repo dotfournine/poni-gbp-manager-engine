@@ -33,29 +33,24 @@ struct ClientFilter {
 struct NewClient {
     std::string name;
     std::optional<std::string> notes;
-    // Who the customers are: at most 500 characters.
-    std::optional<std::string> audience;
-    // The day analysis starts from, "YYYY-MM-DD"; null or left out for every review.
-    core::Nullable<std::string> analyze_from;
 };
-BOOST_DESCRIBE_STRUCT(NewClient, (), (name, notes, audience, analyze_from))
+BOOST_DESCRIBE_STRUCT(NewClient, (), (name, notes))
 
 struct ClientPatch {
     std::optional<std::string> name;
     std::optional<std::string> notes;
-    std::optional<std::string> audience;
     std::optional<bool> archived;
-    // Null: no industry.
-    core::Nullable<std::string> industry_key;
-    // Null: every review.
-    core::Nullable<std::string> analyze_from;
 };
-BOOST_DESCRIBE_STRUCT(ClientPatch, (), (name, notes, audience, archived, industry_key, analyze_from))
+BOOST_DESCRIBE_STRUCT(ClientPatch, (), (name, notes, archived))
 
 model::ClientList list_clients(pqxx::transaction_base& tx, const ClientFilter& filter);
 std::optional<model::Client> get_client(pqxx::transaction_base& tx, std::int64_t id);
 Result<model::Client> create_client(pqxx::transaction_base& tx, audit::Writer& audit, const NewClient& client);
 Result<model::Client> update_client(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const ClientPatch& patch);
+// Removes a client, archived or not. Its locations are unlinked through
+// update_location and nothing else about them changes (D-102); the entry
+// keeps what the client was.
+Result<void> delete_client(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id);
 
 // ---- locations -----------------------------------------------------------------
 
@@ -65,6 +60,7 @@ inline constexpr std::array<std::string_view, 2> kAccessStatuses{"active", "lost
 struct LocationFilter {
     std::optional<std::int64_t> client_id;
     std::optional<bool> linked;
+    std::optional<bool> enabled;
     std::optional<std::string> access_status;  // one of kAccessStatuses
     std::string q;  // part of the title
     db::Page page;
@@ -72,17 +68,29 @@ struct LocationFilter {
 
 // The body of PATCH /api/locations/{id}, member for member.
 struct LocationPatch {
-    // The client to link to; null unlinks.
+    // The client to group the location under; null unlinks.
     core::Nullable<std::int64_t> client_id;
+    // Whether the engine works on the location (D-102).
+    std::optional<bool> enabled;
+    // The key of an industry in the knowledge base; null for none.
+    core::Nullable<std::string> industry_key;
+    // The day analysis starts from, "YYYY-MM-DD"; null for every review.
+    core::Nullable<std::string> analyze_from;
+    // Who the customers are: at most 500 characters.
+    std::optional<std::string> audience;
     std::optional<int> review_poll_interval_s;
     // The location's kill switch for posting.
     std::optional<bool> posting_enabled;
 };
-BOOST_DESCRIBE_STRUCT(LocationPatch, (), (client_id, review_poll_interval_s, posting_enabled))
+BOOST_DESCRIBE_STRUCT(LocationPatch, (),
+                      (client_id, enabled, industry_key, analyze_from, audience, review_poll_interval_s, posting_enabled))
 
 model::LocationList list_locations(pqxx::transaction_base& tx, const LocationFilter& filter);
 std::optional<model::Location> get_location(pqxx::transaction_base& tx, std::int64_t id);
-// Linking a location to a client makes its reviews due for a full sync at once.
+// The one place that changes locations.client_id. The link is bookkeeping
+// and changes nothing else about the location (D-102). Switching the
+// location on needs access to it and makes its reviews due for a full sync
+// at once; switching it off switches its auto-posting off (D-070).
 Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const LocationPatch& patch);
 
 // ---- location discovery --------------------------------------------------------

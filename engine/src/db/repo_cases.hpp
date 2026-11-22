@@ -40,7 +40,6 @@ inline constexpr std::array<std::string_view, 2> kEscalationStatuses{"open", "cl
 
 struct EscalationFilter {
     std::string status;  // one of kEscalationStatuses; empty: both
-    std::optional<std::int64_t> client_id;
     std::optional<std::int64_t> location_id;
     std::optional<std::int64_t> assignee_id;
     db::Page page;

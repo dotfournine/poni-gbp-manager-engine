@@ -25,21 +25,21 @@ std::string to_json_text(const T& value) {
     return boost::json::serialize(boost::json::value_from(value));
 }
 
-// Which reviews the pipeline works on, and which of them still need work.
-// A client may set the day its analysis starts from (D-055); older reviews
-// are left alone unless staff ask for one by hand.
+// Which reviews the pipeline works on, and which of them still need work:
+// those of a location a person switched on (D-102). A location may set the
+// day its analysis starts from; older reviews are left alone unless staff
+// ask for one by hand.
 // `a` is the newest analysis of the review's current version.
 constexpr std::string_view kPendingFrom = R"sql(
       FROM reviews r
       JOIN locations l ON l.id = r.location_id
-      JOIN clients c ON c.id = l.client_id
       LEFT JOIN LATERAL (SELECT x.id, x.severity_flags FROM review_analyses x
                           WHERE x.review_id = r.id AND x.review_updated_time = r.updated_time
                           ORDER BY x.id DESC LIMIT 1) a ON true
-     WHERE r.removed_at IS NULL AND l.access_status = 'active' AND NOT c.archived
-       -- A client without an industry, or with one the knowledge base doesn't have, is not analyzed (D-078 point 5).
-       AND c.industry_key IN (SELECT k.key FROM kb_industries k)
-       AND (c.analyze_from IS NULL OR r.created_time >= (c.analyze_from::timestamp AT TIME ZONE 'UTC'))
+     WHERE r.removed_at IS NULL AND l.enabled AND l.access_status = 'active'
+       -- A location without an industry, or with one the knowledge base doesn't have, is not analyzed (D-078 point 5).
+       AND l.industry_key IN (SELECT k.key FROM kb_industries k)
+       AND (l.analyze_from IS NULL OR r.created_time >= (l.analyze_from::timestamp AT TIME ZONE 'UTC'))
        AND (a.id IS NULL
             -- No reply, nobody said "no reply needed", and no draft that settles this version.
             OR (r.reply_text IS NULL AND r.ignored_at IS NULL
@@ -95,7 +95,7 @@ std::string usage_query(std::string_view key, std::string_view label, std::strin
                coalesce(sum(k.estimated_cost_usd), 0)::float8 AS cost_usd,
                count(*) FILTER (WHERE k.estimated_cost_usd IS NULL AND k.prompt_tokens + k.completion_tokens > 0) AS unpriced_calls,
                coalesce(round(avg(k.latency_ms)), 0)::bigint AS average_latency_ms
-          FROM llm_calls k LEFT JOIN clients c ON c.id = k.client_id LEFT JOIN locations l ON l.id = k.location_id
+          FROM llm_calls k LEFT JOIN locations l ON l.id = k.location_id
          WHERE k.occurred_at >= $1::timestamptz AND k.occurred_at < $2::timestamptz
          GROUP BY 1, 2 ORDER BY {2})sql",
                        key, label, order);
@@ -126,8 +126,8 @@ std::optional<ReviewContext> review_context(pqxx::transaction_base& tx, std::int
     const auto rows = tx.exec(
         std::format(R"sql(
         SELECT r.location_id, coalesce(r.rating, 0), coalesce(r.original_text, ''), {}, r.reply_text IS NOT NULL,
-               r.removed_at IS NOT NULL, l.access_status = 'active' AND c.id IS NOT NULL AND NOT c.archived, r.ignored_at IS NOT NULL
-          FROM reviews r JOIN locations l ON l.id = r.location_id LEFT JOIN clients c ON c.id = l.client_id
+               r.removed_at IS NOT NULL, l.enabled AND l.access_status = 'active', r.ignored_at IS NOT NULL
+          FROM reviews r JOIN locations l ON l.id = r.location_id
          WHERE r.id = $1)sql",
                     iso("r.updated_time")),
         pqxx::params{review_id});
@@ -183,7 +183,7 @@ Result<void> request_analysis(pqxx::transaction_base& tx, audit::Writer& audit, 
     const auto context = review_context(tx, review_id);
     if (!context) return not_found("review");
     if (context->removed || !context->synced || context->unsupported()) {
-        return conflict("not_analyzable", "The review was removed, its client has no industry profile, or its location isn't synced.");
+        return conflict("not_analyzable", "The review was removed, its location has no industry profile, or its location isn't synced.");
     }
     jobs::sql::enqueue(tx,
                        {.kind = std::string(kAnalyzeReviewKind),
@@ -303,18 +303,17 @@ std::optional<DraftBasis> draft_basis(pqxx::transaction_base& tx, std::int64_t d
 
 void record_llm_call(pqxx::transaction_base& tx, const llm::CallRecord& call) {
     tx.exec(R"sql(
-        INSERT INTO llm_calls (occurred_at, task, model, client_id, location_id, review_id, attempt, status, error,
+        INSERT INTO llm_calls (occurred_at, task, model, location_id, review_id, attempt, status, error,
                                http_status, prompt_tokens, completion_tokens, latency_ms, finish_reason, provider,
                                go_live_run_id, estimated_cost_usd)
-        SELECT $1::timestamptz, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::integer, $12::integer, $13, $14, $15, $16,
-               round(($11::integer * (p.price->>'input_per_mtok')::numeric
-                      + $12::integer * (p.price->>'output_per_mtok')::numeric) / 1000000, 6)
+        SELECT $1::timestamptz, $2, $3, $4, $5, $6, $7, $8, $9, $10::integer, $11::integer, $12, $13, $14, $15,
+               round(($10::integer * (p.price->>'input_per_mtok')::numeric
+                      + $11::integer * (p.price->>'output_per_mtok')::numeric) / 1000000, 6)
           FROM (SELECT (SELECT jsonb_build_object('input_per_mtok', m.input_per_mtok, 'output_per_mtok', m.output_per_mtok)
                           FROM kb_model_prices m WHERE m.model = $3) AS price) p)sql",
             pqxx::params{to_timestamptz(call.at),
                          call.task,
                          call.model,
-                         call.client_id,
                          call.location_id,
                          call.review_id,
                          call.attempt,
@@ -344,20 +343,18 @@ model::LlmUsage llm_usage(pqxx::transaction_base& tx, core::TimePoint from, core
     usage.by_day = rows(day, day, "1");
     usage.by_model = rows("k.model", "k.model", "7 DESC, 1");
     usage.by_task = rows("k.task", "k.task", "1");
-    usage.by_client = rows("coalesce(k.client_id::text, '')", "coalesce(c.name, 'No client')", "7 DESC, 2");
     usage.by_provider = rows("coalesce(k.provider, '')", "coalesce(k.provider, 'Not recorded')", "7 DESC, 1");
-    // One row per location, under its client's name, so the cost of a client can be read per profile.
-    usage.by_location = rows("coalesce(k.location_id::text, '')", "coalesce(c.name || ' · ' || l.title, l.title, 'No location')", "7 DESC, 2");
+    // One row per location (D-057); a client's cost is read location by location.
+    usage.by_location = rows("coalesce(k.location_id::text, '')", "coalesce(l.title, 'No location')", "7 DESC, 2");
     return usage;
 }
 
 model::LlmCallList list_llm_calls(pqxx::transaction_base& tx, const db::Page& page) {
     return db::page<model::LlmCall>(
         tx,
-        std::format("SELECT k.id, {} AS occurred_at, k.task, k.provider, k.model, k.client_id, c.name AS client_name, k.location_id, "
+        std::format("SELECT k.id, {} AS occurred_at, k.task, k.provider, k.model, k.location_id, "
                     "k.review_id, k.attempt, k.status, k.error, k.http_status, k.prompt_tokens, k.completion_tokens, k.latency_ms, "
-                    "k.estimated_cost_usd::float8 AS estimated_cost_usd "
-                    "FROM llm_calls k LEFT JOIN clients c ON c.id = k.client_id",
+                    "k.estimated_cost_usd::float8 AS estimated_cost_usd FROM llm_calls k",
                     iso("k.occurred_at")),
         {}, "k.occurred_at DESC, k.id DESC", page);
 }

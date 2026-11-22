@@ -169,7 +169,7 @@ TEST_F(LocalPosts, ADraftsUploadedPhotoIsShownFromThePublicBucket) {
     EXPECT_EQ(post.at("media").as_array()[0].at("url").as_string(), "https://storage.googleapis.com/poni-public-test/p/abc123.jpg");
 }
 
-TEST_F(LocalPosts, TheListIsNewestFirstAndFiltersByClientLocationAndState) {
+TEST_F(LocalPosts, TheListIsNewestFirstAndFiltersByLocationAndState) {
     const auto old_google = insert_local_post(buffet_, "origin, status, content, google_name, google_state, google_created_at",
                                               "'google', 'sent', " + test::content_sql(test::standard("Summer night.")) +
                                                   ", 'accounts/111/locations/9002/localPosts/1', 'live', '2026-08-28T22:40:31Z'");
@@ -180,14 +180,14 @@ TEST_F(LocalPosts, TheListIsNewestFirstAndFiltersByClientLocationAndState) {
     EXPECT_EQ(ids(""), (std::vector<std::int64_t>{buffet_draft, spa_draft, old_google}));
     EXPECT_EQ(read("/api/local-posts").at("total").as_int64(), 3);
 
-    EXPECT_EQ(ids("?client_id=" + std::to_string(buffet_client_)), (std::vector<std::int64_t>{buffet_draft, old_google}));
+    EXPECT_EQ(ids("?location_id=" + std::to_string(buffet_)), (std::vector<std::int64_t>{buffet_draft, old_google}));
     EXPECT_EQ(ids("?location_id=" + std::to_string(spa_)), (std::vector<std::int64_t>{spa_draft}));
     EXPECT_EQ(ids("?status=draft"), (std::vector<std::int64_t>{buffet_draft, spa_draft}));
-    EXPECT_EQ(ids("?status=draft&client_id=" + std::to_string(spa_client_)), (std::vector<std::int64_t>{spa_draft}));
+    EXPECT_EQ(ids("?status=draft&location_id=" + std::to_string(spa_)), (std::vector<std::int64_t>{spa_draft}));
     EXPECT_EQ(ids("?per_page=1&page=2"), (std::vector<std::int64_t>{spa_draft}));
     EXPECT_EQ(read("/api/local-posts?per_page=1&page=2").at("total").as_int64(), 3);
 
-    for (const auto* bad : {"?status=posted", "?client_id=x", "?per_page=0"}) {
+    for (const auto* bad : {"?status=posted", "?location_id=x", "?per_page=0"}) {
         EXPECT_EQ(get(std::string("/api/local-posts") + bad, browser_).status, 400u) << bad;
     }
 }
@@ -595,11 +595,11 @@ TEST_F(LocalPosts, RefreshQueuesTheReadOfOneLocationNow) {
     EXPECT_EQ(call(verb::post, target).status, 401u);
     EXPECT_EQ(call(verb::post, target, {.cookie = browser_.cookie, .csrf = ""}).status, 403u) << "a change needs the CSRF token";
 
-    // A location that is not linked to a client is not read.
-    exec(std::format("UPDATE locations SET client_id = NULL WHERE id = {}", buffet_));
-    const auto unlinked = post(std::format("/api/locations/{}/local-posts/refresh", buffet_), "");
-    EXPECT_EQ(unlinked.status, 409u);
-    EXPECT_EQ(error_code(unlinked), "location_not_synced");
+    // A location that is switched off is not read.
+    switch_location(buffet_, false);
+    const auto off = post(std::format("/api/locations/{}/local-posts/refresh", buffet_), "");
+    EXPECT_EQ(off.status, 409u);
+    EXPECT_EQ(error_code(off), "location_not_synced");
     EXPECT_EQ(count("jobs WHERE kind = 'local_posts.sync'"), 2);
 }
 
@@ -694,20 +694,20 @@ TEST_F(LocalPosts, OnePostAtGoogleIsOneRow) {
     EXPECT_THROW(insert_local_post(spa_, columns, values), pqxx::unique_violation);
 }
 
-// ---- the client's line about its customers ------------------------------------------------
+// ---- the location's line about its customers ------------------------------------------------
 
-TEST_F(LocalPosts, AClientSaysWhoItsCustomersAre) {
-    const auto target = "/api/clients/" + std::to_string(spa_client_);
+TEST_F(LocalPosts, ALocationSaysWhoItsCustomersAre) {
+    const auto target = "/api/locations/" + std::to_string(spa_);
     EXPECT_EQ(read(target).at("audience").as_string(), "") << "nobody has written one";
 
     const auto changed = patch(target, R"({"audience": "  Office workers nearby, many of them Mandarin speakers.  "})");
     ASSERT_EQ(changed.status, 200u) << changed.body;
     EXPECT_EQ(json(changed).at("audience").as_string(), "Office workers nearby, many of them Mandarin speakers.");
-    EXPECT_EQ(json(patch(target, R"({"notes": "x"})")).at("audience").as_string(),
+    EXPECT_EQ(json(patch(target, R"({"review_poll_interval_s": 600})")).at("audience").as_string(),
               "Office workers nearby, many of them Mandarin speakers.")
         << "a field that isn't sent stays";
 
-    const auto log = read("/api/audit-log?object_type=client&object_id=" + std::to_string(spa_client_)).at("items").as_array();
+    const auto log = read("/api/audit-log?action=location.update&object_id=" + std::to_string(spa_)).at("items").as_array();
     EXPECT_EQ(log[1].at("before").at("audience").as_string(), "");
     EXPECT_EQ(log[1].at("after").at("audience").as_string(), "Office workers nearby, many of them Mandarin speakers.");
 
@@ -717,10 +717,6 @@ TEST_F(LocalPosts, AClientSaysWhoItsCustomersAre) {
     EXPECT_EQ(patch(target, boost::json::serialize(boost::json::object{{"audience", limit}})).status, 200u);
     EXPECT_EQ(patch(target, boost::json::serialize(boost::json::object{{"audience", limit + "客"}})).status, 400u);
     EXPECT_EQ(patch(target, R"({"audience": 5})").status, 400u);
-
-    const auto created = post("/api/clients", R"({"name": "New Client", "audience": "Families."})");
-    ASSERT_EQ(created.status, 201u) << created.body;
-    EXPECT_EQ(json(created).at("audience").as_string(), "Families.");
 }
 
 // ---- copying a post as a new draft (D-094) ----------------------------------------------------
@@ -858,10 +854,10 @@ TEST_F(LocalPosts, ACopyIsRefusedWhereWritingADraftIsRefused) {
     EXPECT_EQ(post("/api/local-posts/999999/copy", "").status, 404u);
     EXPECT_EQ(call(verb::post, target).status, 401u);
     EXPECT_EQ(call(verb::post, target, {.cookie = browser_.cookie, .csrf = ""}).status, 403u) << "a change needs the CSRF token";
-    exec(std::format("UPDATE locations SET client_id = NULL WHERE id = {}", spa_));
-    const auto unlinked = post(target, "");
-    EXPECT_EQ(unlinked.status, 409u);
-    EXPECT_EQ(error_code(unlinked), "location_not_synced") << "as writing a draft for that location";
+    switch_location(spa_, false);
+    const auto off = post(target, "");
+    EXPECT_EQ(off.status, 409u);
+    EXPECT_EQ(error_code(off), "location_not_synced") << "as writing a draft for that location";
     EXPECT_EQ(count("local_posts"), 1);
 }
 
@@ -1270,11 +1266,11 @@ TEST_F(LocalPostEdits, WhatAnEditMayNotBeIsRefusedWithAnAnswerThatSaysWhy) {
     const auto removal = at_google("To be removed.");
     ASSERT_EQ(post(std::format("/api/local-posts/{}/remove", removal), "").status, 202u);
     EXPECT_EQ(error_code(put(target(removal), edit_request(removal, R"({"summary": "Too late."})"))), "local_post_not_editable");
-    exec(std::format("UPDATE locations SET client_id = NULL WHERE id = {}", buffet_));
-    const auto unlinked = insert_local_post(buffet_, "origin, status, content, google_name, google_state",
-                                            "'google', 'sent', " + test::content_sql(test::standard("Unlinked.")) +
-                                                ", 'accounts/111/locations/9002/localPosts/900', 'live'");
-    EXPECT_EQ(error_code(put(target(unlinked), edit_request(unlinked, R"({"summary": "Changed."})"))), "location_not_synced");
+    switch_location(buffet_, false);
+    const auto off = insert_local_post(buffet_, "origin, status, content, google_name, google_state",
+                                       "'google', 'sent', " + test::content_sql(test::standard("Switched off.")) +
+                                           ", 'accounts/111/locations/9002/localPosts/900', 'live'");
+    EXPECT_EQ(error_code(put(target(off), edit_request(off, R"({"summary": "Changed."})"))), "location_not_synced");
     // Written from a post that is not the post as it is now: refused, and nothing is stored.
     auto stale = boost::json::parse(edit_request(id, R"({"summary": "Open late on Saturdays."})")).as_object();
     stale["based_on"].as_object()["summary"] = "What the post said when the page was loaded.";

@@ -94,18 +94,17 @@ protected:
         return as_test([&](pqxx::work& tx, audit::Writer& audit) { return repo::create_client(tx, audit, {.name = name}).value().id; });
     }
 
-    // Makes the client the made-up business of an industry's pack in the
-    // knowledge base (knowledge/industries/<key>/test_client.json), the way
-    // a person would in the dashboard: give it the industry, then save the
+    // Makes each of the client's locations the made-up business of an
+    // industry's pack in the knowledge base
+    // (knowledge/industries/<key>/test_client.json), the way a person would
+    // in the dashboard: give it the industry, switch it on, then save the
     // business's settings (the defaults, the voice template it names, what
-    // it sets itself) for each of its locations. A location that is linked
-    // afterwards copies them from the first (D-093).
+    // it sets itself). A location that is linked afterwards keeps its own (D-102).
     void become_test_client(std::int64_t client_id, const std::string& industry_key) {
         as_test([&](pqxx::work& tx, audit::Writer& audit) {
             const auto business = boost::json::parse(tx.query_value<std::string>(
                                                          "SELECT test_client::text FROM kb_industries WHERE key = $1", pqxx::params{industry_key}))
                                       .as_object();
-            (void)repo::update_client(tx, audit, client_id, {.industry_key = industry_key}).value();
             const auto defaults = repo::knowledge_defaults(tx);
             std::optional<model::KnowledgeVoiceTemplate> taken;
             if (const auto* chosen = business.if_contains("template")) {
@@ -116,7 +115,9 @@ protected:
             const auto settings =
                 business_settings({{"voice", defaults.voice}, {"localization", defaults.localization}, {"policy", defaults.policy}}, taken, business);
             for (const auto& row : tx.exec("SELECT id FROM locations WHERE client_id = $1 ORDER BY id", pqxx::params{client_id})) {
-                (void)repo::replace_reply_settings(tx, audit, row[0].as<std::int64_t>(), settings).value();
+                const auto location = row[0].as<std::int64_t>();
+                (void)repo::update_location(tx, audit, location, {.enabled = true, .industry_key = industry_key}).value();
+                (void)repo::replace_reply_settings(tx, audit, location, settings).value();
             }
             return 0;
         });
@@ -161,6 +162,13 @@ protected:
         return id;
     }
 
+    // Switches the location on or off as a person would (D-102); in a test's own database only.
+    void switch_location(std::int64_t location, bool on) {
+        as_test([&](pqxx::work& tx, audit::Writer& audit) {
+            return repo::update_location(tx, audit, location, {.enabled = on}).value().enabled;
+        });
+    }
+
     std::int64_t location_id(std::string_view gbp_location_id) {
         return value<std::int64_t>(std::format("SELECT id FROM locations WHERE gbp_location_id = '{}'", gbp_location_id));
     }
@@ -189,10 +197,12 @@ protected:
         add_spa_and_buffet();
         discover();
     }
-    // ... and linked.
+    // ... linked, and switched on.
     void spa_and_buffet() {
         discover_spa_and_buffet();
         link_spa_and_buffet();
+        switch_location(spa_, true);
+        switch_location(buffet_, true);
     }
     // The two clients are the made-up businesses of the knowledge base's packs.
     void become_test_clients() {
@@ -281,10 +291,10 @@ protected:
     void certify(std::int64_t location) {
         tx([&](pqxx::work& tx) {
             const auto setup = repo::go_live_setup(tx, location).value();
-            tx.exec("INSERT INTO go_live_runs (client_id, fingerprint, fingerprint_inputs, location_ids, status, auto_post_positive, "
+            tx.exec("INSERT INTO go_live_runs (location_id, fingerprint, fingerprint_inputs, status, auto_post_positive, "
                     "auto_post_rating_only, auto_post_min_stars, corpus_version, repeats, started_at, finished_at) "
-                    "VALUES ($1, $2, '{}', '[]', 'passed', true, true, 4, 'test', 3, now(), now())",
-                    pqxx::params{setup.client_id, setup.fingerprint.hash});
+                    "VALUES ($1, $2, '{}', 'passed', true, true, 4, 'test', 3, now(), now())",
+                    pqxx::params{location, setup.fingerprint.hash});
         });
     }
 

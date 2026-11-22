@@ -12,10 +12,10 @@
 //      endpoint answers 401 with the Error shape.
 //   2. Signs in, then calls every GET that needs no parameters and validates
 //      the status, content type and JSON body against the spec.
-//   3. Creates, reads and changes a client; follows the first location and
-//      review (if any) to the endpoints that take an id; reads and changes
-//      the analysis settings, and saves the reply settings of a linked
-//      location and puts them back. It never starts a model call. For Phase 3 it
+//   3. Creates, reads, changes and deletes a client; follows the first
+//      location and review (if any) to the endpoints that take an id; reads
+//      and changes the analysis settings, and saves the reply settings of the
+//      seeded location and puts them back. It never starts a model call. For Phase 3 it
 //      walks the draft, escalation and notification endpoints; it never
 //      posts a reply (it approves a draft only to see the refusal while the
 //      posting switch is off) and sends no email. It writes, replaces and
@@ -214,9 +214,12 @@ try {
   if (created.status === 201) {
     const path = `/api/clients/${created.json.id}`;
     check(`GET ${path}`, "/api/clients/{id}", "GET", await call("GET", path));
-    check(`PATCH ${path} (audience)`, "/api/clients/{id}", "PATCH", await call("PATCH", path, { body: { audience: "Made-up customers." } }));
     check(`PATCH ${path}`, "/api/clients/{id}", "PATCH", await call("PATCH", path, { body: { archived: true } }));
     check("POST /api/clients (same name)", "/api/clients", "POST", await call("POST", "/api/clients", { body: { name } }));
+    // A client is bookkeeping (D-102): deleting it unlinks its locations, and this one has none.
+    check(`DELETE ${path}`, "/api/clients/{id}", "DELETE", await call("DELETE", path));
+    check(`DELETE ${path} (again)`, "/api/clients/{id}", "DELETE", await call("DELETE", path));
+    expectStatus(`GET ${path} (deleted)`, await call("GET", path), 404, "not_found");
   }
   check("POST /api/clients (bad body)", "/api/clients", "POST", await call("POST", "/api/clients", { body: { name: 5 } }));
 
@@ -238,6 +241,12 @@ try {
   if (seededLocation) {
     const path = `/api/locations/${seededLocation.id}`;
     check(`PATCH ${path} (no change)`, "/api/locations/{id}", "PATCH", await call("PATCH", path, { body: {} }));
+    // Its own fields (D-102), sent as the seed left them: a change that changes nothing.
+    const own = { enabled: true, industry_key: "wellness", analyze_from: null, audience: "" };
+    const same = await call("PATCH", path, { body: own });
+    check(`PATCH ${path} (its own fields, as they are)`, "/api/locations/{id}", "PATCH", same);
+    if (same.status !== 200 || !same.json?.enabled || same.json?.industry_key !== "wellness") fail(`PATCH ${path}`, `the seeded location is not switched on with its industry: ${same.text.slice(0, 200)}`);
+    check(`PATCH ${path} (an industry the knowledge base lacks)`, "/api/locations/{id}", "PATCH", await call("PATCH", path, { body: { industry_key: "no_such_industry" } }));
     // Queues a read of the location's posts. Its account does not exist, so the job reads nothing and says so.
     check(`POST ${path}/local-posts/refresh`, "/api/locations/{id}/local-posts/refresh", "POST", await call("POST", `${path}/local-posts/refresh`));
   } else if (requireData) {
@@ -248,7 +257,7 @@ try {
   // Local posts (Phase 6): the list with its filters, and each post's page.
   for (const filter of [
     "?status=draft",
-    "?client_id=1&location_id=1",
+    "?location_id=1",
     "?status=posted",
     "?status=draft,rejected",
     "?google_state=live,recurring",
@@ -285,7 +294,7 @@ try {
     if (requireData) fail("POST /api/locations/{id}/local-posts", "the seeded location is missing; was the seed applied?");
     else console.log("skip  a draft of a local post: this database has no seeded location, and the check writes a draft on no other");
   } else {
-    const content = { topic_type: "standard", summary: "Written by check-contract.mjs.", language_code: "en", call_to_action: null, event: null, offer: null, media_id: null, scheduled_time: null };
+    const content = { topic_type: "standard", summary: "Written by check-contract.mjs.", language_code: "en", call_to_action: null, event: null, offer: null, media_ids: [], scheduled_time: null };
     const draft = await call("POST", `/api/locations/${seededLocation.id}/local-posts`, { body: content });
     check(`POST /api/locations/${seededLocation.id}/local-posts`, "/api/locations/{id}/local-posts", "POST", draft);
     check("POST /api/locations/{id}/local-posts (not a post)", "/api/locations/{id}/local-posts", "POST", await call("POST", `/api/locations/${seededLocation.id}/local-posts`, { body: { ...content, topic_type: "alert" } }));
@@ -348,7 +357,7 @@ try {
     else console.log("skip  the edit of a post at Google: this database has no seeded post, and the check edits no other");
   } else {
     const path = `/api/local-posts/${seededPost.id}/edit`;
-    const content = Object.fromEntries(["topic_type", "summary", "language_code", "call_to_action", "event", "offer", "media_id", "scheduled_time"].map((name) => [name, seededPost[name]]));
+    const content = Object.fromEntries(["topic_type", "summary", "language_code", "call_to_action", "event", "offer", "media_ids", "scheduled_time"].map((name) => [name, seededPost[name]]));
     // An edit says what the post should say and what the person was looking at: the post's content as just read.
     const written = await call("PUT", path, { body: { content: { ...content, summary: "Edited by check-contract.mjs." }, based_on: content } });
     try {
@@ -389,10 +398,10 @@ try {
       check(`GET /api/local-posts/${seededPost.id} (the edit discarded)`, "/api/local-posts/{id}", "GET", await call("GET", `/api/local-posts/${seededPost.id}`));
     }
   }
-  const onlyACheck = { topic_type: "standard", summary: "Only a check.", language_code: "en", call_to_action: null, event: null, offer: null, media_id: null, scheduled_time: null };
+  const onlyACheck = { topic_type: "standard", summary: "Only a check.", language_code: "en", call_to_action: null, event: null, offer: null, media_ids: [], scheduled_time: null };
   check("PUT /api/local-posts/0/edit", "/api/local-posts/{id}/edit", "PUT", await call("PUT", "/api/local-posts/0/edit", { body: { content: onlyACheck, based_on: onlyACheck } }));
   check("DELETE /api/local-posts/0/edit", "/api/local-posts/{id}/edit", "DELETE", await call("DELETE", "/api/local-posts/0/edit"));
-  check("POST /api/local-posts/0/edit/approve", "/api/local-posts/{id}/edit/approve", "POST", await call("POST", "/api/local-posts/0/edit/approve", { body: { topic_type: "standard", summary: "Only a check.", language_code: "en", call_to_action: null, event: null, offer: null, media_id: null, scheduled_time: null } }));
+  check("POST /api/local-posts/0/edit/approve", "/api/local-posts/{id}/edit/approve", "POST", await call("POST", "/api/local-posts/0/edit/approve", { body: { topic_type: "standard", summary: "Only a check.", language_code: "en", call_to_action: null, event: null, offer: null, media_ids: [], scheduled_time: null } }));
   // The help with writing a post. The highlights are counted from the database. The check never asks the
   // model: an idea or a text costs a call, so only what is refused before one is tried here, and the
   // answers of the model's two routes are checked field by field in the engine's tests.
@@ -461,14 +470,13 @@ try {
   expectStatus("PATCH /api/knowledge", await call("PATCH", "/api/knowledge", { body: {} }), 405, "method_not_allowed");
 
   // A location's reply settings (D-093): its own complete voice, localization and policy. A save sends all of
-  // them; here they are read, saved back as they are, saved with a change, and put back. Only a location that
-  // is linked to a client has settings, and only the seeded location's are saved: between the change and the
+  // them; here they are read, saved back as they are, saved with a change, and put back. Every location has
+  // settings from its discovery (D-102), and only the seeded location's are saved: between the change and the
   // putting back, a real location's replies would be drafted under the check's name, and a go-live test
   // running there would be cancelled and started again (D-077).
   const settingsSpec = "/api/locations/{id}/reply-settings";
-  const linked = seededLocation?.client_id ? seededLocation : undefined;
-  if (linked) {
-    const path = `/api/locations/${linked.id}/reply-settings`;
+  if (seededLocation) {
+    const path = `/api/locations/${seededLocation.id}/reply-settings`;
     const stored = await call("GET", path);
     check(`GET ${path}`, settingsSpec, "GET", stored);
     if (stored.status === 200) {
@@ -486,20 +494,14 @@ try {
       await save("a field left out", { voice: { ...voice, sign_off: undefined }, localization, policy }, 400);
       await save("put back", { voice, localization, policy }, 200);
     } else {
-      fail(`GET ${path}`, `a linked location has reply settings, got ${stored.status}: ${stored.text.slice(0, 200)}`);
+      fail(`GET ${path}`, `every location has reply settings, got ${stored.status}: ${stored.text.slice(0, 200)}`);
     }
   } else if (requireData) {
-    fail(`PUT ${settingsSpec}`, "the seeded location is missing or not linked, so there are no settings to save; was the seed applied?");
+    fail(`PUT ${settingsSpec}`, "the seeded location is missing, so there are no settings to save; was the seed applied?");
   } else {
-    console.log("skip  reply settings: this database has no seeded location linked to a client, and the check saves no other location's settings");
+    console.log("skip  reply settings: this database has no seeded location, and the check saves no other location's settings");
   }
   expectStatus("GET /api/locations/999999999/reply-settings", await call("GET", "/api/locations/999999999/reply-settings"), 404, "not_found");
-  if (created.status === 201) {
-    // A client has no settings of its own: a new one has no location, so nothing to differ.
-    if (created.json.reply_settings_variants !== 0) fail("POST /api/clients", "a client without a location has reply_settings_variants 0");
-    const client = `/api/clients/${created.json.id}`;
-    check(`PATCH ${client} (industry)`, "/api/clients/{id}", "PATCH", await call("PATCH", client, { body: { industry_key: "food_beverage" } }));
-  }
   check("PATCH /api/ai/settings (no change)", "/api/ai/settings", "PATCH", await call("PATCH", "/api/ai/settings", { body: {} }));
   check("PATCH /api/ai/settings (bad value)", "/api/ai/settings", "PATCH", await call("PATCH", "/api/ai/settings", { body: { batch_size: 1000 } }));
   check("GET /api/llm/usage?from&to", "/api/llm/usage", "GET", await call("GET", "/api/llm/usage?from=2026-01-01&to=2026-12-31"));
@@ -561,9 +563,8 @@ try {
   const goLive = await call("GET", "/api/go-live");
   check("GET /api/go-live", "/api/go-live", "GET", goLive);
   // A finished run the overview shows, or else the one contract-seed.sql adds under a fixed id.
-  const shown = (goLive.json?.clients ?? [])
-    .flatMap((client) => client.configurations)
-    .flatMap((configuration) => [configuration.latest_run, configuration.pass])
+  const shown = (goLive.json?.locations ?? [])
+    .flatMap((location) => [location.latest_run, location.pass])
     .find((run) => run && run.status !== "running");
   const run = await call("GET", `/api/go-live-runs/${shown?.id ?? SEEDED_GO_LIVE_RUN}`);
   if (run.status === 200) {
@@ -575,7 +576,7 @@ try {
   }
   expectStatus("GET /api/go-live-runs/999999999", await call("GET", "/api/go-live-runs/999999999"), 404, "not_found");
   expectStatus("POST /api/go-live-runs/999999999/cancel", await call("POST", "/api/go-live-runs/999999999/cancel"), 404, "not_found");
-  expectStatus("POST /api/clients/999999999/go-live-test", await call("POST", "/api/clients/999999999/go-live-test"), 404, "not_found");
+  expectStatus("POST /api/locations/999999999/go-live-test", await call("POST", "/api/locations/999999999/go-live-test"), 404, "not_found");
 
   for (const action of ["approve", "reject", "regenerate"]) {
     const body = action === "reject" ? { reason: "x" } : action === "approve" ? { text: "x" } : { instructions: "x" };
@@ -601,8 +602,8 @@ try {
   } else if (requireData) {
     fail("GET /api/escalations", "no escalation to check; was the seed applied?");
   }
-  if (created.status === 201) {
-    const body = { event_type: "approval_needed", client_id: created.json.id, recipients: ["contract-check@example.com"] };
+  if (seededLocation) {
+    const body = { event_type: "approval_needed", location_id: seededLocation.id, recipients: ["contract-check@example.com"] };
     const rule = await call("POST", "/api/notification-rules", { body });
     check("POST /api/notification-rules", "/api/notification-rules", "POST", rule);
     check("POST /api/notification-rules (again)", "/api/notification-rules", "POST", await call("POST", "/api/notification-rules", { body }));
@@ -632,20 +633,22 @@ try {
   check("GET /api/notification-deliveries?escalation_id=1", "/api/notification-deliveries", "GET", await call("GET", "/api/notification-deliveries?escalation_id=1"));
   expectStatus("GET /api/notification-deliveries?escalation_id=x", await call("GET", "/api/notification-deliveries?escalation_id=x"), 400, "invalid_request");
 
-  // Phase 5: reports. A client of its own, because the one above is archived.
-  // It has no location and no review, so building its report asks neither
-  // Google nor the model for anything. Nothing is sent: sending needs the
-  // switch, recipients and a public bucket, and the check sets up none.
+  // Phase 5: reports, a location's (D-102): the seeded location's. What keeps
+  // the model out is the period, not the engine's settings (a local engine may
+  // have a model): January 2026 holds none of its reviews, and its made-up
+  // account has no visibility figures, so the summary stops at "nothing to
+  // summarize". A period with reviews would start a model call. Nothing is
+  // sent: sending needs the switch, recipients and a public bucket, and the
+  // check sets up none.
   check("GET /api/reports?status=draft", "/api/reports", "GET", await call("GET", "/api/reports?status=draft&per_page=5"));
-  expectStatus("GET /api/reports?client_id=x", await call("GET", "/api/reports?client_id=x"), 400, "invalid_request");
-  const reportClient = await call("POST", "/api/clients", { body: { name: `Contract check reports ${new Date().toISOString()}` } });
-  if (reportClient.status === 201) {
-    const clientId = reportClient.json.id;
+  expectStatus("GET /api/reports?location_id=x", await call("GET", "/api/reports?location_id=x"), 400, "invalid_request");
+  if (seededLocation) {
+    const locationId = seededLocation.id;
     const period = { period_start: "2026-01-01", period_end: "2026-01-31", time_zone: "America/New_York" };
-    const made = await call("POST", `/api/clients/${clientId}/reports`, { body: period });
-    check("POST /api/clients/{id}/reports", "/api/clients/{id}/reports", "POST", made);
-    check("POST /api/clients/{id}/reports (upside down)", "/api/clients/{id}/reports", "POST", await call("POST", `/api/clients/${clientId}/reports`, { body: { ...period, period_end: "2025-12-01" } }));
-    check("POST /api/clients/{id}/reports (bad zone)", "/api/clients/{id}/reports", "POST", await call("POST", `/api/clients/${clientId}/reports`, { body: { ...period, time_zone: "Mars/Base" } }));
+    const made = await call("POST", `/api/locations/${locationId}/reports`, { body: period });
+    check("POST /api/locations/{id}/reports", "/api/locations/{id}/reports", "POST", made);
+    check("POST /api/locations/{id}/reports (upside down)", "/api/locations/{id}/reports", "POST", await call("POST", `/api/locations/${locationId}/reports`, { body: { ...period, period_end: "2025-12-01" } }));
+    check("POST /api/locations/{id}/reports (bad zone)", "/api/locations/{id}/reports", "POST", await call("POST", `/api/locations/${locationId}/reports`, { body: { ...period, time_zone: "Mars/Base" } }));
     if (made.status === 201) {
       const path = `/api/reports/${made.json.id}`;
       // Its job runs within a second or two.
@@ -670,11 +673,11 @@ try {
       }
       check(`POST ${path}/reject`, "/api/reports/{id}/reject", "POST", await call("POST", `${path}/reject`));
       check(`POST ${path}/reject (again)`, "/api/reports/{id}/reject", "POST", await call("POST", `${path}/reject`));
-      check(`GET /api/reports?client_id=${clientId}`, "/api/reports", "GET", await call("GET", `/api/reports?client_id=${clientId}`));
+      check(`GET /api/reports?location_id=${locationId}`, "/api/reports", "GET", await call("GET", `/api/reports?location_id=${locationId}`));
     }
-    const schedule = await call("POST", "/api/report-schedules", { body: { client_id: clientId, frequency: "monthly", month_day: 5, time: "09:00", time_zone: "America/New_York" } });
+    const schedule = await call("POST", "/api/report-schedules", { body: { location_id: locationId, frequency: "monthly", month_day: 5, time: "09:00", time_zone: "America/New_York" } });
     check("POST /api/report-schedules", "/api/report-schedules", "POST", schedule);
-    check("POST /api/report-schedules (no weekday)", "/api/report-schedules", "POST", await call("POST", "/api/report-schedules", { body: { client_id: clientId, frequency: "weekly", time: "09:00", time_zone: "America/New_York" } }));
+    check("POST /api/report-schedules (no weekday)", "/api/report-schedules", "POST", await call("POST", "/api/report-schedules", { body: { location_id: locationId, frequency: "weekly", time: "09:00", time_zone: "America/New_York" } }));
     if (schedule.status === 201) {
       const path = `/api/report-schedules/${schedule.json.id}`;
       check(`PATCH ${path}`, "/api/report-schedules/{id}", "PATCH", await call("PATCH", path, { body: { frequency: "weekly", weekday: 1, enabled: false } }));
@@ -683,16 +686,19 @@ try {
       check(`DELETE ${path}`, "/api/report-schedules/{id}", "DELETE", await call("DELETE", path));
       check(`DELETE ${path} (again)`, "/api/report-schedules/{id}", "DELETE", await call("DELETE", path));
     }
-    // A client's recipients are a rule; one for every client is refused.
-    check("POST /api/notification-rules (client_report)", "/api/notification-rules", "POST", await call("POST", "/api/notification-rules", { body: { event_type: "client_report", client_id: clientId, recipients: ["contract-check@example.com"] } }));
-    expectStatus("POST /api/notification-rules (client_report, no client)", await call("POST", "/api/notification-rules", { body: { event_type: "client_report", recipients: ["contract-check@example.com"] } }), 400, "invalid_request");
-    check(`PATCH /api/clients/${clientId} (archive)`, "/api/clients/{id}", "PATCH", await call("PATCH", `/api/clients/${clientId}`, { body: { archived: true } }));
+    // A location's recipients are a rule; one for every location is refused.
+    const recipients = await call("POST", "/api/notification-rules", { body: { event_type: "location_report", location_id: locationId, recipients: ["contract-check@example.com"] } });
+    check("POST /api/notification-rules (location_report)", "/api/notification-rules", "POST", recipients);
+    if (recipients.status === 201) check("DELETE the location_report rule", "/api/notification-rules/{id}", "DELETE", await call("DELETE", `/api/notification-rules/${recipients.json.id}`));
+    expectStatus("POST /api/notification-rules (location_report, no location)", await call("POST", "/api/notification-rules", { body: { event_type: "location_report", recipients: ["contract-check@example.com"] } }), 400, "invalid_request");
+  } else if (requireData) {
+    fail("POST /api/locations/{id}/reports", "the seeded location is missing; was the seed applied?");
   }
   expectStatus("GET /api/reports/999999999", await call("GET", "/api/reports/999999999"), 404, "not_found");
   expectStatus("GET /api/reports/999999999/html", await call("GET", "/api/reports/999999999/html"), 404, "not_found");
   expectStatus("POST /api/reports/999999999/send", await call("POST", "/api/reports/999999999/send"), 404, "not_found");
   expectStatus("POST /api/report-share-links/999999999/revoke", await call("POST", "/api/report-share-links/999999999/revoke"), 404, "not_found");
-  expectStatus("POST /api/clients/999999999/reports", await call("POST", "/api/clients/999999999/reports", { body: { period_start: "2026-01-01", period_end: "2026-01-31" } }), 404, "not_found");
+  expectStatus("POST /api/locations/999999999/reports", await call("POST", "/api/locations/999999999/reports", { body: { period_start: "2026-01-01", period_end: "2026-01-31" } }), 404, "not_found");
 
   check("POST /api/locations/discover", "/api/locations/discover", "POST", await call("POST", "/api/locations/discover"));
   check("GET /api/audit-log?action=client.create", "/api/audit-log", "GET", await call("GET", "/api/audit-log?action=client.create"));
@@ -701,7 +707,8 @@ try {
   expectStatus("POST /api/clients without the CSRF token", await call("POST", "/api/clients", { body: { name: "x" }, csrf: false }), 403, "csrf_token_invalid");
   expectStatus("GET /api/clients/999999999", await call("GET", "/api/clients/999999999"), 404, "not_found");
   expectStatus("GET /api/reviews?rating=9", await call("GET", "/api/reviews?rating=9"), 400, "invalid_request");
-  expectStatus("DELETE /api/clients/1", await call("DELETE", "/api/clients/1"), 405, "method_not_allowed");
+  expectStatus("DELETE /api/clients/999999999", await call("DELETE", "/api/clients/999999999"), 404, "not_found");
+  expectStatus("PUT /api/clients/1", await call("PUT", "/api/clients/1", { body: {} }), 405, "method_not_allowed");
   expectStatus("GET unknown path", await call("GET", "/api/this-path-does-not-exist"), 404, "not_found");
 
   // 5. Request bodies: what the spec does not allow is refused, on every route with a body.

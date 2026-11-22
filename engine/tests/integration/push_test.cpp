@@ -34,7 +34,7 @@ protected:
                                                    bool push_configured = true) {
         return as_test([&](pqxx::work& tx, audit::Writer& audit) {
             auto result = repo::create_rule(
-                tx, audit, {.event_type = event_type, .channel = channel, .client_id = std::nullopt, .recipients = recipients}, push_configured);
+                tx, audit, {.event_type = event_type, .channel = channel, .location_id = std::nullopt, .recipients = recipients}, push_configured);
             if (!result) audit.nothing_changed();
             return result;
         });
@@ -56,7 +56,6 @@ protected:
     repo::NotificationEvent escalation(std::string key = "case:7:opened:1") {
         return {.type = "escalation",
                 .key = std::move(key),
-                .client_id = buffet_client_,
                 .location_id = buffet_,
                 .review_id = std::nullopt,
                 .subject = "Escalation: Gangnam AYCE Buffet - Illness or food poisoning",
@@ -89,7 +88,7 @@ TEST_F(Push, APushRuleIsForEscalationsAndSystemProblemsOnAnEngineThatCanPush) {
     EXPECT_EQ(make_rule("escalation", "push", {"x@xvisionmediaus.com"}).error().code, "rule_exists");
 
     EXPECT_EQ(make_rule("approval_needed", "push", {"x@xvisionmediaus.com"}).error().kind, repo::Failure::Kind::invalid);
-    EXPECT_EQ(make_rule("client_report", "push", {"x@xvisionmediaus.com"}).error().kind, repo::Failure::Kind::invalid);
+    EXPECT_EQ(make_rule("location_report", "push", {"x@xvisionmediaus.com"}).error().kind, repo::Failure::Kind::invalid);
     EXPECT_EQ(make_rule("escalation", "sms", {"x@xvisionmediaus.com"}).error().kind, repo::Failure::Kind::invalid);
     EXPECT_EQ(make_rule("system_problem", "push", {"x@xvisionmediaus.com"}, false).error().code, "push_not_configured");
     // The database holds the same rule.
@@ -187,7 +186,7 @@ TEST_F(Push, ANetworkFailureIsRetriedAndThenSent) {
     ASSERT_TRUE(make_rule("system_problem", "push", {"owner@xvisionmediaus.com"}));
     phone("owner@xvisionmediaus.com", 'a');
     push_.failures.push_back({notify::SendError::Kind::transient, "network error: timed out"});
-    emit({.type = "system_problem", .key = "p1", .client_id = std::nullopt, .location_id = std::nullopt, .review_id = std::nullopt,
+    emit({.type = "system_problem", .key = "p1", .location_id = std::nullopt, .review_id = std::nullopt,
           .subject = "Lost access to a location", .body = "Details.", .link_path = "/#/status"});
     run_jobs();
     EXPECT_EQ(push_delivery("status || ' ' || status_reason"), "pending network error: timed out");

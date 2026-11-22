@@ -142,7 +142,7 @@ model::AutoPostingOverview auto_posting_overview(pqxx::transaction_base& tx, cor
                     iso("auto_post_paused_at")),
         {}, db::FilledLater{"locations"});
     for (auto& row : db::rows_as<model::AutoPosting>(
-             tx, location_select() + " WHERE l.client_id IS NOT NULL AND NOT c.archived ORDER BY lower(l.title), l.id",
+             tx, location_select() + " WHERE l.enabled ORDER BY lower(l.title), l.id",
              pqxx::params{to_timestamptz(now - kAutoPostCapWindow)}, kFromPolicyAndGoLive)) {
         out.locations.push_back(to_auto_posting(tx, std::move(row)));
     }
@@ -153,8 +153,7 @@ Result<model::AutoPosting> update_auto_posting(pqxx::transaction_base& tx, audit
                                                const AutoPostingPatch& patch) {
     const auto rows = tx.exec(
         "SELECT l.auto_post_enabled, l.auto_post_five_star, l.auto_post_four_star, l.auto_post_daily_cap, l.time_zone, "
-        "l.client_id IS NOT NULL AND l.access_status = 'active' AND NOT coalesce(c.archived, true), l.auto_post_pause_after_failures "
-        "FROM locations l LEFT JOIN clients c ON c.id = l.client_id WHERE l.id = $1 FOR UPDATE OF l",
+        "l.enabled AND l.access_status = 'active', l.auto_post_pause_after_failures FROM locations l WHERE l.id = $1 FOR UPDATE",
         pqxx::params{location_id});
     if (rows.empty()) return not_found("location");
     const bool old_enabled = rows[0][0].as<bool>();
@@ -185,7 +184,7 @@ Result<model::AutoPosting> update_auto_posting(pqxx::transaction_base& tx, audit
     }
     if (enabled) {
         // What must hold while auto-posting is on, checked on every change.
-        if (!synced) return invalid("Auto-posting needs a location that is linked to an active client and still accessible.");
+        if (!synced) return invalid("Auto-posting needs a location that is switched on and still accessible.");
         if (!five && !four) return invalid("Choose which star ratings may be answered automatically before switching auto-posting on.");
         const auto settings = stored_reply_settings(tx, location_id);
         if (!settings) return invalid("The location's reply policy can't be read.");
@@ -242,7 +241,7 @@ bool pause_auto_posting(pqxx::transaction_base& tx, std::optional<std::int64_t> 
     const auto rows = tx.exec(std::format("UPDATE {} SET auto_post_paused_at = $2::timestamptz, auto_post_pause_reason = $3, "
                                           "auto_post_pause_detail = $4, updated_at = $2::timestamptz "
                                           "WHERE {} AND auto_post_paused_at IS NULL RETURNING {}",
-                                          scope.table(), scope.row(), location_id ? "title, client_id" : "1"),
+                                          scope.table(), scope.row(), location_id ? "title" : "1"),
                               pqxx::params{location_id, now_text, std::string(reason), detail});
     if (rows.empty()) return false;
     audit::record(tx, auto_reply(),
@@ -253,7 +252,6 @@ bool pause_auto_posting(pqxx::transaction_base& tx, std::optional<std::int64_t> 
         emit(tx,
              {.type = std::string(kEventSystemProblem),
               .key = std::format("auto-post-pause:location:{}:{}", *location_id, now_text),
-              .client_id = rows[0][1].as<std::optional<std::int64_t>>(),
               .location_id = location_id,
               .review_id = std::nullopt,
               .subject = std::format("Auto-posting paused: {}", title),
@@ -266,7 +264,6 @@ bool pause_auto_posting(pqxx::transaction_base& tx, std::optional<std::int64_t> 
         emit(tx,
              {.type = std::string(kEventSystemProblem),
               .key = std::format("auto-post-pause:all:{}", now_text),
-              .client_id = std::nullopt,
               .location_id = std::nullopt,
               .review_id = std::nullopt,
               .subject = "Auto-posting paused for every location",

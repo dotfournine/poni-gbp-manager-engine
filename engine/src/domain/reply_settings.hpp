@@ -44,7 +44,7 @@ struct LengthLimits {
 BOOST_DESCRIBE_STRUCT(LengthLimits, (), (rating_only, positive, complaint, severity))
 
 struct Voice {
-    // How replies refer to the business. Empty: the client's name.
+    // How replies refer to the business. Empty: the location's title (D-102).
     std::string reply_name;
     // The only facts about the business the generator may rely on.
     std::vector<std::string> business_facts;
@@ -75,8 +75,8 @@ BOOST_DESCRIBE_STRUCT(Voice, (),
                       (reply_name, business_facts, sign_off, owner_name, emoji, promos_allowed, contact_allowed,
                        words_to_avoid, length, style_notes, example_replies, temperature, base_style))
 
-// How replies and posts name the business: the voice's reply_name, or the client's name.
-std::string business_name(const Voice& voice, std::string_view client_name);
+// How replies and posts name the business: the voice's reply_name, or the location's title (D-102).
+std::string business_name(const Voice& voice, std::string_view location_title);
 
 // The length a reply in `language` and reply `mode` must have: the writer is
 // told it and the check holds the reply to it. A language without limits

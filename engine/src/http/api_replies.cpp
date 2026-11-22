@@ -161,7 +161,6 @@ void add_reply_routes(Router& router, const Api& api, jobs::ReviewPipeline& pipe
                    repo::EscalationFilter filter;
                    bool bad = false;
                    read_choice(query, "status", repo::kEscalationStatuses, filter.status, bad);
-                   filter.client_id = query.integer("client_id", bad);
                    filter.location_id = query.integer("location_id", bad);
                    filter.assignee_id = query.integer("assignee_id", bad);
                    if (!read_page(query, filter.page, bad)) co_return bad_query();
@@ -285,7 +284,6 @@ void add_reply_routes(Router& router, const Api& api, jobs::ReviewPipeline& pipe
                                tx,
                                {.type = std::string(repo::kEventTest),
                                 .key = std::format("test:{}", db::to_timestamptz(audit.now())),
-                                .client_id = std::nullopt,
                                 .location_id = std::nullopt,
                                 .review_id = std::nullopt,
                                 .subject = "Test message from PONI GBP Manager",

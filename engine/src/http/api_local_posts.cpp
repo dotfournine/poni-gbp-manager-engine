@@ -89,7 +89,6 @@ void add_local_post_routes(Router& router, const Api& api, storage::ObjectStore*
                    const QueryParams query(request.query);
                    repo::LocalPostFilter filter;
                    bool bad = false;
-                   filter.client_id = query.integer("client_id", bad);
                    filter.location_id = query.integer("location_id", bad);
                    read_choices(query, "status", repo::kLocalPostStatuses, filter.statuses, bad);
                    read_choices(query, "google_state", repo::kLocalPostGoogleStateFilter, filter.google_states, bad);

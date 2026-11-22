@@ -34,10 +34,12 @@ protected:
         sync_.emplace(db(), clock_, gbp_, queue(), jobs::SyncOptions{});
     }
 
-    // Discovers both locations and links the spa to a client. Returns the spa's id.
-    std::int64_t linked_spa() {
+    // Discovers both locations and switches the spa on, with no client (D-102). Returns the spa's id.
+    std::int64_t enabled_spa() {
         await(sync_->discover_locations());
-        return link(std::string(kSpa), make_client("LU DREAM SPA"));
+        const auto spa = location_id(kSpa);
+        switch_location(spa, true);
+        return spa;
     }
 
     // `n` reviews of the spa, r1 the oldest, one minute apart.
@@ -122,8 +124,8 @@ TEST_F(SyncTest, AMovedLocationKeepsItsRowAndRebindsTheAccount) {
 
 // ---- reviews: full sync ----------------------------------------------------------
 
-TEST_F(SyncTest, LinkingALocationQueuesOneFullSyncAndPollingWaitsForIt) {
-    linked_spa();
+TEST_F(SyncTest, SwitchingALocationOnQueuesOneFullSyncAndPollingWaitsForIt) {
+    enabled_spa();
     seed_reviews(3);
 
     await(sync_->poll_reviews());
@@ -134,7 +136,7 @@ TEST_F(SyncTest, LinkingALocationQueuesOneFullSyncAndPollingWaitsForIt) {
 }
 
 TEST_F(SyncTest, FullSyncStoresEveryReviewAcrossPages) {
-    const auto spa = linked_spa();
+    const auto spa = enabled_spa();
     seed_reviews(120);  // three pages of 50
 
     await(sync_->full_sync(spa));
@@ -153,7 +155,7 @@ TEST_F(SyncTest, FullSyncStoresEveryReviewAcrossPages) {
 }
 
 TEST_F(SyncTest, SyncingTwiceChangesNothing) {
-    const auto spa = linked_spa();
+    const auto spa = enabled_spa();
     seed_reviews(60);
     await(sync_->full_sync(spa));
     const auto changed_before = value<std::string>("SELECT max(last_changed_at)::text FROM reviews");
@@ -169,7 +171,7 @@ TEST_F(SyncTest, SyncingTwiceChangesNothing) {
 }
 
 TEST_F(SyncTest, StoresTheWholeReviewIncludingGooglesTranslationSplit) {
-    const auto spa = linked_spa();
+    const auto spa = enabled_spa();
     gbp_.put(make_review(kAccount, kSpa, "zh", "FIVE",
                          "(Translated by Google) A very comfortable experience\n\n(Original)\n很舒服的一次体验",
                          "2026-10-01T10:00:00.123456789Z", "2026-10-02T11:00:00Z"));
@@ -200,7 +202,7 @@ TEST_F(SyncTest, StoresTheWholeReviewIncludingGooglesTranslationSplit) {
 }
 
 TEST_F(SyncTest, AReviewWithUnreadableTimestampsIsSkippedNotFatal) {
-    const auto spa = linked_spa();
+    const auto spa = enabled_spa();
     seed_reviews(2);
     gbp_.put(make_review(kAccount, kSpa, "odd", "FIVE", "x", "yesterday", "2026-10-03T10:00:00Z"));
     await(sync_->full_sync(spa));
@@ -209,7 +211,7 @@ TEST_F(SyncTest, AReviewWithUnreadableTimestampsIsSkippedNotFatal) {
 }
 
 TEST_F(SyncTest, AReviewIsRemovedOnlyWhenGoogleSaysItIsGone) {
-    const auto spa = linked_spa();
+    const auto spa = enabled_spa();
     seed_reviews(10);
     await(sync_->full_sync(spa));
 
@@ -237,7 +239,7 @@ TEST_F(SyncTest, AReviewIsRemovedOnlyWhenGoogleSaysItIsGone) {
 }
 
 TEST_F(SyncTest, AnEmptyListFromGoogleDoesNotWipeTheStore) {
-    const auto spa = linked_spa();
+    const auto spa = enabled_spa();
     seed_reviews(10);
     await(sync_->full_sync(spa));
 
@@ -257,7 +259,7 @@ TEST_F(SyncTest, AnEmptyListFromGoogleDoesNotWipeTheStore) {
 }
 
 TEST_F(SyncTest, AFailedFullSyncIsRetriedAndShownOnTheLocation) {
-    const auto spa = linked_spa();
+    const auto spa = enabled_spa();
     seed_reviews(5);
     await(sync_->full_sync(spa));
     gbp_.fail_list = ApiError{ApiError::Kind::permission_denied, 403, "HTTP 403 PERMISSION_DENIED"};
@@ -271,7 +273,7 @@ TEST_F(SyncTest, AFailedFullSyncIsRetriedAndShownOnTheLocation) {
 // ---- reviews: polling ------------------------------------------------------------
 
 TEST_F(SyncTest, PollFindsANewReviewAndStopsAtTheFirstPageWithNothingNew) {
-    const auto spa = linked_spa();
+    const auto spa = enabled_spa();
     seed_reviews(120);
     await(sync_->full_sync(spa));
     await(sync_->poll_reviews());
@@ -292,7 +294,7 @@ TEST_F(SyncTest, PollFindsANewReviewAndStopsAtTheFirstPageWithNothingNew) {
 }
 
 TEST_F(SyncTest, EachLocationIsPolledAtItsOwnInterval) {
-    const auto spa = linked_spa();
+    const auto spa = enabled_spa();
     seed_reviews(3);
     await(sync_->full_sync(spa));
     await(sync_->poll_reviews());
@@ -309,9 +311,10 @@ TEST_F(SyncTest, EachLocationIsPolledAtItsOwnInterval) {
 
 TEST_F(SyncTest, OneBatchCallCoversEveryDueLocationOfAnAccount) {
     await(sync_->discover_locations());
-    const auto client = make_client("Both");
-    const auto spa = link(std::string(kSpa), client);
-    const auto buffet = link(std::string(kBuffet), client);
+    const auto spa = location_id(kSpa);
+    const auto buffet = location_id(kBuffet);
+    switch_location(spa, true);
+    switch_location(buffet, true);
     seed_reviews(2);
     gbp_.put(make_review(kAccount, kBuffet, "b1", "THREE", "Fine", "2026-10-05T00:00:00Z", "2026-10-05T00:00:00Z"));
     await(sync_->full_sync(spa));
@@ -325,7 +328,7 @@ TEST_F(SyncTest, OneBatchCallCoversEveryDueLocationOfAnAccount) {
 }
 
 TEST_F(SyncTest, PollNoticesAnEditAndAReplyPostedOutsideTheSystem) {
-    const auto spa = linked_spa();
+    const auto spa = enabled_spa();
     gbp_.put(make_review(kAccount, kSpa, "a", "FIVE", "Nice", "2026-11-01T10:00:00Z", "2026-11-01T10:00:00Z"));
     gbp_.put(make_review(kAccount, kSpa, "b", "FIVE", "Good", "2026-11-02T10:00:00Z", "2026-11-02T10:00:00Z"));
     await(sync_->full_sync(spa));
@@ -345,7 +348,7 @@ TEST_F(SyncTest, PollNoticesAnEditAndAReplyPostedOutsideTheSystem) {
 }
 
 TEST_F(SyncTest, AFailedPollIsRecordedAndTheNextOneClearsIt) {
-    const auto spa = linked_spa();
+    const auto spa = enabled_spa();
     seed_reviews(2);
     await(sync_->full_sync(spa));
     gbp_.fail_batch = ApiError{ApiError::Kind::rate_limited, 429, "HTTP 429 RESOURCE_EXHAUSTED"};
@@ -359,23 +362,25 @@ TEST_F(SyncTest, AFailedPollIsRecordedAndTheNextOneClearsIt) {
     EXPECT_EQ(count("locations WHERE id = " + std::to_string(spa) + " AND last_sync_error IS NULL"), 1);
 }
 
-TEST_F(SyncTest, OnlyLinkedAccessibleLocationsOfActiveClientsAreSynced) {
-    const auto spa = linked_spa();
+TEST_F(SyncTest, OnlyLocationsThatAreSwitchedOnAndAccessibleAreSynced) {
+    const auto spa = enabled_spa();
     seed_reviews(2);
     await(sync_->full_sync(spa));
     gbp_.put(make_review(kAccount, kBuffet, "b1", "FIVE", "x", "2026-10-05T00:00:00Z", "2026-10-05T00:00:00Z"));
     const auto buffet = value<std::int64_t>("SELECT id FROM locations WHERE gbp_location_id = '9002'");
 
-    await(sync_->full_sync(buffet));  // not linked to a client
+    // Linked to a client, and never switched on: linking switches nothing on (D-102).
+    link(kBuffet, make_client("Gangnam AYCE Buffet"));
+    await(sync_->full_sync(buffet));
     EXPECT_EQ(count("reviews WHERE location_id = " + std::to_string(buffet)), 0);
 
-    exec("UPDATE clients SET archived = true");
+    switch_location(spa, false);
     clock_.advance(1h);
     await(sync_->poll_reviews());
-    EXPECT_EQ(gbp_.batch_calls, 0) << "an archived client's locations rest";
+    EXPECT_EQ(gbp_.batch_calls, 0) << "a location that is switched off rests";
     EXPECT_EQ(count("jobs WHERE kind = 'reviews.full_sync'"), 0);
 
-    exec("UPDATE clients SET archived = false");
+    switch_location(spa, true);
     exec("UPDATE locations SET access_status = 'lost'");
     await(sync_->poll_reviews());
     EXPECT_EQ(gbp_.batch_calls, 0) << "so does a location we lost access to";
@@ -384,7 +389,7 @@ TEST_F(SyncTest, OnlyLinkedAccessibleLocationsOfActiveClientsAreSynced) {
 // ---- reviews: notifications ------------------------------------------------------
 
 TEST_F(SyncTest, ANotifiedReviewIsFetchedAndStored) {
-    const auto spa = linked_spa();
+    const auto spa = enabled_spa();
     seed_reviews(1);
     await(sync_->full_sync(spa));
     gbp_.put(make_review(kAccount, kSpa, "fresh", "FOUR", "Just now", "2026-11-10T11:59:00Z", "2026-11-10T11:59:00Z"));
@@ -395,7 +400,7 @@ TEST_F(SyncTest, ANotifiedReviewIsFetchedAndStored) {
 }
 
 TEST_F(SyncTest, ANotifiedReviewThatIsGoneIsMarkedRemoved) {
-    const auto spa = linked_spa();
+    const auto spa = enabled_spa();
     seed_reviews(2);
     await(sync_->full_sync(spa));
     gbp_.remove(std::string(kSpa), "r1");
@@ -409,22 +414,22 @@ TEST_F(SyncTest, ANotifiedReviewThatIsGoneIsMarkedRemoved) {
 }
 
 TEST_F(SyncTest, NotificationsForOtherLocationsOrWithBadNamesAreIgnored) {
-    linked_spa();
+    enabled_spa();
     gbp_.put(make_review(kAccount, kBuffet, "b1", "FIVE", "x", "2026-10-05T00:00:00Z", "2026-10-05T00:00:00Z"));
-    await(sync_->ingest_notification("accounts/111/locations/9002/reviews/b1"));  // the buffet isn't linked
+    await(sync_->ingest_notification("accounts/111/locations/9002/reviews/b1"));  // the buffet is switched off
     await(sync_->ingest_notification("not a review name"));
     EXPECT_EQ(gbp_.get_calls, 0);
     EXPECT_EQ(count("reviews"), 0);
 }
 
 TEST_F(SyncTest, ANotificationThatCannotBeFetchedIsRetried) {
-    linked_spa();
+    enabled_spa();
     gbp_.fail_get = ApiError{ApiError::Kind::unavailable, 503, "HTTP 503"};
     EXPECT_THROW(await(sync_->ingest_notification("accounts/111/locations/9001/reviews/x")), std::runtime_error);
 }
 
 TEST_F(SyncTest, PullingNotificationsEnqueuesEachReviewOnceAndAcknowledges) {
-    linked_spa();
+    enabled_spa();
     test::FakeSubscriber subscriber;
     subscriber.publish("m1", R"({"type": "NEW_REVIEW", "review": "accounts/111/locations/9001/reviews/n1", "location": "locations/9001"})");
     subscriber.publish("m2", R"({"type": "GOOGLE_UPDATE", "location": "locations/9001"})");
@@ -474,7 +479,7 @@ TEST_F(SyncTest, SchedulerQueueAndWorkersCarryANewReviewIntoTheStore) {
     };
 
     run_all();  // discovery finds the locations
-    link(std::string(kSpa), make_client("LU DREAM SPA"));
+    switch_location(location_id(kSpa), true);
     seed_reviews(3);
     clock_.advance(1min);
     run_all();  // the poll job queues the full sync, which the worker runs next

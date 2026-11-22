@@ -1,4 +1,4 @@
-// Client reports end to end (FR-8, D-085), through the router and the jobs
+// A location's reports end to end (FR-8, D-085, D-102), through the router and the jobs
 // as the engine assembles them, with a fake Performance API, a scripted
 // model, a bucket held in memory and a channel that keeps what it is given.
 // Nothing leaves the test: no Google, no model, no bucket, no email.
@@ -100,8 +100,8 @@ protected:
     }
 
     // "Generate now" for October 2026 (or another period), with its job run. Returns the report's id.
-    std::int64_t generate(std::int64_t client, const std::string& from = "2026-10-01", const std::string& to = "2026-10-31") {
-        const auto response = post(std::format("/api/clients/{}/reports", client),
+    std::int64_t generate(std::int64_t location, const std::string& from = "2026-10-01", const std::string& to = "2026-10-31") {
+        const auto response = post(std::format("/api/locations/{}/reports", location),
                                    std::format(R"({{"period_start": "{}", "period_end": "{}"}})", from, to));
         EXPECT_EQ(response.status, 201u) << response.body;
         if (response.status != 201) return 0;
@@ -117,16 +117,16 @@ protected:
     }
     std::string html(std::int64_t id) { return value<std::string>(std::format("SELECT html FROM reports WHERE id = {}", id)); }
 
-    void recipients(std::int64_t client, const std::string& list) {
+    void recipients(std::int64_t location, const std::string& list) {
         const auto response = post("/api/notification-rules",
-                                   std::format(R"({{"event_type": "client_report", "client_id": {}, "recipients": {}}})", client, list));
+                                   std::format(R"({{"event_type": "location_report", "location_id": {}, "recipients": {}}})", location, list));
         ASSERT_EQ(response.status, 201u) << response.body;
     }
     // What a person does on the settings page; in this test's throwaway database.
     void sending_on() { exec("UPDATE system_settings SET email_sending_enabled = true"); }
 
-    std::int64_t schedule(std::int64_t client, const std::string& rest) {
-        const auto response = post("/api/report-schedules", std::format(R"({{"client_id": {}, {}}})", client, rest));
+    std::int64_t schedule(std::int64_t location, const std::string& rest) {
+        const auto response = post("/api/report-schedules", std::format(R"({{"location_id": {}, {}}})", location, rest));
         EXPECT_EQ(response.status, 201u) << response.body;
         return response.status == 201 ? json(response).at("id").as_int64() : 0;
     }
@@ -152,16 +152,21 @@ protected:
 
 // ---- building ------------------------------------------------------------------------
 
-TEST_F(Reports, AReportCountsTheReviewsOfItsPeriodInTheClientsTimeZone) {
+TEST_F(Reports, AReportCountsTheReviewsOfItsLocationAndPeriodInTheLocationsTimeZone) {
     // October 2026 in New York. The edges: 03:30 UTC is 23:30 the evening before.
     const auto praised = add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely head spa", "2026-10-05T17:00:00Z");
     add_review(chelsea_, "a2", 4, "2026-10-06T15:00:00Z", "Good");
-    const auto complaint = add_review(uptown_, "b1", 1, "2026-10-07T15:00:00Z", "The room was cold and nobody cared");
-    add_review(uptown_, "edge-in", 5, "2026-11-01T03:30:00Z", "Still October here");
+    const auto complaint = add_review(chelsea_, "b1", 1, "2026-10-07T15:00:00Z", "The room was cold and nobody cared");
+    add_review(chelsea_, "edge-in", 5, "2026-11-01T03:30:00Z", "Still October here");
     add_review(chelsea_, "edge-out", 2, "2026-10-01T03:30:00Z", "Still September here");
     add_review(chelsea_, "sep", 3, "2026-09-15T15:00:00Z", "September");
     add_review(chelsea_, "nov", 1, "2026-11-05T15:00:00Z", "November");
-    add_review(buffet_, "other-client", 1, "2026-10-10T15:00:00Z", "Another client's review");
+    // The client's other location is not this location's report (D-102).
+    add_review(uptown_, "other-location", 1, "2026-10-10T15:00:00Z", "Another location's review");
+    const auto elsewhere = add_review(uptown_, "other-case", 1, "2026-10-11T15:00:00Z", "Cold at the other one");
+    exec(std::format("INSERT INTO cases (review_id, opened_by, opened_at, updated_at) "
+                     "VALUES ({}, 'severity_flag', '2026-10-11T16:00:00Z', '2026-10-11T16:00:00Z')",
+                     elsewhere));
     const auto removed = add_review(chelsea_, "gone", 1, "2026-10-08T15:00:00Z", "Removed by Google");
     exec(std::format("UPDATE reviews SET removed_at = now() WHERE id = {}", removed));
     analyze(praised, "positive", R"([{"id": "treatment_quality", "polarity": "positive"}])",
@@ -171,10 +176,11 @@ TEST_F(Reports, AReportCountsTheReviewsOfItsPeriodInTheClientsTimeZone) {
                      "VALUES ({}, 'severity_flag', '2026-10-07T16:00:00Z', '2026-10-07T16:00:00Z')",
                      complaint));
 
-    const auto id = generate(spa_client_);
+    const auto id = generate(chelsea_);
     EXPECT_EQ(status(id), "draft");
     const auto d = data(id);
-    EXPECT_EQ(d.at("client_name").as_string(), "LU DREAM SPA");
+    EXPECT_EQ(d.at("location_id").as_int64(), chelsea_);
+    EXPECT_EQ(d.at("location_title").as_string(), "LU DREAM SPA - Chelsea");
     EXPECT_EQ(d.at("time_zone").as_string(), "America/New_York");
     EXPECT_EQ(d.at("previous_start").as_string(), "2026-09-01");
     const auto& now = d.at("reviews");
@@ -188,30 +194,34 @@ TEST_F(Reports, AReportCountsTheReviewsOfItsPeriodInTheClientsTimeZone) {
     EXPECT_EQ(now.at("negative").as_int64(), 1);
     EXPECT_EQ(d.at("previous").at("new_reviews").as_int64(), 2);  // the September one and the edge
     EXPECT_DOUBLE_EQ(d.at("previous").at("average_rating").to_number<double>(), 2.5);
-    // The overall rating: every review of the client up to the end of October that was not removed.
+    // The overall rating: every review of the location up to the end of October that was not removed.
     EXPECT_EQ(d.at("running_count").as_int64(), 6);
     EXPECT_EQ(d.at("topics_praised").at(0).at("label").as_string(), "Treatment quality and technique");
     EXPECT_EQ(d.at("items_praised").at(0).at("label").as_string(), "Head spa");
     EXPECT_EQ(d.at("topics_complained").at(0).at("count").as_int64(), 1);
     EXPECT_EQ(d.at("escalations_opened").as_int64(), 1);
     EXPECT_EQ(d.at("escalations_closed").as_int64(), 0);
-    // Per location, by name.
-    ASSERT_EQ(d.at("locations").as_array().size(), 2u);
+    // The one location, by name.
+    ASSERT_EQ(d.at("locations").as_array().size(), 1u);
     EXPECT_EQ(d.at("locations").at(0).at("title").as_string(), "LU DREAM SPA - Chelsea");
-    EXPECT_EQ(d.at("locations").at(0).at("reviews").at("new_reviews").as_int64(), 2);
-    EXPECT_EQ(d.at("locations").at(1).at("reviews").at("new_reviews").as_int64(), 2);
+    EXPECT_EQ(d.at("locations").at(0).at("reviews").at("new_reviews").as_int64(), 4);
     EXPECT_EQ(d.at("highlights_worst").at(0).at("text").as_string(), "The room was cold and nobody cared");
 
     const auto page = html(id);
     EXPECT_THAT(page, HasSubstr("October 1 to 31, 2026"));
     EXPECT_THAT(page, HasSubstr("Lovely head spa"));
     EXPECT_THAT(page, HasSubstr("A Reviewer"));
-    EXPECT_THAT(page, Not(HasSubstr("Another client&#39;s review")));
+    EXPECT_THAT(page, HasSubstr("<h1>LU DREAM SPA - Chelsea</h1>"));
+    EXPECT_THAT(page, Not(HasSubstr("Another location&#39;s review")));
+    EXPECT_THAT(page, Not(HasSubstr("By location")));
     EXPECT_THAT(page, Not(HasSubstr("Removed by Google")));
 
     // The API's view of it, and the audit entry in the person's name.
-    const auto listed = read(std::format("/api/reports?client_id={}", spa_client_));
+    const auto listed = read(std::format("/api/reports?location_id={}", chelsea_));
     ASSERT_EQ(listed.at("total").as_int64(), 1);
+    EXPECT_EQ(read(std::format("/api/reports?location_id={}", uptown_)).at("total").as_int64(), 0);
+    EXPECT_EQ(listed.at("items").at(0).at("location_id").as_int64(), chelsea_);
+    EXPECT_EQ(listed.at("items").at(0).at("location_title").as_string(), "LU DREAM SPA - Chelsea");
     EXPECT_EQ(listed.at("items").at(0).at("new_reviews").as_int64(), 4);
     // The two headline figures are the ones the built report holds, read from its data, in the list and when one is read.
     EXPECT_DOUBLE_EQ(listed.at("items").at(0).at("average_rating").to_number<double>(), 3.75);
@@ -224,17 +234,20 @@ TEST_F(Reports, AReportCountsTheReviewsOfItsPeriodInTheClientsTimeZone) {
 
 // Which item types are people is read from the seeded profile (D-086): the
 // wellness profile's "therapist" is one, its "treatment" is not.
-TEST_F(Reports, NamedStaffAreListedApartFromTheItemsPerLocation) {
+TEST_F(Reports, NamedStaffAreListedApartFromTheItems) {
     const auto a = add_review(chelsea_, "s1", 5, "2026-10-05T15:00:00Z", "Anna was wonderful");
-    const auto b = add_review(uptown_, "s2", 5, "2026-10-06T15:00:00Z", "anna and the head spa");
-    const auto c = add_review(uptown_, "s3", 2, "2026-10-07T15:00:00Z", "Bo was rough");
-    add_review(uptown_, "s4", 4, "2026-10-08T15:00:00Z", "Nice");
+    const auto b = add_review(chelsea_, "s2", 5, "2026-10-06T15:00:00Z", "anna and the head spa");
+    const auto c = add_review(chelsea_, "s3", 2, "2026-10-07T15:00:00Z", "Bo was rough");
+    add_review(chelsea_, "s4", 4, "2026-10-08T15:00:00Z", "Nice");
+    // Someone at the client's other location is that location's.
+    const auto elsewhere = add_review(uptown_, "s5", 5, "2026-10-09T15:00:00Z", "Cara was great");
     analyze(a, "positive", "[]", R"([{"name": "Anna", "type": "therapist", "polarity": "positive"}])");
     analyze(b, "positive", "[]",
             R"([{"name": "anna", "type": "therapist", "polarity": "positive"}, {"name": "Head spa", "type": "treatment", "polarity": "positive"}])");
     analyze(c, "negative", "[]", R"([{"name": "Bo", "type": "therapist", "polarity": "negative"}])");
+    analyze(elsewhere, "positive", "[]", R"([{"name": "Cara", "type": "therapist", "polarity": "positive"}])");
 
-    const auto id = generate(spa_client_);
+    const auto id = generate(chelsea_);
     const auto d = data(id);
     EXPECT_EQ(d.at("version").as_int64(), 2);
     // The therapists are not items; the treatment is.
@@ -243,21 +256,21 @@ TEST_F(Reports, NamedStaffAreListedApartFromTheItemsPerLocation) {
     EXPECT_TRUE(d.at("items_complained").as_array().empty());
     const auto& staff = d.at("staff");
     EXPECT_EQ(staff.at("reviews_naming").as_int64(), 3);
-    // Anna at two locations is two people.
-    ASSERT_EQ(staff.at("recognized").as_array().size(), 2u);
+    // Anna and anna are one person, under the name as first written.
+    ASSERT_EQ(staff.at("recognized").as_array().size(), 1u);
     EXPECT_EQ(staff.at("recognized").at(0).at("name").as_string(), "Anna");
     EXPECT_EQ(staff.at("recognized").at(0).at("location_title").as_string(), "LU DREAM SPA - Chelsea");
+    EXPECT_EQ(staff.at("recognized").at(0).at("positive").as_int64(), 2);
     EXPECT_EQ(staff.at("recognized").at(0).at("rank").as_int64(), 1);
-    EXPECT_EQ(staff.at("recognized").at(1).at("name").as_string(), "anna");
-    EXPECT_EQ(staff.at("recognized").at(1).at("location_title").as_string(), "LU DREAM SPA - Upper East Side");
-    EXPECT_EQ(staff.at("recognized").at(1).at("rank").as_int64(), 1);
     ASSERT_EQ(staff.at("complained").as_array().size(), 1u);
     EXPECT_EQ(staff.at("complained").at(0).at("name").as_string(), "Bo");
     EXPECT_EQ(staff.at("complained").at(0).at("negative").as_int64(), 1);
 
     const auto page = html(id);
     EXPECT_THAT(page, HasSubstr("<h2>Employee recognition</h2>"));
-    EXPECT_THAT(page, HasSubstr("<th>Location</th>"));
+    // One location: no column that names it.
+    EXPECT_THAT(page, Not(HasSubstr("<th>Location</th>")));
+    EXPECT_THAT(page, Not(HasSubstr("Cara")));
     EXPECT_THAT(page, HasSubstr("Based on 3 reviews that named a staff member"));
 }
 
@@ -267,7 +280,7 @@ TEST_F(Reports, AnIndustryWithoutPeopleHasNoSectionAndAnOldReportIsSentAsItWas) 
     reseed("UPDATE kb_industries SET item_types = (SELECT jsonb_agg(t - 'person') FROM jsonb_array_elements(item_types) t)");
     const auto r = add_review(chelsea_, "s1", 5, "2026-10-05T15:00:00Z", "Anna was wonderful");
     analyze(r, "positive", "[]", R"([{"name": "Anna", "type": "therapist", "polarity": "positive"}])");
-    const auto id = generate(spa_client_);
+    const auto id = generate(chelsea_);
     const auto d = data(id);
     EXPECT_FALSE(d.as_object().contains("staff") && !d.at("staff").is_null());
     EXPECT_EQ(d.at("items_praised").at(0).at("label").as_string(), "Anna");
@@ -275,14 +288,14 @@ TEST_F(Reports, AnIndustryWithoutPeopleHasNoSectionAndAnOldReportIsSentAsItWas) 
 
     // What a report built before this version stored: no "staff", version 1.
     exec(std::format("UPDATE reports SET data = (data - 'staff') || '{{\"version\": 1}}' WHERE id = {}", id));
-    recipients(spa_client_, R"(["owner@luspa.test"])");
+    recipients(chelsea_, R"(["owner@luspa.test"])");
     sending_on();
     const auto response = post(std::format("/api/reports/{}/send", id));
     EXPECT_EQ(response.status, 200u) << response.body;
 }
 
-TEST_F(Reports, AClientWithoutAnyReviewGetsAReportThatSaysSo) {
-    const auto id = generate(buffet_client_);
+TEST_F(Reports, ALocationWithoutAnyReviewGetsAReportThatSaysSo) {
+    const auto id = generate(buffet_);
     EXPECT_EQ(status(id), "draft");
     const auto d = data(id);
     EXPECT_EQ(d.at("reviews").at("new_reviews").as_int64(), 0);
@@ -301,7 +314,7 @@ TEST_F(Reports, AClientWithoutAnyReviewGetsAReportThatSaysSo) {
 
 TEST_F(Reports, AReportStillBuildingHasNoFigures) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely head spa", "2026-10-05T17:00:00Z");
-    const auto response = post(std::format("/api/clients/{}/reports", spa_client_), R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})");
+    const auto response = post(std::format("/api/locations/{}/reports", chelsea_), R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})");
     ASSERT_EQ(response.status, 201u) << response.body;
     const auto made = json(response);
     EXPECT_EQ(made.at("status").as_string(), "building");
@@ -319,16 +332,16 @@ TEST_F(Reports, VisibilityComesFromGoogleWhenTheReportIsBuilt) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
     for (unsigned d = 1; d <= 31; ++d) {
         performance_.set("9001", "BUSINESS_IMPRESSIONS_MOBILE_MAPS", 2026y / October / d, 100);
-        performance_.set("9003", "BUSINESS_IMPRESSIONS_MOBILE_SEARCH", 2026y / October / d, 10);
+        performance_.set("9001", "BUSINESS_IMPRESSIONS_MOBILE_SEARCH", 2026y / October / d, 10);
     }
     for (unsigned d = 1; d <= 30; ++d) performance_.set("9001", "BUSINESS_IMPRESSIONS_MOBILE_MAPS", 2026y / September / d, 50);
     performance_.set("9001", "CALL_CLICKS", 2026y / October / 12, 9);
     performance_.keywords["9001"]["2026-10"] = {{"head spa nyc", 400, {}}, {"spa near me", {}, 15}};
+    // The numbers of the client's other location are not this report's.
+    performance_.set("9003", "CALL_CLICKS", 2026y / October / 12, 1000);
     performance_.keywords["9003"]["2026-10"] = {{"head spa nyc", 100, {}}};
-    // The other client's numbers are not this report's.
-    performance_.set("9002", "CALL_CLICKS", 2026y / October / 12, 1000);
 
-    const auto id = generate(spa_client_);
+    const auto id = generate(chelsea_);
     const auto v = data(id).at("visibility");
     EXPECT_TRUE(v.at("available").as_bool());
     EXPECT_TRUE(v.at("complete").as_bool());
@@ -338,8 +351,8 @@ TEST_F(Reports, VisibilityComesFromGoogleWhenTheReportIsBuilt) {
     EXPECT_EQ(v.at("totals").at("calls").as_int64(), 9);
     EXPECT_EQ(v.at("previous").at("maps_mobile").as_int64(), 1500);
     EXPECT_EQ(data(id).at("keywords").at("month").as_string(), "2026-10");
-    EXPECT_EQ(data(id).at("keywords").at("items").at(0).at("impressions").as_int64(), 500);
-    EXPECT_EQ(performance_.daily_calls, 2);  // one read per location, covering both periods
+    EXPECT_EQ(data(id).at("keywords").at("items").at(0).at("impressions").as_int64(), 400);
+    EXPECT_EQ(performance_.daily_calls, 1);  // one read of the location, covering both periods
     EXPECT_THAT(html(id), HasSubstr("head spa nyc"));
     EXPECT_THAT(html(id), HasSubstr("fewer than 15"));
 }
@@ -358,7 +371,7 @@ TEST_F(Reports, GooglesLagIsShownAsTheDayTheNumbersGoUpTo) {
     // No keywords for November yet: October's are shown, and say so.
     performance_.keywords["9002"]["2026-10"] = {{"buffet near me", 3000, {}}};
 
-    const auto id = generate(buffet_client_, "2026-11-02", "2026-11-08");
+    const auto id = generate(buffet_, "2026-11-02", "2026-11-08");
     const auto d = data(id);
     EXPECT_EQ(d.at("visibility").at("as_of").as_string(), "2026-11-05");
     EXPECT_FALSE(d.at("visibility").at("complete").as_bool());
@@ -374,7 +387,7 @@ TEST_F(Reports, AnOutageAtGoogleIsRetriedAndThenTheReportIsBuiltWithoutVisibilit
     for (int i = 0; i < repo::kBuildReportAttempts; ++i) {
         performance_.failures.push_back({google::ApiError::Kind::unavailable, 503, "backend error"});
     }
-    const auto id = generate(spa_client_);
+    const auto id = generate(chelsea_);
     EXPECT_EQ(status(id), "building");
     for (int attempt = 1; attempt < repo::kBuildReportAttempts; ++attempt) {
         clock_.advance(2h);
@@ -382,7 +395,7 @@ TEST_F(Reports, AnOutageAtGoogleIsRetriedAndThenTheReportIsBuiltWithoutVisibilit
     }
     EXPECT_EQ(status(id), "draft");
     const auto v = data(id).at("visibility");
-    // The first location's read failed for good; the second location answered, with nothing.
+    // The location's read failed for good.
     EXPECT_FALSE(v.at("available").as_bool());
     EXPECT_EQ(v.at("detail").as_string(), "backend error");
     // Google's error text stays off the page a client reads.
@@ -394,17 +407,16 @@ TEST_F(Reports, AnOutageAtGoogleIsRetriedAndThenTheReportIsBuiltWithoutVisibilit
 TEST_F(Reports, AnAccountThatIsNotConnectedDoesNotStopAReportAndIsNotRetried) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
     performance_.failures.push_back({google::ApiError::Kind::not_configured, 0, "no GBP account is connected"});
-    performance_.failures.push_back({google::ApiError::Kind::not_configured, 0, "no GBP account is connected"});
-    const auto id = generate(spa_client_);
+    const auto id = generate(chelsea_);
     EXPECT_EQ(status(id), "draft");
     EXPECT_THAT(html(id), Not(HasSubstr("no GBP account is connected")));
     EXPECT_EQ(data(id).at("visibility").at("detail").as_string(), "no GBP account is connected");
-    EXPECT_EQ(performance_.daily_calls, 2);
+    EXPECT_EQ(performance_.daily_calls, 1);
 }
 
 TEST_F(Reports, AJobThatKeepsFailingMarksTheReportFailed) {
     // A zone the system does not know any more: the job cannot work out the period.
-    const auto response = post(std::format("/api/clients/{}/reports", spa_client_),
+    const auto response = post(std::format("/api/locations/{}/reports", chelsea_),
                                R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})");
     ASSERT_EQ(response.status, 201u);
     const auto id = json(response).at("id").as_int64();
@@ -428,13 +440,15 @@ TEST_F(Reports, AJobThatKeepsFailingMarksTheReportFailed) {
 TEST_F(Reports, TheSummaryIsWrittenFromTheFiguresWithoutReviewTextOrNames) {
     const auto review = add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "SECRET-WORDS-OF-THE-REVIEW", std::nullopt, "SECRET-NAME");
     analyze(review, "positive", R"([{"id": "treatment_quality", "polarity": "positive"}])");
-    const auto id = generate(spa_client_);
+    const auto id = generate(chelsea_);
 
     ASSERT_EQ(llm_.calls("summary"), 1u);
     const auto& request = llm_.requests.back();
     EXPECT_EQ(request.task, "summary");
+    EXPECT_EQ(request.location_id, chelsea_);
+    // The business is named by the location's title.
+    EXPECT_THAT(request.messages.back().content, HasSubstr("LU DREAM SPA - Chelsea"));
     EXPECT_EQ(request.provider, "dashscope");
-    EXPECT_EQ(request.client_id, spa_client_);
     for (const auto& message : request.messages) {
         EXPECT_THAT(message.content, Not(HasSubstr("SECRET-WORDS-OF-THE-REVIEW")));
         EXPECT_THAT(message.content, Not(HasSubstr("SECRET-NAME")));
@@ -451,7 +465,7 @@ TEST_F(Reports, TheSummaryIsWrittenFromTheFiguresWithoutReviewTextOrNames) {
 TEST_F(Reports, ASummaryThatFailsACheckIsLeftOutAndTheReportIsBuiltAnyway) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
     llm_.summary = FakeLlm::always(R"({"summary": "A fine month. Book again at www.example.com/deal today."})");
-    const auto id = generate(spa_client_);
+    const auto id = generate(chelsea_);
     EXPECT_EQ(status(id), "draft");
     EXPECT_TRUE(report(id).at("summary").is_null());
     EXPECT_THAT(std::string(report(id).at("summary_note").as_string()), HasSubstr("no_url"));
@@ -461,19 +475,19 @@ TEST_F(Reports, ASummaryThatFailsACheckIsLeftOutAndTheReportIsBuiltAnyway) {
 TEST_F(Reports, AModelThatDoesNotAnswerOrIsSwitchedOffLeavesTheReportWithoutASummary) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
     llm_.summary = [](const llm::ChatRequest&) { return FakeLlm::failure(llm::Error::Kind::unavailable); };
-    const auto down = generate(spa_client_);
+    const auto down = generate(chelsea_);
     EXPECT_EQ(status(down), "draft");
     EXPECT_THAT(std::string(report(down).at("summary_note").as_string()), HasSubstr("gave no answer"));
 
     llm_.requests.clear();
     exec("UPDATE ai_settings SET enabled = false");
-    const auto off = generate(spa_client_);
+    const auto off = generate(chelsea_);
     EXPECT_THAT(std::string(report(off).at("summary_note").as_string()), HasSubstr("switched off"));
     EXPECT_EQ(llm_.calls("summary"), 0u);
 
     exec("UPDATE ai_settings SET enabled = true");
     llm_.provider_names = {"anthropic"};
-    const auto unconfigured = generate(spa_client_);
+    const auto unconfigured = generate(chelsea_);
     EXPECT_THAT(std::string(report(unconfigured).at("summary_note").as_string()), HasSubstr("'dashscope' is not configured"));
 }
 
@@ -489,7 +503,7 @@ TEST_F(Reports, TheSummaryTaskHasItsOwnProviderAndModel) {
     EXPECT_EQ(read("/api/knowledge").at("defaults").at("analysis").at("summary_model").as_string(), "qwen3.7-plus");
 
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
-    generate(spa_client_);
+    generate(chelsea_);
     EXPECT_EQ(llm_.requests.back().provider, "anthropic");
     EXPECT_EQ(llm_.requests.back().model, "claude-haiku-5-5");
     // A change to it is no change to what was tested for auto-posting: the writer and the analyzer are as they were.
@@ -504,7 +518,7 @@ TEST_F(Reports, HostileReviewTextIsTextOnThePage) {
                                    "javascript:alert(1)");
     analyze(review, "positive", "[]", std::format(R"([{{"name": {}, "type": "treatment", "polarity": "positive"}}])",
                                                   boost::json::serialize(boost::json::value("Massage " + attack))));
-    const auto id = generate(spa_client_);
+    const auto id = generate(chelsea_);
     const auto page = html(id);
     EXPECT_THAT(page, Not(HasSubstr("<script")));
     EXPECT_THAT(page, Not(HasSubstr("<img")));
@@ -525,7 +539,7 @@ TEST_F(Reports, HostileReviewTextIsTextOnThePage) {
 
 TEST_F(Reports, NothingOfAReportIsServedWithoutASession) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
-    generate(spa_client_);
+    generate(chelsea_);
     // The routes of reports, from the router's table: the 7 this test once named and every one added since.
     EXPECT_GE(expect_session_and_csrf({"/reports", "/report-schedules"}, R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"), 7u);
     // There is no route for a token at all: the engine does not host shared reports.
@@ -533,22 +547,23 @@ TEST_F(Reports, NothingOfAReportIsServedWithoutASession) {
 }
 
 TEST_F(Reports, APeriodMustBeOverAndMakeSense) {
-    const auto create = [&](std::int64_t client, const std::string& body) {
-        return post(std::format("/api/clients/{}/reports", client), body).status;
+    const auto create = [&](std::int64_t location, const std::string& body) {
+        return post(std::format("/api/locations/{}/reports", location), body).status;
     };
     // The clock says 2026-11-10 07:00 in New York: today is not over, yesterday is.
-    EXPECT_EQ(create(spa_client_, R"({"period_start": "2026-11-01", "period_end": "2026-11-10"})"), 400u);
-    EXPECT_EQ(create(spa_client_, R"({"period_start": "2026-11-09", "period_end": "2026-11-09"})"), 201u);
-    EXPECT_EQ(create(spa_client_, R"({"period_start": "2026-10-31", "period_end": "2026-10-01"})"), 400u);
-    EXPECT_EQ(create(spa_client_, R"({"period_start": "2025-01-01", "period_end": "2026-10-31"})"), 400u);
-    EXPECT_EQ(create(spa_client_, R"({"period_start": "October", "period_end": "2026-10-31"})"), 400u);
-    EXPECT_EQ(create(spa_client_, R"({"period_start": "2026-10-01"})"), 400u);
-    EXPECT_EQ(create(spa_client_, R"({"period_start": "2026-10-01", "period_end": "2026-10-31", "time_zone": "Mars/Base"})"), 400u);
+    EXPECT_EQ(create(chelsea_, R"({"period_start": "2026-11-01", "period_end": "2026-11-10"})"), 400u);
+    EXPECT_EQ(create(chelsea_, R"({"period_start": "2026-11-09", "period_end": "2026-11-09"})"), 201u);
+    EXPECT_EQ(create(chelsea_, R"({"period_start": "2026-10-31", "period_end": "2026-10-01"})"), 400u);
+    EXPECT_EQ(create(chelsea_, R"({"period_start": "2025-01-01", "period_end": "2026-10-31"})"), 400u);
+    EXPECT_EQ(create(chelsea_, R"({"period_start": "October", "period_end": "2026-10-31"})"), 400u);
+    EXPECT_EQ(create(chelsea_, R"({"period_start": "2026-10-01"})"), 400u);
+    EXPECT_EQ(create(chelsea_, R"({"period_start": "2026-10-01", "period_end": "2026-10-31", "time_zone": "Mars/Base"})"), 400u);
     EXPECT_EQ(create(999999, R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"), 404u);
+    // An archived client changes nothing about its location's reports (D-102).
     exec(std::format("UPDATE clients SET archived = true WHERE id = {}", buffet_client_));
-    EXPECT_EQ(create(buffet_client_, R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"), 400u);
+    EXPECT_EQ(create(buffet_, R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"), 201u);
     // A zone of its own: the same day ended hours earlier in Tokyo.
-    const auto tokyo = post(std::format("/api/clients/{}/reports", spa_client_),
+    const auto tokyo = post(std::format("/api/locations/{}/reports", chelsea_),
                             R"({"period_start": "2026-11-09", "period_end": "2026-11-09", "time_zone": "Asia/Tokyo"})");
     ASSERT_EQ(tokyo.status, 201u);
     EXPECT_EQ(json(tokyo).at("time_zone").as_string(), "Asia/Tokyo");
@@ -559,14 +574,14 @@ TEST_F(Reports, APeriodMustBeOverAndMakeSense) {
 
 TEST_F(Reports, AShareLinkIsACopyOfThePageUnderANameNobodyCanGuess) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
-    const auto id = generate(spa_client_);
+    const auto id = generate(chelsea_);
     const auto first = post(std::format("/api/reports/{}/share-links", id));
     ASSERT_EQ(first.status, 201u) << first.body;
     const auto second = post(std::format("/api/reports/{}/share-links", id));
     ASSERT_EQ(second.status, 201u);
 
     const std::string url(json(first).at("url").as_string());
-    // 32 random bytes as 43 characters, and nothing else: no client, no report number, no date.
+    // 32 random bytes as 43 characters, and nothing else: no location, no report number, no date.
     std::smatch match;
     ASSERT_TRUE(std::regex_match(url, match, std::regex(R"(https://storage\.test/public/r/([A-Za-z0-9_-]{43})\.html)"))) << url;
     const auto token = match[1].str();
@@ -590,7 +605,7 @@ TEST_F(Reports, AShareLinkIsACopyOfThePageUnderANameNobodyCanGuess) {
 
 TEST_F(Reports, RevokingALinkReplacesItsPage) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely words");
-    const auto id = generate(spa_client_);
+    const auto id = generate(chelsea_);
     const auto kept = json(post(std::format("/api/reports/{}/share-links", id)));
     const auto link = json(post(std::format("/api/reports/{}/share-links", id)));
     const auto name = std::string(link.at("url").as_string()).substr(kPublicBase.size());
@@ -617,7 +632,7 @@ TEST_F(Reports, RevokingALinkReplacesItsPage) {
 
 TEST_F(Reports, ALinkIsNotRecordedUnlessItsPageIsInTheBucket) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
-    const auto id = generate(spa_client_);
+    const auto id = generate(chelsea_);
     const auto link = json(post(std::format("/api/reports/{}/share-links", id)));
 
     public_.refuse = true;
@@ -634,19 +649,19 @@ TEST_F(Reports, ALinkIsNotRecordedUnlessItsPageIsInTheBucket) {
 TEST_F(Reports, WithoutAPublicBucketNothingCanBeSharedOrSent) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
     start(false);
-    const auto id = generate(spa_client_);
+    const auto id = generate(chelsea_);
     EXPECT_EQ(status(id), "draft");  // a report is built all the same
     const auto refused = post(std::format("/api/reports/{}/share-links", id));
     EXPECT_EQ(refused.status, 409u);
     EXPECT_EQ(error_code(refused), "no_public_bucket");
-    recipients(spa_client_, R"(["owner@spa.example"])");
+    recipients(chelsea_, R"(["owner@spa.example"])");
     sending_on();
     EXPECT_EQ(error_code(post(std::format("/api/reports/{}/send", id))), "no_public_bucket");
     EXPECT_EQ(status(id), "draft");
 }
 
 TEST_F(Reports, OnlyABuiltReportCanBeShared) {
-    const auto response = post(std::format("/api/clients/{}/reports", spa_client_),
+    const auto response = post(std::format("/api/locations/{}/reports", chelsea_),
                                R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})");
     const auto id = json(response).at("id").as_int64();
     EXPECT_EQ(error_code(post(std::format("/api/reports/{}/share-links", id))), "report_not_ready");  // still building
@@ -663,16 +678,18 @@ TEST_F(Reports, OnlyABuiltReportCanBeShared) {
 
 // ---- sending ----------------------------------------------------------------------------
 
-TEST_F(Reports, AReportWaitsForAPersonAndGoesToTheClientsRecipientsOnly) {
+TEST_F(Reports, AReportWaitsForAPersonAndGoesToItsLocationsRecipientsOnly) {
     const auto review = add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "WORDS-OF-A-REVIEWER");
     analyze(review, "positive", R"([{"id": "treatment_quality", "polarity": "positive"}])");
-    const auto id = generate(spa_client_);
+    const auto id = generate(chelsea_);
     EXPECT_EQ(status(id), "draft");
     EXPECT_EQ(count("notification_deliveries"), 0);  // building a report tells nobody
 
     // Sending is off after installation: a send would reach nobody, so it is refused.
-    recipients(spa_client_, R"(["owner@spa.example", "manager@spa.example"])");
-    recipients(buffet_client_, R"(["owner@buffet.example"])");
+    recipients(chelsea_, R"(["owner@spa.example", "manager@spa.example"])");
+    // The client's other location has a manager of its own, who gets only that location's reports.
+    recipients(uptown_, R"(["uptown@spa.example"])");
+    recipients(buffet_, R"(["owner@buffet.example"])");
     EXPECT_EQ(error_code(post(std::format("/api/reports/{}/send", id))), "sending_off");
     EXPECT_TRUE(public_.objects.empty());
 
@@ -686,7 +703,8 @@ TEST_F(Reports, AReportWaitsForAPersonAndGoesToTheClientsRecipientsOnly) {
     const std::string link(json(sent).at("share_links").at(0).at("url").as_string());
     EXPECT_EQ(public_.objects.at(link.substr(kPublicBase.size())).body, html(id));
 
-    EXPECT_EQ(count("notification_deliveries WHERE event_type = 'client_report'"), 2);
+    EXPECT_EQ(count(std::format("notification_deliveries WHERE event_type = 'location_report' AND location_id = {}", chelsea_)), 2);
+    EXPECT_EQ(count("notification_deliveries"), 2);
     run_jobs();
     ASSERT_EQ(channel_.sent.size(), 2u);
     std::vector<std::string> to{channel_.sent[0].recipient, channel_.sent[1].recipient};
@@ -697,7 +715,7 @@ TEST_F(Reports, AReportWaitsForAPersonAndGoesToTheClientsRecipientsOnly) {
     EXPECT_THAT(message.body, HasSubstr("New reviews: 1"));
     EXPECT_THAT(message.body, HasSubstr("Praised most: Treatment quality"));
     EXPECT_THAT(message.body, HasSubstr(link));
-    // A client is not sent to the dashboard, and no review text is in an email.
+    // The business is not sent to the dashboard, and no review text is in an email.
     EXPECT_THAT(message.body, Not(HasSubstr("dashboard")));
     EXPECT_THAT(message.body, Not(HasSubstr("WORDS-OF-A-REVIEWER")));
     EXPECT_EQ(count("audit_log WHERE action = 'report.send' AND actor = 'staff@xvisionmediaus.com'"), 1);
@@ -710,45 +728,76 @@ TEST_F(Reports, AReportWaitsForAPersonAndGoesToTheClientsRecipientsOnly) {
     EXPECT_EQ(post(std::format("/api/reports/{}/share-links", id)).status, 201u);
 }
 
-TEST_F(Reports, AClientWithoutRecipientsCannotBeSentAReport) {
+TEST_F(Reports, ALocationWithoutRecipientsCannotBeSentAReport) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
-    const auto id = generate(spa_client_);
+    const auto id = generate(chelsea_);
     sending_on();
-    recipients(buffet_client_, R"(["owner@buffet.example"])");  // another client's list is not this client's
+    recipients(uptown_, R"(["owner@spa.example"])");  // the list of the client's other location is not this location's
     EXPECT_EQ(error_code(post(std::format("/api/reports/{}/send", id))), "no_recipients");
     // A rule that is switched off names nobody.
-    recipients(spa_client_, R"(["owner@spa.example"])");
-    exec(std::format("UPDATE notification_rules SET enabled = false WHERE client_id = {}", spa_client_));
+    recipients(chelsea_, R"(["owner@spa.example"])");
+    exec(std::format("UPDATE notification_rules SET enabled = false WHERE location_id = {}", chelsea_));
     EXPECT_EQ(error_code(post(std::format("/api/reports/{}/send", id))), "no_recipients");
     EXPECT_EQ(status(id), "draft");
     EXPECT_TRUE(public_.objects.empty());
     EXPECT_EQ(count("notification_deliveries"), 0);
 }
 
-TEST_F(Reports, ARuleForClientReportsMustNameAClient) {
-    const auto all = post("/api/notification-rules", R"({"event_type": "client_report", "recipients": ["everyone@example.com"]})");
+TEST_F(Reports, ARuleForALocationsReportsMustNameALocation) {
+    const auto all = post("/api/notification-rules", R"({"event_type": "location_report", "recipients": ["everyone@example.com"]})");
     EXPECT_EQ(all.status, 400u) << all.body;
-    EXPECT_THAT(all.body, HasSubstr("must name the client"));
+    EXPECT_THAT(all.body, HasSubstr("must name the location"));
+    const auto none = post("/api/notification-rules",
+                           R"({"event_type": "location_report", "location_id": null, "recipients": ["everyone@example.com"]})");
+    EXPECT_EQ(none.status, 400u) << none.body;
+    EXPECT_EQ(error_code(post("/api/notification-rules",
+                              R"({"event_type": "location_report", "location_id": 999999, "recipients": ["x@example.com"]})")),
+              "location_not_found");
     // The database holds the same rule, whatever the code does.
     EXPECT_THROW(exec("INSERT INTO notification_rules (event_type, recipients, created_at, updated_at) "
-                      "VALUES ('client_report', '[\"x@example.com\"]', now(), now())"),
+                      "VALUES ('location_report', '[\"x@example.com\"]', now(), now())"),
+                 pqxx::check_violation);
+    EXPECT_THROW(exec("INSERT INTO notification_rules (event_type, location_id, recipients, created_at, updated_at) "
+                      "VALUES ('client_report', 1, '[\"x@example.com\"]', now(), now())"),
                  pqxx::check_violation);
 }
 
-TEST_F(Reports, AnArchivedClientIsSentNothing) {
+// A switched-off location gets no report (D-102): none is made, built, sent or scheduled.
+TEST_F(Reports, ASwitchedOffLocationGetsNoReport) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
-    const auto id = generate(spa_client_);
-    recipients(spa_client_, R"(["owner@spa.example"])");
+    const auto id = generate(chelsea_);
+    recipients(chelsea_, R"(["owner@spa.example"])");
     sending_on();
-    exec(std::format("UPDATE clients SET archived = true WHERE id = {}", spa_client_));
-    EXPECT_EQ(error_code(post(std::format("/api/reports/{}/send", id))), "client_archived");
+    schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
+    const auto building = json(post(std::format("/api/locations/{}/reports", chelsea_),
+                                    R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"))
+                              .at("id")
+                              .as_int64();
+    switch_location(chelsea_, false);
+
+    const auto sent = post(std::format("/api/reports/{}/send", id));
+    EXPECT_EQ(sent.status, 409u);
+    EXPECT_EQ(error_code(sent), "location_not_enabled");
+    const auto made = post(std::format("/api/locations/{}/reports", chelsea_), R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})");
+    EXPECT_EQ(made.status, 400u);
+    EXPECT_THAT(error_message(made), HasSubstr("switched off"));
+    const auto scheduled = post("/api/report-schedules",
+                                std::format(R"({{"location_id": {}, "frequency": "daily", "time": "09:00", "time_zone": "UTC"}})", chelsea_));
+    EXPECT_EQ(scheduled.status, 400u);
+    // A report asked for before it was switched off is not built.
+    run_jobs();
+    EXPECT_EQ(status(building), "failed");
+    EXPECT_THAT(std::string(report(building).at("error").as_string()), HasSubstr("switched off"));
+    // Its schedule's time comes, and nothing is made.
+    clock_.advance(2h);
+    EXPECT_EQ(await(reporter_->start_due()), 0);
     EXPECT_EQ(count("notification_deliveries"), 0);
     EXPECT_TRUE(public_.objects.empty());
 }
 
 TEST_F(Reports, AReportWithALinkThatWorksCannotBeRejected) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
-    const auto id = generate(spa_client_);
+    const auto id = generate(chelsea_);
     const auto link = json(post(std::format("/api/reports/{}/share-links", id)));
     // Rejected, its page would stay readable under the link.
     const auto refused = post(std::format("/api/reports/{}/reject", id));
@@ -760,7 +809,7 @@ TEST_F(Reports, AReportWithALinkThatWorksCannotBeRejected) {
 }
 
 TEST_F(Reports, AReportWhoseJobIsGoneDoesNotStayBuildingForEver) {
-    const auto response = post(std::format("/api/clients/{}/reports", spa_client_),
+    const auto response = post(std::format("/api/locations/{}/reports", chelsea_),
                                R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})");
     const auto id = json(response).at("id").as_int64();
     // The engine stopped during the job's last attempt: the job is gone and nothing will finish the report.
@@ -778,15 +827,15 @@ TEST_F(Reports, AReportWhoseJobIsGoneDoesNotStayBuildingForEver) {
 
 TEST_F(Reports, AnAutoSendThatBreaksOffLeavesTheReportWaitingWithTheReason) {
     add_review(chelsea_, "a1", 5, "2026-11-09T15:00:00Z", "Lovely");
-    recipients(spa_client_, R"(["owner@spa.example"])");
+    recipients(chelsea_, R"(["owner@spa.example"])");
     sending_on();
-    schedule(spa_client_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York", "auto_send": true)");
+    schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York", "auto_send": true)");
     clock_.advance(2h);
     ASSERT_EQ(await(reporter_->start_due()), 1);
     // The connection to the bucket drops: no answer, an exception.
     public_.unreachable = true;
     run_jobs();
-    const auto made = read(std::format("/api/reports?client_id={}", spa_client_)).at("items").at(0);
+    const auto made = read(std::format("/api/reports?location_id={}", chelsea_)).at("items").at(0);
     EXPECT_EQ(made.at("status").as_string(), "draft");
     EXPECT_THAT(std::string(made.at("hold_reason").as_string()), HasSubstr("Sending failed"));
     EXPECT_TRUE(channel_.sent.empty());
@@ -803,8 +852,8 @@ TEST_F(Reports, AnAutoSendThatBreaksOffLeavesTheReportWaitingWithTheReason) {
 
 TEST_F(Reports, AFailedUploadSendsNothing) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
-    const auto id = generate(spa_client_);
-    recipients(spa_client_, R"(["owner@spa.example"])");
+    const auto id = generate(chelsea_);
+    recipients(chelsea_, R"(["owner@spa.example"])");
     sending_on();
     public_.refuse = true;
     const auto refused = post(std::format("/api/reports/{}/send", id));
@@ -818,14 +867,14 @@ TEST_F(Reports, AFailedUploadSendsNothing) {
 
 TEST_F(Reports, AScheduleBuildsOneReportPerRunInItsOwnTimeZone) {
     // The clock: 2026-11-10 12:00 UTC, which is 07:00 in New York. A daily schedule at 09:00.
-    const auto id = schedule(spa_client_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
+    const auto id = schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
     EXPECT_EQ(await(reporter_->start_due()), 0);  // 09:00 has not come
     clock_.advance(2h);
     EXPECT_EQ(await(reporter_->start_due()), 1);
     EXPECT_EQ(await(reporter_->start_due()), 0);  // once per run, however often the job looks
     run_jobs();
 
-    const auto listed = read(std::format("/api/reports?client_id={}", spa_client_));
+    const auto listed = read(std::format("/api/reports?location_id={}", chelsea_));
     ASSERT_EQ(listed.at("total").as_int64(), 1);
     const auto& made = listed.at("items").at(0);
     EXPECT_EQ(made.at("period_start").as_string(), "2026-11-09");
@@ -849,7 +898,7 @@ TEST_F(Reports, AScheduleBuildsOneReportPerRunInItsOwnTimeZone) {
 
 TEST_F(Reports, AScheduleMadeOrChangedAfterItsTimeDoesNotRunForIt) {
     clock_.advance(3h);  // 10:00 in New York
-    const auto id = schedule(spa_client_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
+    const auto id = schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
     EXPECT_EQ(await(reporter_->start_due()), 0);
     // Moved to 08:00 at 10:30: no run today for a time that has passed.
     clock_.advance(30min);
@@ -860,8 +909,8 @@ TEST_F(Reports, AScheduleMadeOrChangedAfterItsTimeDoesNotRunForIt) {
 }
 
 TEST_F(Reports, WeeklyAndMonthlySchedulesCoverTheWeekAndTheMonthBefore) {
-    schedule(spa_client_, R"("frequency": "weekly", "weekday": 3, "time": "08:00", "time_zone": "America/New_York")");
-    schedule(buffet_client_, R"("frequency": "monthly", "month_day": 5, "time": "09:00", "time_zone": "America/New_York")");
+    schedule(chelsea_, R"("frequency": "weekly", "weekday": 3, "time": "08:00", "time_zone": "America/New_York")");
+    schedule(buffet_, R"("frequency": "monthly", "month_day": 5, "time": "09:00", "time_zone": "America/New_York")");
     // Wednesday November 11 at 08:00 in New York, then December 5.
     clock_.set(test::t0() + 25h);
     EXPECT_EQ(await(reporter_->start_due()), 1);
@@ -870,53 +919,53 @@ TEST_F(Reports, WeeklyAndMonthlySchedulesCoverTheWeekAndTheMonthBefore) {
     clock_.set(core::TimePoint(std::chrono::sys_days{std::chrono::year{2026} / 12 / 5} + 14h));
     EXPECT_EQ(await(reporter_->start_due()), 2);  // the monthly one, and the weekly one's latest run
     EXPECT_EQ(value<std::string>(std::format(
-                  "SELECT period_start::text || '..' || period_end::text FROM reports WHERE client_id = {} ORDER BY id DESC LIMIT 1",
-                  buffet_client_)),
+                  "SELECT period_start::text || '..' || period_end::text FROM reports WHERE location_id = {} ORDER BY id DESC LIMIT 1",
+                  buffet_)),
               "2026-11-01..2026-11-30");
 }
 
 TEST_F(Reports, ADailyScheduleRunsOnceOnTheDaysClocksChange) {
     // 01:30 in New York exists twice on 2026-11-01 and 02:30 does not exist on 2027-03-14.
-    schedule(spa_client_, R"("frequency": "daily", "time": "01:30", "time_zone": "America/New_York")");
-    schedule(buffet_client_, R"("frequency": "daily", "time": "02:30", "time_zone": "America/New_York")");
+    schedule(chelsea_, R"("frequency": "daily", "time": "01:30", "time_zone": "America/New_York")");
+    schedule(buffet_, R"("frequency": "daily", "time": "02:30", "time_zone": "America/New_York")");
     exec("UPDATE report_schedules SET created_at = '2026-10-01T00:00:00Z', updated_at = '2026-10-01T00:00:00Z'");
     const auto at = [](int y, unsigned m, unsigned d, std::chrono::minutes time) {
         return core::TimePoint(std::chrono::sys_days{std::chrono::year{y} / m / d} + time);
     };
-    const auto runs = [&](std::int64_t client) { return count(std::format("reports WHERE client_id = {}", client)); };
+    const auto runs = [&](std::int64_t location) { return count(std::format("reports WHERE location_id = {}", location)); };
 
     clock_.set(at(2026, 11, 1, 5h + 29min));
     await(reporter_->start_due());  // the runs of October 31, to start from a known state
-    const auto spa_before = runs(spa_client_);
+    const auto spa_before = runs(chelsea_);
     clock_.set(at(2026, 11, 1, 5h + 30min));  // the first 01:30 (EDT)
     await(reporter_->start_due());
-    EXPECT_EQ(runs(spa_client_), spa_before + 1);
+    EXPECT_EQ(runs(chelsea_), spa_before + 1);
     clock_.set(at(2026, 11, 1, 6h + 30min));  // the second 01:30 (EST): no second report
     await(reporter_->start_due());
-    EXPECT_EQ(runs(spa_client_), spa_before + 1);
+    EXPECT_EQ(runs(chelsea_), spa_before + 1);
 
     clock_.set(at(2027, 3, 14, 6h + 59min));
     await(reporter_->start_due());
-    const auto buffet_before = runs(buffet_client_);
+    const auto buffet_before = runs(buffet_);
     clock_.set(at(2027, 3, 14, 7h));  // 03:00 EDT, the first moment after the gap
     await(reporter_->start_due());
-    EXPECT_EQ(runs(buffet_client_), buffet_before + 1);
-    EXPECT_EQ(value<std::string>(std::format("SELECT period_start::text FROM reports WHERE client_id = {} ORDER BY id DESC LIMIT 1",
-                                             buffet_client_)),
+    EXPECT_EQ(runs(buffet_), buffet_before + 1);
+    EXPECT_EQ(value<std::string>(std::format("SELECT period_start::text FROM reports WHERE location_id = {} ORDER BY id DESC LIMIT 1",
+                                             buffet_)),
               "2027-03-13");
 }
 
 TEST_F(Reports, AScheduleSendsByItselfOnlyWhereAPersonSaidSo) {
     add_review(chelsea_, "a1", 5, "2026-11-09T15:00:00Z", "Lovely");
-    recipients(spa_client_, R"(["owner@spa.example"])");
+    recipients(chelsea_, R"(["owner@spa.example"])");
     sending_on();
-    const auto id = schedule(spa_client_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York", "auto_send": true)");
+    const auto id = schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York", "auto_send": true)");
     EXPECT_TRUE(listed_schedule(id).at("auto_send").as_bool());
     clock_.advance(2h);
     ASSERT_EQ(await(reporter_->start_due()), 1);
     run_jobs();
 
-    const auto made = read(std::format("/api/reports?client_id={}", spa_client_)).at("items").at(0);
+    const auto made = read(std::format("/api/reports?location_id={}", chelsea_)).at("items").at(0);
     EXPECT_EQ(made.at("status").as_string(), "sent");
     EXPECT_TRUE(made.at("sent_by").is_null());  // its schedule
     ASSERT_EQ(channel_.sent.size(), 1u);
@@ -926,12 +975,12 @@ TEST_F(Reports, AScheduleSendsByItselfOnlyWhereAPersonSaidSo) {
 }
 
 TEST_F(Reports, AReportItsScheduleCouldNotSendWaitsWithTheReason) {
-    recipients(spa_client_, R"(["owner@spa.example"])");
-    schedule(spa_client_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York", "auto_send": true)");
+    recipients(chelsea_, R"(["owner@spa.example"])");
+    schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York", "auto_send": true)");
     clock_.advance(2h);  // sending is still off
     ASSERT_EQ(await(reporter_->start_due()), 1);
     run_jobs();
-    const auto made = read(std::format("/api/reports?client_id={}", spa_client_)).at("items").at(0);
+    const auto made = read(std::format("/api/reports?location_id={}", chelsea_)).at("items").at(0);
     EXPECT_EQ(made.at("status").as_string(), "draft");
     EXPECT_THAT(std::string(made.at("hold_reason").as_string()), HasSubstr("Email sending is switched off"));
     EXPECT_TRUE(channel_.sent.empty());
@@ -942,10 +991,10 @@ TEST_F(Reports, AReportItsScheduleCouldNotSendWaitsWithTheReason) {
     EXPECT_TRUE(report(made.at("id").as_int64()).at("hold_reason").is_null());
 }
 
-TEST_F(Reports, ADisabledScheduleAndAnArchivedClientRunNothing) {
-    const auto off = schedule(spa_client_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York", "enabled": false)");
-    schedule(buffet_client_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
-    exec(std::format("UPDATE clients SET archived = true WHERE id = {}", buffet_client_));
+TEST_F(Reports, ADisabledScheduleAndASwitchedOffLocationRunNothing) {
+    const auto off = schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York", "enabled": false)");
+    schedule(buffet_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
+    switch_location(buffet_, false);
     clock_.advance(2h);
     EXPECT_EQ(await(reporter_->start_due()), 0);
     // Switched on at 09:00 sharp or later: its next run is tomorrow's.
@@ -957,24 +1006,24 @@ TEST_F(Reports, ADisabledScheduleAndAnArchivedClientRunNothing) {
 
 TEST_F(Reports, SchedulesAreMadeChangedAndDeletedByPeople) {
     const auto bad = [&](const std::string& rest) {
-        return post("/api/report-schedules", std::format(R"({{"client_id": {}, {}}})", spa_client_, rest)).status;
+        return post("/api/report-schedules", std::format(R"({{"location_id": {}, {}}})", chelsea_, rest)).status;
     };
     EXPECT_EQ(bad(R"("frequency": "hourly", "time": "09:00", "time_zone": "America/New_York")"), 400u);
     EXPECT_EQ(bad(R"("frequency": "weekly", "time": "09:00", "time_zone": "America/New_York")"), 400u);  // no weekday
     EXPECT_EQ(bad(R"("frequency": "monthly", "month_day": 31, "time": "09:00", "time_zone": "America/New_York")"), 400u);
     EXPECT_EQ(bad(R"("frequency": "daily", "time": "25:00", "time_zone": "America/New_York")"), 400u);
     EXPECT_EQ(bad(R"("frequency": "daily", "time": "09:00", "time_zone": "Eastern")"), 400u);
-    EXPECT_EQ(post("/api/report-schedules", R"({"client_id": 999999, "frequency": "daily", "time": "09:00", "time_zone": "UTC"})").status,
+    EXPECT_EQ(post("/api/report-schedules", R"({"location_id": 999999, "frequency": "daily", "time": "09:00", "time_zone": "UTC"})").status,
               404u);
 
-    const auto id = schedule(spa_client_, R"("frequency": "weekly", "weekday": 1, "time": "08:30", "time_zone": "America/New_York")");
+    const auto id = schedule(chelsea_, R"("frequency": "weekly", "weekday": 1, "time": "08:30", "time_zone": "America/New_York")");
     auto made = listed_schedule(id);
     EXPECT_EQ(made.at("time").as_string(), "08:30");
     EXPECT_EQ(made.at("weekday").as_int64(), 1);
     EXPECT_FALSE(made.at("auto_send").as_bool());  // off unless a person says otherwise
     EXPECT_TRUE(made.at("enabled").as_bool());
-    // A second schedule for the same client is fine.
-    schedule(spa_client_, R"("frequency": "monthly", "month_day": 5, "time": "09:00", "time_zone": "America/New_York")");
+    // A second schedule for the same location is fine.
+    schedule(chelsea_, R"("frequency": "monthly", "month_day": 5, "time": "09:00", "time_zone": "America/New_York")");
     EXPECT_EQ(read("/api/report-schedules").at("total").as_int64(), 2);
 
     // Weekly to monthly: the weekday goes, the day of the month is needed.
@@ -995,7 +1044,7 @@ TEST_F(Reports, SchedulesAreMadeChangedAndDeletedByPeople) {
 }
 
 TEST_F(Reports, ADeletedScheduleLeavesItsReports) {
-    const auto id = schedule(spa_client_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
+    const auto id = schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
     clock_.advance(2h);
     ASSERT_EQ(await(reporter_->start_due()), 1);
     run_jobs();

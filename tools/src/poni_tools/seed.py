@@ -9,8 +9,8 @@ never seeded.
 The engine keeps nothing of the knowledge base in memory and watches for
 nothing (D-084): the next read finds the new version. A version that changes
 what the analyzer is told about an industry changes the fingerprint of that
-industry's clients, so none of them auto-posts until a new go-live test
-passes. The seed is where that is said: it returns those clients, and the
+industry's locations, so none of them auto-posts until a new go-live test
+passes. The seed is where that is said: it returns those locations, and the
 command prints them for the person who seeds.
 """
 
@@ -46,10 +46,9 @@ class SeedError(Exception):
 
 
 @dataclass
-class Client:
-    name: str
+class Location:
+    title: str
     industry: str
-    locations: list[str]
 
 
 @dataclass
@@ -58,10 +57,10 @@ class Seeded:
     # The version that was there before; None on a database never seeded.
     previous: str | None
     changed: bool
-    # Clients whose industry's profile, as the analyzer is told it, changed: each needs a new go-live test.
-    retest: list[Client] = field(default_factory=list)
-    # Clients whose industry is no longer there: not analyzed until they are given another.
-    stranded: list[Client] = field(default_factory=list)
+    # Enabled locations whose industry's profile, as the analyzer is told it, changed: each needs a new go-live test.
+    retest: list[Location] = field(default_factory=list)
+    # Enabled locations whose industry is no longer there: not analyzed until they are given another.
+    stranded: list[Location] = field(default_factory=list)
 
 
 def told(label: str, topics: list, item_types: list, flags: list, common: list) -> str:
@@ -79,16 +78,14 @@ def told(label: str, topics: list, item_types: list, flags: list, common: list) 
     )
 
 
-def _clients(conn: psycopg.Connection, industries: list[str]) -> list[Client]:
+def _locations(conn: psycopg.Connection, industries: list[str]) -> list[Location]:
     if not industries:
         return []
     rows = conn.execute(
-        "SELECT c.name, c.industry_key, coalesce(array_agg(l.title ORDER BY l.title) FILTER (WHERE l.id IS NOT NULL), "
-        "'{}') FROM clients c LEFT JOIN locations l ON l.client_id = c.id "
-        "WHERE NOT c.archived AND c.industry_key = ANY(%s) GROUP BY c.id ORDER BY lower(c.name), c.id",
+        "SELECT title, industry_key FROM locations WHERE enabled AND industry_key = ANY(%s) ORDER BY lower(title), id",
         (industries,),
     ).fetchall()
-    return [Client(name, industry, list(locations)) for name, industry, locations in rows]
+    return [Location(title, industry) for title, industry in rows]
 
 
 def corpus_version(corpus: dict) -> str:
@@ -139,8 +136,8 @@ def seed(conn: psycopg.Connection, kb: Knowledge, now: datetime.datetime | None 
             )
             for key, pack in kb.industries.items()
         }
-        retest = _clients(conn, sorted(key for key in before if key in now_told and before[key] != now_told[key]))
-        stranded = _clients(conn, sorted(key for key in before if key not in now_told))
+        retest = _locations(conn, sorted(key for key in before if key in now_told and before[key] != now_told[key]))
+        stranded = _locations(conn, sorted(key for key in before if key not in now_told))
 
         for table in TABLES:
             conn.execute(f"DELETE FROM {table}")  # the names are the constants above

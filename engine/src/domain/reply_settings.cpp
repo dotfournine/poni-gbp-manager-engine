@@ -101,8 +101,8 @@ std::optional<std::string> check_policy(const PolicyRules& rules) {
 
 }  // namespace
 
-std::string business_name(const Voice& voice, std::string_view client_name) {
-    return voice.reply_name.empty() ? std::string(client_name) : voice.reply_name;
+std::string business_name(const Voice& voice, std::string_view location_title) {
+    return voice.reply_name.empty() ? std::string(location_title) : voice.reply_name;
 }
 
 const LengthRange& length_range(const Voice& voice, const std::string& language, const std::string& mode) {

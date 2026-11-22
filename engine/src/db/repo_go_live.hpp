@@ -2,8 +2,9 @@
 // auto-posting asks, and the runs. Blocking calls on a transaction the caller
 // owns: run them through Database::run.
 //
-// A run tests one fingerprint. It is started by a person, never by a change,
-// and it ends as passed, failed, inconclusive or cancelled. Only a pass
+// A run tests one location's fingerprint, and its pass counts for every
+// location with that fingerprint. It is started by a person for one
+// location, never by a change, and it ends as passed, failed, inconclusive or cancelled. Only a pass
 // counts, and all it does is remove one obstacle: nothing here switches
 // auto-posting on or lifts a pause.
 #pragma once
@@ -35,7 +36,7 @@ inline constexpr std::string_view kGoLiveCaseKind = "golive.case";
 // workers the engine runs (PONI_JOB_WORKERS), passed in as `parallel`. Other
 // jobs take their turn between cases: each next case is queued only when one
 // finishes, behind whatever is already waiting.
-// The client's own reviews among the cases (D-075): the newest with 4 or 5 stars.
+// The location's own reviews among the cases (D-075): the newest with 4 or 5 stars.
 inline constexpr int kGoLiveRealWithText = 20;
 inline constexpr int kGoLiveRealWithoutText = 2;
 
@@ -47,8 +48,6 @@ inline constexpr int kGoLiveRealWithoutText = 2;
 // something else than the pipeline runs.
 struct GoLiveSetup {
     std::int64_t location_id = 0;
-    std::int64_t client_id = 0;
-    std::string client_name;
     std::string location_title;
     std::string business_name;
     domain::IndustryRules industry;
@@ -66,13 +65,14 @@ struct NoSetup {
     std::string reason;
     // Set when the location's stored reply settings can't be read (there is
     // no row, or a part lacks a field), in the reader's own words. A save is
-    // checked and a link copies complete settings, so it is a fault to raise
+    // checked and discovery writes complete settings, so it is a fault to raise
     // and not a state a location can be in.
     std::optional<std::string> settings_error;
 };
 
-// Nothing, with the reason, for a location that is not linked to a client
-// with an industry profile or whose reply settings can't be read.
+// Nothing, with the reason, for a location without an industry profile or
+// whose reply settings can't be read. Whether it is switched on is its
+// callers' to ask: this is what it would run with.
 std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, std::int64_t location_id);
 // The same for a caller that has read the AI settings in this transaction
 // already (one row for every location), so that they are not read again.
@@ -106,18 +106,20 @@ GoLiveState go_live_state(pqxx::transaction_base& tx, const std::string& fingerp
 
 // ---- what people do -------------------------------------------------------------------
 
-// Every client that isn't archived, with its configurations and their state.
+// Every enabled location, by title, with its configuration's state.
 // `configured_providers` as for start_go_live: the overview says whether a test could run.
 model::GoLiveOverview go_live_overview(pqxx::transaction_base& tx, const std::vector<std::string>& configured_providers, int parallel);
 
-// Starts a run for each distinct fingerprint among the client's linked
-// locations that has none running, and queues its first cases. Only for a
-// change a person makes (audit.user_id()): the engine's own restart of a
-// test whose configuration changed does not come through here.
+// Starts a run of the location's configuration at its policy's width
+// (D-102 point 5), with the location's own reviews, and queues its first
+// cases. Refused unless the location is switched on and can be tested, and
+// a conflict while its fingerprint has a run already. Only for a change a
+// person makes (audit.user_id()): the engine's own restart of a test whose
+// configuration changed does not come through here.
 // `configured_providers`: the test needs the analyzer's, the writer's and the
 // judge's provider to have an address and a key.
-Result<std::vector<model::GoLiveRun>> start_go_live(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t client_id,
-                                                    const std::vector<std::string>& configured_providers, int parallel);
+Result<model::GoLiveRun> start_go_live(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
+                                       const std::vector<std::string>& configured_providers, int parallel);
 
 // A person stops a running test: its jobs make no further model calls, what
 // was spent stays recorded, and the result counts for nothing.
@@ -143,11 +145,13 @@ struct GoLiveCaseWork {
 };
 
 // The case, if it still has to be run: its run is running, it has no verdict
-// yet, and the location's fingerprint is still the one the run tests. A run
-// whose configuration changed under it is cancelled here, and a new run of
-// the new configuration is started in its place for the same locations: the
-// person who submitted the test asked for the client to be tested, and what
-// the old run would go on to test no longer exists.
+// yet, its location is switched on, and the location's fingerprint is still
+// the one the run tests. A run whose location was switched off is cancelled
+// here. A run whose configuration changed under it is cancelled too, and a
+// new run of the new configuration is started in its place for the same
+// location (D-077 point 3): the person who submitted the test asked for the
+// location to be tested, and what the old run would go on to test no longer
+// exists.
 std::optional<GoLiveCaseWork> go_live_case(pqxx::transaction_base& tx, std::int64_t case_id, core::TimePoint now);
 
 // Ends every run that has been running without a case finishing for `idle`:
