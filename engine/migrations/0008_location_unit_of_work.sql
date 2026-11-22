@@ -50,3 +50,23 @@ ALTER TABLE clients
     DROP COLUMN audience;
 
 -- ---- End of the section "Locations are switched on by themselves" --------------
+
+-- ---- Go-live runs name a location ----------------------------------------------
+--
+-- A test is submitted for one location and tests that location's
+-- configuration at its policy's width (D-102 point 5); a pass still counts
+-- for every location with the same fingerprint (D-074 point 2). Nothing is
+-- deployed, so a development database's runs go to the client's
+-- earliest-linked location (the first whose reply settings a link wrote), or
+-- to the first location the run tested where the client has none linked now.
+ALTER TABLE go_live_runs ADD COLUMN location_id bigint REFERENCES locations (id);
+UPDATE go_live_runs g
+   SET location_id = coalesce((SELECT l.id FROM locations l JOIN reply_settings r ON r.location_id = l.id
+                                WHERE l.client_id = g.client_id ORDER BY r.created_at, l.id LIMIT 1),
+                              (g.location_ids->>0)::bigint);
+ALTER TABLE go_live_runs
+    ALTER COLUMN location_id SET NOT NULL,
+    DROP COLUMN client_id,
+    DROP COLUMN location_ids;
+
+-- ---- End of the section "Go-live runs name a location" -------------------------

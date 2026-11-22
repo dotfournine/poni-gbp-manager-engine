@@ -1,5 +1,5 @@
 // The go-live test's part of the dashboard's API (D-074): where every
-// client's configurations stand, starting a test, stopping one, and reading
+// location's configuration stands, starting a test, stopping one, and reading
 // a run with its cases. Paths, parameters and bodies are defined in
 // api/openapi.yaml; change that file first.
 //
@@ -29,16 +29,15 @@ void add_go_live_routes(Router& router, const Api& api) {
 
     // The request that spends money on model calls. Its own action name, so
     // a role can later allow reading and not this.
-    router.add(verb::post, "/api/clients/{id}/go-live-test", {Access::user, "go_live.start"},
+    router.add(verb::post, "/api/locations/{id}/go-live-test", {Access::user, "go_live.start"},
                [api](const Request& request) -> asio::awaitable<Response> {
                    const auto id = path_id(request);
-                   if (!id) co_return not_found("client");
+                   if (!id) co_return not_found("location");
                    const auto started = co_await api.change(request, [id = *id, providers = api.options.llm_providers,
                                                                       parallel = api.options.job_workers](pqxx::work& tx, audit::Writer& audit) {
                        return repo::start_go_live(tx, audit, id, providers, parallel);
                    });
-                   if (!started) co_return respond(started.error());
-                   co_return ok(model::GoLiveRunList{.items = *started, .total = static_cast<std::int64_t>(started->size())}, 201);
+                   co_return respond(started, 201);
                });
 
     add_get_by_id(router, api, "/api/go-live-runs/{id}", "go_live.read", "go-live test", repo::get_go_live_run);

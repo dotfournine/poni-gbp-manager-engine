@@ -23,14 +23,14 @@ using testing::Not;
 
 namespace {
 
-// What the client's own reviews in these tests say, so the scripted analyzer can tell them from the corpus.
+// What the location's own reviews in these tests say, so the scripted analyzer can tell them from the corpus.
 constexpr std::string_view kRegular = "our regular Thursday visit";
 
 class GoLive : public test::ReplyTest {
 protected:
     void SetUp() override {
         ReplyTest::SetUp();
-        // A model that behaves: the client's own praise is praise, and it
+        // A model that behaves: the location's own praise is praise, and it
         // lets nothing from the corpus through.
         llm_.analyzer = careful;
     }
@@ -51,24 +51,20 @@ protected:
         return live_draft(id);
     }
 
-    repo::Result<std::vector<model::GoLiveRun>> start(std::int64_t client, std::vector<std::string> providers = {"anthropic", "dashscope"}) {
+    repo::Result<model::GoLiveRun> start(std::int64_t location, std::vector<std::string> providers = {"anthropic", "dashscope"}) {
         return as_staff([&](pqxx::work& tx, audit::Writer& audit) {
-            return repo::start_go_live(tx, audit, client, providers, parallel_);
+            return repo::start_go_live(tx, audit, location, providers, parallel_);
         });
     }
-    // Starts a test of the client's one configuration and returns the run's id.
-    std::int64_t started(std::int64_t client) {
-        const auto runs = start(client);
-        EXPECT_TRUE(runs) << (runs ? "" : runs.error().message);
-        if (!runs || runs->size() != 1) {
-            ADD_FAILURE() << "expected one run";
-            return 0;
-        }
-        return runs->front().id;
+    // Starts a test of the location's configuration and returns the run's id.
+    std::int64_t started(std::int64_t location) {
+        const auto run = start(location);
+        EXPECT_TRUE(run) << (run ? "" : run.error().message);
+        return run ? run->id : 0;
     }
-    // Submits the client and lets the test run to its end.
-    std::int64_t tested(std::int64_t client) {
-        const auto id = started(client);
+    // Submits the location and lets the test run to its end.
+    std::int64_t tested(std::int64_t location) {
+        const auto id = started(location);
         run_jobs();
         return id;
     }
@@ -96,10 +92,10 @@ protected:
 
     // A pass with a policy of this width, as a test leaves it.
     void pass_with(std::int64_t location, bool positive, bool rating_only, int min_stars) {
-        exec(std::format("INSERT INTO go_live_runs (client_id, fingerprint, fingerprint_inputs, location_ids, status, auto_post_positive, "
+        exec(std::format("INSERT INTO go_live_runs (location_id, fingerprint, fingerprint_inputs, status, auto_post_positive, "
                          "auto_post_rating_only, auto_post_min_stars, corpus_version, repeats, started_at, finished_at) "
-                         "SELECT client_id, '{}', '{{}}', '[]', 'passed', {}, {}, {}, 'test', 3, now(), now() FROM locations WHERE id = {}",
-                         fingerprint(location), positive, rating_only, min_stars, location));
+                         "VALUES ({}, '{}', '{{}}', 'passed', {}, {}, {}, 'test', 3, now(), now())",
+                         location, fingerprint(location), positive, rating_only, min_stars));
     }
     std::string run_value(std::int64_t run_id, const std::string& column) {
         return value<std::string>("SELECT coalesce(" + column + "::text, '') FROM go_live_runs WHERE id = " + std::to_string(run_id));
@@ -144,9 +140,11 @@ TEST_F(GoLive, APassingTestAndOnlyThatLetsAutoPostingStart) {
     const auto drafts_before = count("reply_drafts");
     const auto notices_before = count("notification_deliveries");
 
-    const auto run_id = started(spa_client_);
+    const auto run_id = started(spa_);
     auto during = run(run_id);
     EXPECT_EQ(during.status, "running");
+    EXPECT_EQ(during.location_id, spa_);
+    EXPECT_EQ(during.location_title, "LU DREAM SPA - Chelsea");
     EXPECT_EQ(during.real_reviews, 4) << "own1, own2, own3 and r1; not the 3-star one, not the ignored one";
     EXPECT_EQ(during.cases_total, static_cast<std::int64_t>(corpus_cases("wellness")) + 4);
     EXPECT_EQ(during.repeats, 3);
@@ -159,7 +157,7 @@ TEST_F(GoLive, APassingTestAndOnlyThatLetsAutoPostingStart) {
     EXPECT_EQ(done.status, "passed") << done.summary.value_or("");
     EXPECT_EQ(done.cases_done, done.cases_total);
     EXPECT_EQ(failed_cases(done), 0);
-    EXPECT_THAT(done.summary.value_or(""), HasSubstr("4 of the client's own reviews"));
+    EXPECT_THAT(done.summary.value_or(""), HasSubstr("4 of the location's own reviews"));
     EXPECT_TRUE(done.corpus_current);
     EXPECT_EQ(count("audit_log WHERE action = 'go_live.finished' AND actor = 'system:go-live' AND after->>'status' = 'passed'"), 1);
 
@@ -204,7 +202,7 @@ TEST_F(GoLive, APassingTestAndOnlyThatLetsAutoPostingStart) {
     run_jobs();
     ASSERT_EQ(gbp_.puts.size(), 1u);
     EXPECT_EQ(gbp_.puts[0].review_id, "r2");
-    EXPECT_FALSE(open(buffet_)) << "the other client is as untested as before";
+    EXPECT_FALSE(open(buffet_)) << "the other location is as untested as before";
 }
 
 TEST_F(GoLive, APassSwitchesNothingOnAndLiftsNoPause) {
@@ -212,7 +210,7 @@ TEST_F(GoLive, APassSwitchesNothingOnAndLiftsNoPause) {
     tx([&](pqxx::work& tx) {
         repo::pause_auto_posting(tx, spa_, repo::kPausePostRefused, "Google refused an automatic reply (HTTP 403).", clock_.now());
     });
-    EXPECT_EQ(run(tested(spa_client_)).status, "passed");
+    EXPECT_EQ(run(tested(spa_)).status, "passed");
     EXPECT_EQ(count("locations WHERE auto_post_enabled OR auto_post_five_star OR auto_post_four_star"), 0);
     EXPECT_EQ(count("locations WHERE auto_post_paused_at IS NOT NULL"), 1);
     EXPECT_EQ(value<bool>("SELECT posting_enabled FROM system_settings"), true) << "as the fixture left it";
@@ -223,8 +221,12 @@ TEST_F(GoLive, APassSwitchesNothingOnAndLiftsNoPause) {
     EXPECT_THAT(draft(draft_id, "status_reason"), HasSubstr("paused"));
 }
 
-TEST_F(GoLive, AClientWithoutPraiseYetIsTestedOnTheCorpusAndTheResultSaysSo) {
-    const auto run_id = tested(buffet_client_);
+TEST_F(GoLive, ALocationWithoutPraiseYetIsTestedOnTheCorpusAndTheResultSaysSo) {
+    // It needs no client either (D-102).
+    as_test([&](pqxx::work& tx, audit::Writer& audit) {
+        return repo::update_location(tx, audit, buffet_, {.client_id = std::nullopt}).has_value();
+    });
+    const auto run_id = tested(buffet_);
     const auto done = run(run_id);
     EXPECT_EQ(done.status, "passed") << "too new to have reviews does not hold a pass back";
     EXPECT_EQ(done.real_reviews, 0);
@@ -362,7 +364,7 @@ TEST_F(GoLive, APolicyThatAutoPostsMoreNeedsANewTestAndOneThatPostsLessDoesNot) 
     EXPECT_FALSE(open(spa_)) << "ratings without text were not part of what passed";
 
     // A test with the wider policy covers it, and everything narrower.
-    EXPECT_EQ(run(tested(spa_client_)).status, "passed");
+    EXPECT_EQ(run(tested(spa_)).status, "passed");
     EXPECT_TRUE(open(spa_));
     set_policy(spa_, R"({"auto_post_rating_only": false, "auto_post_positive": false})");
     EXPECT_TRUE(open(spa_)) << "narrowing needs no test";
@@ -393,7 +395,7 @@ TEST_F(GoLive, AChangeAfterSchedulingStopsThePostAndTheDraftGoesToAPerson) {
 
     // The new configuration passes its own test: auto-posting resumes, for reviews from then on.
     review(kSpa, "own1", "FIVE", praise());
-    EXPECT_EQ(run(tested(spa_client_)).status, "passed");
+    EXPECT_EQ(run(tested(spa_)).status, "passed");
     clock_.advance(1min);
     EXPECT_EQ(draft(drafted("r3"), "status"), "scheduled");
     EXPECT_EQ(draft(draft_id, "status"), "draft") << "what was stopped stays with a person";
@@ -405,7 +407,7 @@ TEST_F(GoLive, AChangeAfterSchedulingStopsThePostAndTheDraftGoesToAPerson) {
 TEST_F(GoLive, AnAttackThatReachesAutoPostFailsTheTest) {
     // A model that is fooled by everything: every review is happy praise to it.
     llm_.analyzer = FakeLlm::always(FakeLlm::kHappyAnalysis);
-    const auto run_id = tested(spa_client_);
+    const auto run_id = tested(spa_);
     const auto failed = run(run_id);
     EXPECT_EQ(failed.status, "failed");
     EXPECT_GT(failed_cases(failed), 0);
@@ -425,19 +427,19 @@ TEST_F(GoLive, AnAttackThatReachesAutoPostFailsTheTest) {
 
     // Fixed (here: the model behaves again), the same configuration passes a new test.
     llm_.analyzer = careful;
-    EXPECT_EQ(run(tested(spa_client_)).status, "passed");
+    EXPECT_EQ(run(tested(spa_)).status, "passed");
     EXPECT_TRUE(open(spa_));
 
     // And a later failure of the same configuration takes the pass back.
     llm_.analyzer = FakeLlm::always(FakeLlm::kHappyAnalysis);
-    EXPECT_EQ(run(tested(spa_client_)).status, "failed");
+    EXPECT_EQ(run(tested(spa_)).status, "failed");
     EXPECT_FALSE(open(spa_));
 }
 
 TEST_F(GoLive, AReplyTheJudgeCallsUnacceptableFailsTheTest) {
     review(kSpa, "own1", "FIVE", praise());
     llm_.judge = FakeLlm::judging("unacceptable");
-    const auto failed = run(tested(spa_client_));
+    const auto failed = run(tested(spa_));
     EXPECT_EQ(failed.status, "failed");
     EXPECT_EQ(failed_cases(failed), 1);
     EXPECT_THAT(failed.summary.value_or(""), HasSubstr("the judge rated unacceptable"));
@@ -457,7 +459,7 @@ TEST_F(GoLive, WhenTheProvidersFallbackModelRatedSomeRepliesTheResultSaysSo) {
         if (request.messages.back().content.find("Great facial") != std::string::npos) answer->fallback_model = "claude-opus-4-8";
         return answer;
     };
-    const auto done = run(tested(spa_client_));
+    const auto done = run(tested(spa_));
     EXPECT_EQ(done.status, "passed");
     EXPECT_THAT(done.summary.value_or(""), HasSubstr("the replies of 1 case were rated by the provider's fallback model"));
     int by_fallback = 0, by_judge = 0;
@@ -477,19 +479,19 @@ TEST_F(GoLive, WhenTheProvidersFallbackModelRatedSomeRepliesTheResultSaysSo) {
 
     // Without a fallback nothing is noted.
     llm_.judge = FakeLlm::judging("post_as_is");
-    EXPECT_THAT(run(tested(spa_client_)).summary.value_or(""), testing::Not(HasSubstr("fallback")));
+    EXPECT_THAT(run(tested(spa_)).summary.value_or(""), testing::Not(HasSubstr("fallback")));
 }
 
 TEST_F(GoLive, ARatingThatOnlyAsksForAnEditDoesNotFail) {
     review(kSpa, "own1", "FIVE", praise());
     llm_.judge = FakeLlm::judging("rewrite");
-    EXPECT_EQ(run(tested(spa_client_)).status, "passed") << "only \"unacceptable\" blocks (D-074)";
+    EXPECT_EQ(run(tested(spa_)).status, "passed") << "only \"unacceptable\" blocks (D-074)";
 }
 
 TEST_F(GoLive, AModelThatDoesNotAnswerMakesTheTestInconclusiveNotFailed) {
     review(kSpa, "own1", "FIVE", praise());
     llm_.generator = [](const llm::ChatRequest&) { return FakeLlm::failure(llm::Error::Kind::unavailable, "HTTP 503"); };
-    const auto run_id = tested(spa_client_);
+    const auto run_id = tested(spa_);
     const auto cut = run(run_id);
     EXPECT_EQ(cut.status, "inconclusive");
     EXPECT_THAT(cut.summary.value_or(""), HasSubstr("could not be finished"));
@@ -501,7 +503,7 @@ TEST_F(GoLive, AModelThatDoesNotAnswerMakesTheTestInconclusiveNotFailed) {
 
     // When the model answers again, a new test decides.
     llm_.generator = FakeLlm::always(FakeLlm::kCleanReply);
-    EXPECT_EQ(run(tested(spa_client_)).status, "passed");
+    EXPECT_EQ(run(tested(spa_)).status, "passed");
     EXPECT_TRUE(open(spa_));
 }
 
@@ -509,7 +511,7 @@ TEST_F(GoLive, AWrongKeyOrAJudgeThatGivesNoRatingIsInconclusiveToo) {
     review(kSpa, "own1", "FIVE", praise());
 
     llm_.analyzer = [](const llm::ChatRequest&) { return FakeLlm::failure(llm::Error::Kind::unauthenticated, "HTTP 401"); };
-    EXPECT_EQ(run(tested(spa_client_)).status, "inconclusive");
+    EXPECT_EQ(run(tested(spa_)).status, "inconclusive");
     llm_.analyzer = careful;
 
     for (const auto& judge : std::vector<FakeLlm::Answer>{
@@ -520,7 +522,7 @@ TEST_F(GoLive, AWrongKeyOrAJudgeThatGivesNoRatingIsInconclusiveToo) {
              FakeLlm::always(FakeLlm::ratings(2, "post_as_is")),
              FakeLlm::always(R"({"ratings": "all fine"})")}) {
         llm_.judge = judge;
-        const auto cut = run(tested(spa_client_));
+        const auto cut = run(tested(spa_));
         EXPECT_EQ(cut.status, "inconclusive") << cut.summary.value_or("");
         EXPECT_EQ(cut.cases->back().verdict, "inconclusive") << "a reply that would be posted and that nobody rated can't count as fine";
         EXPECT_FALSE(open(spa_));
@@ -529,13 +531,13 @@ TEST_F(GoLive, AWrongKeyOrAJudgeThatGivesNoRatingIsInconclusiveToo) {
 
 TEST_F(GoLive, AnOutageAfterAFailureLeavesTheFailureStanding) {
     review(kSpa, "own1", "FIVE", praise());
-    // Fooled by the corpus, and then the judge goes down on the client's own review, which runs last.
+    // Fooled by the corpus, and then the judge goes down on the location's own review, which runs last.
     llm_.analyzer = FakeLlm::always(FakeLlm::kHappyAnalysis);
     llm_.judge = [](const llm::ChatRequest& request) {
         if (request.review_id) return FakeLlm::failure(llm::Error::Kind::unavailable, "HTTP 503");
         return FakeLlm::json_answer(FakeLlm::ratings(FakeLlm::replies_in(request), "post_as_is"));
     };
-    const auto ended = run(tested(spa_client_));
+    const auto ended = run(tested(spa_));
     EXPECT_EQ(ended.status, "failed") << "a finding of failure wins over an outage";
     EXPECT_THAT(ended.summary.value_or(""), HasSubstr("A case failed before the test was cut short"));
 }
@@ -549,7 +551,7 @@ TEST_F(GoLive, AContentFilterOnAnAlarmingReviewIsThatReviewsOutcomeNotAnOutage) 
         }
         return careful(request);
     };
-    const auto done = run(tested(buffet_client_));
+    const auto done = run(tested(buffet_));
     EXPECT_EQ(done.status, "passed") << done.summary.value_or("");
     bool refused = false;
     for (const auto& one : *done.cases) {
@@ -567,7 +569,7 @@ TEST_F(GoLive, AProviderThatRefusesEveryRequestDoesNotEarnAPass) {
     // fine would pass having tested nothing.
     review(kSpa, "own1", "FIVE", praise());
     llm_.generator = [](const llm::ChatRequest&) { return FakeLlm::failure(llm::Error::Kind::rejected, "HTTP 404: model_not_found"); };
-    const auto refused = run(tested(spa_client_));
+    const auto refused = run(tested(spa_));
     EXPECT_EQ(refused.status, "inconclusive") << refused.summary.value_or("");
     EXPECT_THAT(refused.summary.value_or(""), HasSubstr("refused an ordinary review"));
     EXPECT_THAT(refused.summary.value_or(""), HasSubstr("model_not_found"));
@@ -575,11 +577,11 @@ TEST_F(GoLive, AProviderThatRefusesEveryRequestDoesNotEarnAPass) {
 
     llm_.generator = FakeLlm::always(FakeLlm::kCleanReply);
     llm_.analyzer = [](const llm::ChatRequest&) { return FakeLlm::failure(llm::Error::Kind::rejected, "HTTP 400: unknown parameter"); };
-    EXPECT_EQ(run(tested(spa_client_)).status, "inconclusive");
+    EXPECT_EQ(run(tested(spa_)).status, "inconclusive");
     EXPECT_FALSE(open(spa_));
 }
 
-TEST_F(GoLive, TheCasesAreRoutedWithTheWidestPolicyAmongTheLocationsThePassWillCover) {
+TEST_F(GoLive, TheCasesAreRoutedWithTheSubmittedLocationsPolicyAndThePassCoversNoMore) {
     // Two locations with one voice. Chelsea auto-posts five-star reviews with
     // text only; Midtown also four stars and ratings without text.
     gbp_.add_location("9003", "LU DREAM SPA - Midtown");
@@ -588,28 +590,40 @@ TEST_F(GoLive, TheCasesAreRoutedWithTheWidestPolicyAmongTheLocationsThePassWillC
     become_test_client(spa_client_, "wellness");  // the same business, with the same settings (D-102: a link copies none)
     set_policy(spa_, R"({"auto_post_min_stars": 5, "auto_post_rating_only": false})");
     ASSERT_EQ(fingerprint(midtown), fingerprint(spa_)) << "the policy is not part of the fingerprint";
-    review(kSpa, "four", "FOUR", praise("Great facial"));
-    review(kSpa, "bare", "FIVE", std::nullopt);
+    for (const auto& [id, stars, text] : {std::tuple<std::string, std::string, std::optional<std::string>>{"four", "FOUR", praise("Great facial")},
+                                           {"bare", "FIVE", std::nullopt}}) {
+        store_review(midtown, test::make_review(gbp_.account_id, "9003", id, stars, text, "2026-11-09T10:00:00Z", "2026-11-09T10:00:00Z"));
+    }
 
-    const auto run_id = tested(spa_client_);
-    const auto done = run(run_id);
-    ASSERT_EQ(done.status, "passed") << done.summary.value_or("");
-    EXPECT_EQ(done.auto_post_min_stars, 4);
-    EXPECT_TRUE(done.auto_post_rating_only);
-    // The run names Chelsea first, and still the four-star and the text-less
-    // review were routed to auto-post and judged: what the pass says it covers, it tested.
-    for (const auto& one : *done.cases) {
+    // Chelsea's test covers Chelsea's width, and Midtown's wider policy still needs its own.
+    const auto narrow = run(tested(spa_));
+    ASSERT_EQ(narrow.status, "passed") << narrow.summary.value_or("");
+    EXPECT_EQ(narrow.auto_post_min_stars, 5);
+    EXPECT_FALSE(narrow.auto_post_rating_only);
+    EXPECT_EQ(narrow.real_reviews, 0) << "Midtown's reviews are Midtown's";
+    EXPECT_TRUE(open(spa_));
+    EXPECT_FALSE(open(midtown));
+    EXPECT_THAT(gate(midtown).reason, HasSubstr("auto-posts more than the last passing test covered"));
+
+    // Midtown's own test: its four-star and its text-less review were routed
+    // to auto-post and judged, so what the pass says it covers, it tested.
+    const auto wide = run(tested(midtown));
+    ASSERT_EQ(wide.status, "passed") << wide.summary.value_or("");
+    EXPECT_EQ(wide.location_id, midtown);
+    EXPECT_EQ(wide.auto_post_min_stars, 4);
+    EXPECT_TRUE(wide.auto_post_rating_only);
+    for (const auto& one : *wide.cases) {
         if (one.category != "real") continue;
         EXPECT_EQ(one.attempts.front().route, "auto_post") << one.case_key;
         EXPECT_EQ(one.attempts.front().rating, "post_as_is") << one.case_key;
     }
     EXPECT_EQ(llm_.calls("judge"), 2u);
     EXPECT_TRUE(open(midtown));
-    EXPECT_TRUE(open(spa_));
+    EXPECT_TRUE(open(spa_)) << "the wider pass covers the narrower policy of the same fingerprint";
 }
 
 TEST_F(GoLive, ATestThatLostItsJobsIsEndedAsInconclusive) {
-    const auto run_id = started(spa_client_);
+    const auto run_id = started(spa_);
     // The engine died for good in the middle of the test: its jobs are gone.
     exec(std::format("DELETE FROM jobs WHERE kind = '{}'", repo::kGoLiveCaseKind));
     EXPECT_EQ(await(tester_->sweep()), 0u) << "a test that has just started is left alone";
@@ -620,8 +634,8 @@ TEST_F(GoLive, ATestThatLostItsJobsIsEndedAsInconclusive) {
     EXPECT_EQ(run_value(run_id, "status"), "inconclusive");
     EXPECT_THAT(run_value(run_id, "summary"), HasSubstr("stopped making progress"));
     EXPECT_FALSE(open(spa_));
-    // The client can be submitted again.
-    EXPECT_EQ(run(tested(spa_client_)).status, "passed");
+    // The location can be submitted again.
+    EXPECT_EQ(run(tested(spa_)).status, "passed");
     EXPECT_EQ(await(tester_->sweep()), 0u) << "a finished test is not touched";
 }
 
@@ -629,7 +643,7 @@ TEST_F(GoLive, ATestThatLostItsJobsIsEndedAsInconclusive) {
 
 TEST_F(GoLive, ACancelledTestMakesNoFurtherModelCallsAndCountsForNothing) {
     review(kSpa, "own1", "FIVE", praise());
-    const auto run_id = started(spa_client_);
+    const auto run_id = started(spa_);
     // One case runs; then a person stops the test.
     jobs::Worker worker(io_.get_executor(), queue(), registry_, {.id = "test-worker"});
     ASSERT_TRUE(await(worker.run_once()));
@@ -653,8 +667,8 @@ TEST_F(GoLive, ACancelledTestMakesNoFurtherModelCallsAndCountsForNothing) {
     EXPECT_EQ(again.error().kind, repo::Failure::Kind::conflict);
     EXPECT_EQ(cancel(999999).error().kind, repo::Failure::Kind::not_found);
 
-    // The client can be submitted again at once.
-    EXPECT_EQ(run(tested(spa_client_)).status, "passed");
+    // The location can be submitted again at once.
+    EXPECT_EQ(run(tested(spa_)).status, "passed");
 }
 
 TEST_F(GoLive, CancellingInTheMiddleOfACaseStopsItBeforeItsNextCall) {
@@ -666,7 +680,7 @@ TEST_F(GoLive, CancellingInTheMiddleOfACaseStopsItBeforeItsNextCall) {
         }
         return careful(request);
     };
-    run_id = started(spa_client_);
+    run_id = started(spa_);
     run_jobs();
     EXPECT_EQ(llm_.calls("analyzer"), 1u);
     EXPECT_EQ(llm_.calls("generator"), 0u) << "the writer was never asked";
@@ -676,7 +690,7 @@ TEST_F(GoLive, CancellingInTheMiddleOfACaseStopsItBeforeItsNextCall) {
 
 TEST_F(GoLive, AChangeDuringATestCancelsItAndStartsANewOneOfTheNewConfiguration) {
     review(kSpa, "own1", "FIVE", praise());
-    const auto run_id = started(spa_client_);
+    const auto run_id = started(spa_);
     const auto before = fingerprint(spa_);
     jobs::Worker worker(io_.get_executor(), queue(), registry_, {.id = "test-worker"});
     ASSERT_TRUE(await(worker.run_once()));
@@ -693,6 +707,7 @@ TEST_F(GoLive, AChangeDuringATestCancelsItAndStartsANewOneOfTheNewConfiguration)
     EXPECT_NE(run_value(next, "fingerprint"), before);
     EXPECT_EQ(run_value(next, "fingerprint"), fingerprint(spa_));
     EXPECT_EQ(run_value(next, "started_by"), std::to_string(user_)) << "in the name of the person who submitted the test";
+    EXPECT_EQ(run_value(next, "location_id"), std::to_string(spa_)) << "for the location it was submitted for";
     EXPECT_EQ(count("audit_log WHERE action = 'go_live.restart' AND actor = 'system:go-live'"), 1);
     EXPECT_FALSE(open(spa_));
 
@@ -714,7 +729,7 @@ TEST_F(GoLive, AChangeDuringATestCancelsItAndStartsANewOneOfTheNewConfiguration)
 // nothing and cancels nothing: the running test notices, where it compares its fingerprint (D-077 point 3).
 TEST_F(GoLive, ASaveOfTheReplySettingsDuringATestIsNoticedByTheTestAndNotByTheSave) {
     review(kSpa, "own1", "FIVE", praise());
-    const auto run_id = started(spa_client_);
+    const auto run_id = started(spa_);
     const auto before = fingerprint(spa_);
     jobs::Worker worker(io_.get_executor(), queue(), registry_, {.id = "test-worker"});
     ASSERT_TRUE(await(worker.run_once()));
@@ -755,7 +770,7 @@ TEST_F(GoLive, ASaveOfTheReplySettingsDuringATestIsNoticedByTheTestAndNotByTheSa
 
 TEST_F(GoLive, AsManyCasesAreQueuedAtATimeAsTheEngineHasJobWorkers) {
     parallel_ = 5;
-    const auto run_id = started(spa_client_);
+    const auto run_id = started(spa_);
     EXPECT_EQ(count(std::format("jobs WHERE kind = '{}' AND status = 'queued'", repo::kGoLiveCaseKind)), 5);
     EXPECT_EQ(run_value(run_id, "parallel"), "5");
     // Each case that finishes queues the next one, so five stay in flight.
@@ -801,11 +816,11 @@ std::string sent(const llm::ChatRequest& request) {
 TEST_F(GoLive, ATestAsksTheModelsExactlyWhatThePipelineAsks) {
     const auto with_text = review(kSpa, "own1", "FIVE", praise());
     const auto without_text = review(kSpa, "own2", "FOUR", std::nullopt);
-    // This test is about the client's own two reviews: a short corpus keeps its four test runs short.
+    // This test is about the location's own two reviews: a short corpus keeps its four test runs short.
     reseed("DELETE FROM kb_corpus_cases WHERE industry_key = 'wellness' AND category <> 'control'");
 
     // Under the configuration as it is now: what the pipeline asks for the
-    // two reviews, and what a test of the client asks for the same two.
+    // two reviews, and what a test of the location asks for the same two.
     const auto compare = [&](const std::string& configuration) {
         SCOPED_TRACE(configuration);
         llm_.requests.clear();
@@ -815,7 +830,7 @@ TEST_F(GoLive, ATestAsksTheModelsExactlyWhatThePipelineAsks) {
         // The analyzer and the writer for the review with text; a rating alone is not analyzed.
         EXPECT_EQ(pipeline.size(), 3u);
 
-        EXPECT_NE(run(tested(spa_client_)).status, "cancelled");
+        EXPECT_NE(run(tested(spa_)).status, "cancelled");
         for (const auto& asked : pipeline) {
             std::size_t in_the_test = 0;
             for (const auto& request : llm_.requests) {
@@ -879,26 +894,37 @@ TEST_F(GoLive, ATestStartsOnlyWhenAPersonSubmitsIt) {
 }
 
 TEST_F(GoLive, StartingIsRefusedWhenItCannotRun) {
-    const auto no_judge = start(spa_client_, {"dashscope"});
+    const auto no_judge = start(spa_, {"dashscope"});
     ASSERT_FALSE(no_judge);
     EXPECT_EQ(no_judge.error().kind, repo::Failure::Kind::invalid);
     EXPECT_THAT(no_judge.error().message, HasSubstr("judge's model provider 'anthropic' is not configured"));
     EXPECT_EQ(start(999999).error().kind, repo::Failure::Kind::not_found);
 
-    exec(std::format("UPDATE locations SET industry_key = NULL WHERE client_id = {}", buffet_client_));
-    EXPECT_THAT(start(buffet_client_).error().message, HasSubstr("no industry profile"));
-    const auto unlinked = make_client("No Locations Yet");
-    EXPECT_THAT(start(unlinked).error().message, HasSubstr("no linked location"));
+    exec(std::format("UPDATE locations SET industry_key = NULL WHERE id = {}", buffet_));
+    EXPECT_THAT(start(buffet_).error().message, HasSubstr("no industry profile"));
     EXPECT_EQ(count("go_live_runs"), 0);
     EXPECT_EQ(count("audit_log WHERE action = 'go_live.start'"), 0);
 
     // While a test is running, a second submission starts nothing.
-    const auto run_id = started(spa_client_);
-    const auto twice = start(spa_client_);
+    const auto run_id = started(spa_);
+    const auto twice = start(spa_);
     ASSERT_FALSE(twice);
     EXPECT_EQ(twice.error().kind, repo::Failure::Kind::conflict);
+    EXPECT_EQ(twice.error().code, "go_live_running");
     EXPECT_EQ(count("go_live_runs"), 1);
-    EXPECT_TRUE(cancel(run_id));
+
+    // A location that is switched off is not tested (D-102 point 2): a
+    // submission is refused, and a running test stops before its next case.
+    switch_location(spa_, false);
+    const auto off = start(spa_);
+    ASSERT_FALSE(off);
+    EXPECT_EQ(off.error().kind, repo::Failure::Kind::invalid);
+    EXPECT_THAT(off.error().message, HasSubstr("switched off"));
+    run_jobs();
+    EXPECT_EQ(run_value(run_id, "status"), "cancelled");
+    EXPECT_THAT(run_value(run_id, "summary"), HasSubstr("switched off"));
+    EXPECT_TRUE(llm_.requests.empty()) << "no model was asked for a location that is off";
+    EXPECT_EQ(count("go_live_runs"), 1) << "and nothing was started in its place";
 }
 
 TEST_F(GoLive, LocationsThatShareAConfigurationShareATestAndOthersGetTheirOwn) {
@@ -907,30 +933,32 @@ TEST_F(GoLive, LocationsThatShareAConfigurationShareATestAndOthersGetTheirOwn) {
     const auto midtown = link("9003", spa_client_);
     become_test_client(spa_client_, "wellness");  // the same business, with the same settings (D-102: a link copies none)
     EXPECT_EQ(fingerprint(midtown), fingerprint(spa_));
-    EXPECT_NE(fingerprint(buffet_), fingerprint(spa_)) << "two clients never share one: the business is named in the prompts";
+    EXPECT_NE(fingerprint(buffet_), fingerprint(spa_)) << "two businesses never share one: the business is named in the prompts";
 
-    const auto shared = start(spa_client_);
-    ASSERT_TRUE(shared);
-    ASSERT_EQ(shared->size(), 1u);
-    EXPECT_EQ(run_value(shared->front().id, "jsonb_array_length(location_ids)"), "2");
+    // One test per fingerprint at a time, whichever location it was submitted for.
+    const auto shared = started(spa_);
+    const auto meanwhile = start(midtown);
+    ASSERT_FALSE(meanwhile);
+    EXPECT_EQ(meanwhile.error().code, "go_live_running");
     run_jobs();
+    EXPECT_EQ(run(shared).status, "passed");
     EXPECT_TRUE(open(spa_));
-    EXPECT_TRUE(open(midtown));
+    EXPECT_TRUE(open(midtown)) << "a pass counts for every location with the fingerprint";
 
     // Midtown gets a temperature of its own: now it is a configuration of its own.
     set_voice(midtown, R"({"temperature": 0.3})");
     EXPECT_TRUE(open(spa_));
     EXPECT_FALSE(open(midtown));
     const auto calls = llm_.requests.size();
-    const auto separate = start(spa_client_);
-    ASSERT_TRUE(separate);
-    EXPECT_EQ(separate->size(), 2u) << "one run per configuration; the button tests the client as it is now";
-    run_jobs();
+    const auto separate = run(tested(midtown));
+    EXPECT_EQ(separate.status, "passed");
+    EXPECT_EQ(separate.fingerprint, fingerprint(midtown));
     EXPECT_TRUE(open(midtown));
     bool cooler = false;
     for (std::size_t i = calls; i < llm_.requests.size(); ++i) {
         const auto& request = llm_.requests[i];
-        if (request.task == "generator" && request.location_id == midtown) {
+        EXPECT_EQ(request.location_id, midtown) << "the test runs as the location it was submitted for";
+        if (request.task == "generator") {
             cooler = true;
             EXPECT_NEAR(request.temperature.value(), 0.3, 1e-6) << "the test runs with the location's own settings";
         }
@@ -938,7 +966,7 @@ TEST_F(GoLive, LocationsThatShareAConfigurationShareATestAndOthersGetTheirOwn) {
     EXPECT_TRUE(cooler);
 }
 
-TEST_F(GoLive, TheOverviewShowsEachClientsStateAndWhatATestWouldTake) {
+TEST_F(GoLive, TheOverviewShowsEachLocationsStateAndWhatATestWouldTake) {
     review(kSpa, "own1", "FIVE", praise());
     const auto overview = [&] {
         pqxx::connection conn{url()};
@@ -948,33 +976,38 @@ TEST_F(GoLive, TheOverviewShowsEachClientsStateAndWhatATestWouldTake) {
     auto before = overview();
     EXPECT_EQ(before.repeats, 3);
     EXPECT_EQ(before.judge_model, "claude-opus-5-5");
-    ASSERT_EQ(before.clients.size(), 2u);
-    const auto& spa = before.clients[1];  // by name: Gangnam, LU DREAM SPA
+    ASSERT_EQ(before.locations.size(), 2u);
+    const auto& spa = before.locations[1];  // by title: Gangnam, LU DREAM SPA - Chelsea
+    EXPECT_EQ(spa.location_id, spa_);
+    EXPECT_EQ(spa.location_title, "LU DREAM SPA - Chelsea");
     EXPECT_EQ(spa.client_id, spa_client_);
-    ASSERT_EQ(spa.configurations.size(), 1u);
-    EXPECT_EQ(spa.configurations[0].state, "not_tested");
-    EXPECT_FALSE(spa.configurations[0].pass);
-    const auto& estimate = spa.configurations[0].estimate;
+    EXPECT_EQ(spa.client_name, "LU DREAM SPA");
+    EXPECT_FALSE(spa.problem);
+    EXPECT_EQ(spa.fingerprint, fingerprint(spa_));
+    EXPECT_EQ(spa.state, "not_tested");
+    EXPECT_FALSE(spa.pass);
+    ASSERT_TRUE(spa.estimate);
+    const auto& estimate = *spa.estimate;
     EXPECT_EQ(estimate.real_reviews, 1);
     EXPECT_EQ(estimate.cases, static_cast<std::int64_t>(corpus_cases("wellness")) + 1);
     EXPECT_EQ(estimate.model_calls, estimate.cases * 3 * 2) << "an analyzer and a writer call per repeat; every case here has text";
     EXPECT_FALSE(estimate.cost_usd) << "no model call has been made yet, so there is nothing to measure";
     EXPECT_FALSE(estimate.notes.empty());
-    EXPECT_THAT(before.clients[0].configurations[0].estimate.notes, testing::Contains(HasSubstr("no real reviews will be tested")));
+    EXPECT_THAT(before.locations[0].estimate.value().notes, testing::Contains(HasSubstr("no real reviews will be tested")));
 
     // With calls on record, the estimate has a duration and a cost.
     exec("INSERT INTO llm_calls (occurred_at, task, model, attempt, status, prompt_tokens, completion_tokens, latency_ms, provider) VALUES "
          "(now(), 'analyzer', 'qwen3.7-plus', 1, 'ok', 1000, 100, 2000, 'dashscope'), "
          "(now(), 'generator', 'qwen3.7-plus', 1, 'ok', 1500, 80, 3000, 'dashscope'), "
          "(now(), 'judge', 'claude-opus-5-5', 1, 'ok', 2000, 600, 20000, 'anthropic')");
-    const auto measured = overview().clients[1].configurations[0].estimate;
+    const auto measured = overview().locations[1].estimate.value();
     ASSERT_TRUE(measured.seconds);
     ASSERT_TRUE(measured.cost_usd);
     EXPECT_GT(*measured.seconds, 60);
     EXPECT_GT(*measured.cost_usd, 0.0);
 
-    const auto run_id = tested(spa_client_);
-    const auto after = overview().clients[1].configurations[0];
+    const auto run_id = tested(spa_);
+    const auto after = overview().locations[1];
     EXPECT_EQ(after.state, "passed");
     ASSERT_TRUE(after.pass);
     EXPECT_EQ(after.pass->id, run_id);
@@ -982,10 +1015,22 @@ TEST_F(GoLive, TheOverviewShowsEachClientsStateAndWhatATestWouldTake) {
 
     // A corpus that has grown since does not take the pass away; the page says which corpus it was.
     exec(std::format("UPDATE go_live_runs SET corpus_version = 'an-older-one' WHERE id = {}", run_id));
-    const auto older = overview().clients[1].configurations[0];
+    const auto older = overview().locations[1];
     EXPECT_EQ(older.state, "passed");
     EXPECT_FALSE(older.pass->corpus_current);
     EXPECT_TRUE(open(spa_));
+
+    // A location that can't be tested says why; one that is switched off is not listed.
+    exec(std::format("UPDATE locations SET industry_key = NULL WHERE id = {}", buffet_));
+    const auto untestable = overview().locations[0];
+    EXPECT_EQ(untestable.location_id, buffet_);
+    EXPECT_THAT(untestable.problem.value_or(""), HasSubstr("no industry profile"));
+    EXPECT_FALSE(untestable.fingerprint);
+    EXPECT_FALSE(untestable.estimate);
+    EXPECT_EQ(untestable.state, "not_tested");
+    switch_location(buffet_, false);
+    ASSERT_EQ(overview().locations.size(), 1u);
+    EXPECT_EQ(overview().locations[0].location_id, spa_);
 }
 
 // ---- a new version of the knowledge base (D-078 point 7, D-084) ----------------------------
@@ -993,14 +1038,14 @@ TEST_F(GoLive, TheOverviewShowsEachClientsStateAndWhatATestWouldTake) {
 // The seed is poni-tools' business. The engine keeps nothing of the knowledge
 // base in memory, so a new version is in effect with the next read. One that
 // changes what the analyzer is told about an industry changes the
-// fingerprint of that industry's clients, and the gate does the rest: no
-// watcher, no notification. `poni-tools seed` names those clients to the
+// fingerprint of that industry's locations, and the gate does the rest: no
+// watcher, no notification. `poni-tools seed` names those locations to the
 // person who seeds.
 TEST_F(GoLive, ANewKnowledgeVersionThatChangesAProfileStopsAutoPostingUntilATestPasses) {
     switch_on(spa_);
     switch_on(buffet_);
-    const auto spa_run = tested(spa_client_);
-    tested(buffet_client_);
+    const auto spa_run = tested(spa_);
+    tested(buffet_);
     EXPECT_EQ(run_value(spa_run, "kb_version"), value<std::string>("SELECT version FROM kb_meta"))
         << "a run records the knowledge base it ran against";
     ASSERT_TRUE(open(spa_));
@@ -1021,20 +1066,20 @@ TEST_F(GoLive, ANewKnowledgeVersionThatChangesAProfileStopsAutoPostingUntilATest
            "WHERE key = 'wellness'");
     EXPECT_FALSE(open(spa_)) << "in effect at once: the gate reads the tables";
     EXPECT_THAT(gate(spa_).reason, HasSubstr("has not passed a go-live test"));
-    EXPECT_TRUE(open(buffet_)) << "another industry's clients are not touched";
+    EXPECT_TRUE(open(buffet_)) << "another industry's locations are not touched";
     EXPECT_EQ(draft(drafted("r2"), "status"), "draft") << "the reply waits for a person meanwhile";
     EXPECT_EQ(count("notification_deliveries WHERE event_type = 'system_problem'"), 0) << "the seed tells the person who seeds; the engine tells no one";
 
     // Nothing was switched off and nothing paused: only a passing test was taken away, and only one brings it back.
     EXPECT_EQ(value<bool>(std::format("SELECT auto_post_enabled AND auto_post_paused_at IS NULL FROM locations WHERE id = {}", spa_)), true);
-    tested(spa_client_);
+    tested(spa_);
     EXPECT_TRUE(open(spa_));
     EXPECT_EQ(draft(drafted("r3"), "status"), "scheduled");
 }
 
-TEST_F(GoLive, AClientWhoseIndustryLeftTheKnowledgeBaseHasNoConfigurationToTest) {
+TEST_F(GoLive, ALocationWhoseIndustryLeftTheKnowledgeBaseHasNoConfigurationToTest) {
     switch_on(spa_);
-    tested(spa_client_);
+    tested(spa_);
     ASSERT_TRUE(open(spa_));
     reseed("DELETE FROM kb_industries WHERE key = 'wellness'");
     EXPECT_FALSE(gate(spa_).passed);
