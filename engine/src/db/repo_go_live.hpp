@@ -48,8 +48,6 @@ inline constexpr int kGoLiveRealWithoutText = 2;
 // something else than the pipeline runs.
 struct GoLiveSetup {
     std::int64_t location_id = 0;
-    // The client it is grouped under, if any: what a notification about it is matched with.
-    std::optional<std::int64_t> client_id;
     std::string location_title;
     std::string business_name;
     domain::IndustryRules industry;

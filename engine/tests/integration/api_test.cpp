@@ -106,6 +106,10 @@ TEST_F(Api, DeletingAClientUnlinksItsLocationsAndChangesNothingElse) {
               200u);
     ASSERT_EQ(patch(std::format("/api/locations/{}", buffet), std::format(R"({{"client_id": {}}})", client)).status, 200u);
     ASSERT_EQ(save_settings(spa, "voice", R"({"reply_name": "Willow Moon Head Spa"})").status, 200u);
+    // A report of the location: a row that named the client before D-102, so that the delete failed on it.
+    const auto made = post(std::format("/api/locations/{}/reports", spa), R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})");
+    ASSERT_EQ(made.status, 201u) << made.body;
+    const auto report = json(made).at("id").as_int64();
     // The location and its settings, without the client they name.
     const auto without_the_client = [&](std::int64_t location) {
         boost::json::object out{{"location", read(std::format("/api/locations/{}", location))}, {"settings", read(settings_path(location))}};
@@ -128,6 +132,7 @@ TEST_F(Api, DeletingAClientUnlinksItsLocationsAndChangesNothingElse) {
     EXPECT_EQ(without_the_client(spa), spa_before);
     EXPECT_EQ(without_the_client(buffet), buffet_before);
     EXPECT_TRUE(read(std::format("/api/locations/{}", spa)).at("enabled").as_bool());
+    EXPECT_EQ(read(std::format("/api/reports/{}", report)).at("location_id").as_int64(), spa) << "the location's report stays";
     const auto entry = read("/api/audit-log?action=client.delete").at("items").at(0);
     EXPECT_EQ(entry.at("object_id").as_string(), std::to_string(client));
     EXPECT_EQ(entry.at("actor").as_string(), "staff@xvisionmediaus.com");

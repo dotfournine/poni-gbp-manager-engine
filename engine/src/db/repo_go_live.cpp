@@ -316,9 +316,9 @@ std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, st
 
 std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, std::int64_t location_id, const model::AiSettings& ai) {
     const auto none = [](std::string reason) { return std::unexpected(NoSetup{.reason = std::move(reason), .settings_error = {}}); };
-    const auto rows = tx.exec("SELECT title, client_id, industry_key FROM locations WHERE id = $1", pqxx::params{location_id});
+    const auto rows = tx.exec("SELECT title, industry_key FROM locations WHERE id = $1", pqxx::params{location_id});
     if (rows.empty()) return none("The location no longer exists.");
-    const auto industry_key = rows[0][2].as<OptString>();
+    const auto industry_key = rows[0][1].as<OptString>();
     auto industry = industry_key ? industry_rules(tx, *industry_key) : std::nullopt;
     if (!industry) return none("The location has no industry profile.");
     auto settings = stored_reply_settings(tx, location_id);
@@ -328,7 +328,6 @@ std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, st
 
     GoLiveSetup setup;
     setup.location_id = location_id;
-    setup.client_id = rows[0][1].as<OptId>();
     setup.location_title = rows[0][0].as<std::string>();
     setup.business_name = domain::business_name(settings->voice, setup.location_title);
     setup.industry = std::move(*industry);
