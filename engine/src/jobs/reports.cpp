@@ -38,7 +38,7 @@ asio::awaitable<domain::LocationPerformance> Reporter::read_performance(const re
     const year_month month = end.year() / end.month();
     const auto& location = work.location;
 
-    domain::LocationPerformance out{.location_id = location.id};
+    domain::LocationPerformance out;
     if (!location.accessible) {
         out.error = "access to the location is lost";
         co_return out;
@@ -106,8 +106,7 @@ asio::awaitable<void> Reporter::build_once(std::int64_t report_id, bool last_att
     auto work = co_await db_.tx([report_id, now = clock_.now()](pqxx::work& tx) { return repo::load_report_work(tx, report_id, now); });
     if (!work) co_return;  // built, failed or rejected already
 
-    auto performance = co_await read_performance(*work, last_attempt);
-    work->input.performance = {std::move(performance)};
+    work->input.performance = co_await read_performance(*work, last_attempt);
     auto data = domain::build_report(work->input);
     co_await summarize(data);
     const auto html = domain::render_report(data);

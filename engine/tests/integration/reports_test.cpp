@@ -201,10 +201,6 @@ TEST_F(Reports, AReportCountsTheReviewsOfItsLocationAndPeriodInTheLocationsTimeZ
     EXPECT_EQ(d.at("topics_complained").at(0).at("count").as_int64(), 1);
     EXPECT_EQ(d.at("escalations_opened").as_int64(), 1);
     EXPECT_EQ(d.at("escalations_closed").as_int64(), 0);
-    // The one location, by name.
-    ASSERT_EQ(d.at("locations").as_array().size(), 1u);
-    EXPECT_EQ(d.at("locations").at(0).at("title").as_string(), "LU DREAM SPA - Chelsea");
-    EXPECT_EQ(d.at("locations").at(0).at("reviews").at("new_reviews").as_int64(), 4);
     EXPECT_EQ(d.at("highlights_worst").at(0).at("text").as_string(), "The room was cold and nobody cared");
 
     const auto page = html(id);
@@ -213,7 +209,6 @@ TEST_F(Reports, AReportCountsTheReviewsOfItsLocationAndPeriodInTheLocationsTimeZ
     EXPECT_THAT(page, HasSubstr("A Reviewer"));
     EXPECT_THAT(page, HasSubstr("<h1>LU DREAM SPA - Chelsea</h1>"));
     EXPECT_THAT(page, Not(HasSubstr("Another location&#39;s review")));
-    EXPECT_THAT(page, Not(HasSubstr("By location")));
     EXPECT_THAT(page, Not(HasSubstr("Removed by Google")));
 
     // The API's view of it, and the audit entry in the person's name.
@@ -249,7 +244,7 @@ TEST_F(Reports, NamedStaffAreListedApartFromTheItems) {
 
     const auto id = generate(chelsea_);
     const auto d = data(id);
-    EXPECT_EQ(d.at("version").as_int64(), 2);
+    EXPECT_EQ(d.at("version").as_int64(), 3);
     // The therapists are not items; the treatment is.
     ASSERT_EQ(d.at("items_praised").as_array().size(), 1u);
     EXPECT_EQ(d.at("items_praised").at(0).at("label").as_string(), "Head spa");
@@ -259,7 +254,6 @@ TEST_F(Reports, NamedStaffAreListedApartFromTheItems) {
     // Anna and anna are one person, under the name as first written.
     ASSERT_EQ(staff.at("recognized").as_array().size(), 1u);
     EXPECT_EQ(staff.at("recognized").at(0).at("name").as_string(), "Anna");
-    EXPECT_EQ(staff.at("recognized").at(0).at("location_title").as_string(), "LU DREAM SPA - Chelsea");
     EXPECT_EQ(staff.at("recognized").at(0).at("positive").as_int64(), 2);
     EXPECT_EQ(staff.at("recognized").at(0).at("rank").as_int64(), 1);
     ASSERT_EQ(staff.at("complained").as_array().size(), 1u);
@@ -268,8 +262,6 @@ TEST_F(Reports, NamedStaffAreListedApartFromTheItems) {
 
     const auto page = html(id);
     EXPECT_THAT(page, HasSubstr("<h2>Employee recognition</h2>"));
-    // One location: no column that names it.
-    EXPECT_THAT(page, Not(HasSubstr("<th>Location</th>")));
     EXPECT_THAT(page, Not(HasSubstr("Cara")));
     EXPECT_THAT(page, HasSubstr("Based on 3 reviews that named a staff member"));
 }
@@ -286,8 +278,8 @@ TEST_F(Reports, AnIndustryWithoutPeopleHasNoSectionAndAnOldReportIsSentAsItWas) 
     EXPECT_EQ(d.at("items_praised").at(0).at("label").as_string(), "Anna");
     EXPECT_THAT(html(id), Not(HasSubstr("Employee recognition")));
 
-    // What a report built before this version stored: no "staff", version 1.
-    exec(std::format("UPDATE reports SET data = (data - 'staff') || '{{\"version\": 1}}' WHERE id = {}", id));
+    // What an older version stored: no "staff" (version 1), and a list of locations (before D-102).
+    exec(std::format("UPDATE reports SET data = (data - 'staff') || '{{\"version\": 1, \"locations\": []}}' WHERE id = {}", id));
     recipients(chelsea_, R"(["owner@luspa.test"])");
     sending_on();
     const auto response = post(std::format("/api/reports/{}/send", id));

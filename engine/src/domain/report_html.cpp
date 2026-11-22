@@ -68,7 +68,6 @@ th { color:var(--muted); font-weight:600; }
 .empty { color:var(--muted); font-style:italic; }
 .staff-list { margin-bottom:16px; }
 table.staff td.name { overflow-wrap:break-word; min-width:5em; }
-table.staff td.where { color:var(--muted); }
 footer { margin-top:40px; padding-top:12px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
 @media (max-width:520px) { h1 { font-size:23px; } .tile .value { font-size:22px; } }
 @media print {
@@ -222,20 +221,17 @@ void ranked(std::string& out, std::string_view title, const std::vector<Ranked>&
 }
 
 // One list of the employee recognition section: counts only, no review text.
-void staff_table(std::string& out, std::string_view title, const std::vector<StaffMention>& people, bool with_location,
-                 std::string_view none) {
+void staff_table(std::string& out, std::string_view title, const std::vector<StaffMention>& people, std::string_view none) {
     out += std::format("<div class=\"staff-list\"><h3>{}</h3>", html_escape(title));
     if (people.empty()) {
         out += std::format("<p class=\"empty\">{}</p></div>\n", html_escape(none));
         return;
     }
-    out += "<div class=\"scroll\"><table class=\"staff\"><tr><th class=\"num\">#</th><th>Name</th>";
-    if (with_location) out += "<th>Location</th>";
-    out += "<th class=\"num\">Praised</th><th class=\"num\">Criticized</th></tr>";
+    out += "<div class=\"scroll\"><table class=\"staff\"><tr><th class=\"num\">#</th><th>Name</th>"
+           "<th class=\"num\">Praised</th><th class=\"num\">Criticized</th></tr>";
     for (const auto& person : people) {
-        out += std::format("<tr><td class=\"num\">{}</td><td class=\"name\">{}</td>", person.rank, html_escape(person.name));
-        if (with_location) out += std::format("<td class=\"where\">{}</td>", html_escape(person.location_title));
-        out += std::format("<td class=\"num\">{}</td><td class=\"num\">{}</td></tr>", number(person.positive), number(person.negative));
+        out += std::format("<tr><td class=\"num\">{}</td><td class=\"name\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td></tr>",
+                           person.rank, html_escape(person.name), number(person.positive), number(person.negative));
     }
     out += "</table></div></div>\n";
 }
@@ -252,10 +248,9 @@ void review_cards(std::string& out, const std::vector<Highlight>& reviews) {
             out += std::format("<span class=\"avatar\">{}</span>",
                                html_escape(initial.empty() ? std::string("?") : text::encode(initial.substr(0, 1))));
         }
-        out += std::format("<div><div class=\"name\">{}</div><div class=\"meta\">{} · {}{}</div></div></div>",
+        out += std::format("<div><div class=\"name\">{}</div><div class=\"meta\">{} · {}</div></div></div>",
                            html_escape(name.empty() ? std::string("A Google user") : name), stars_html(review.rating),
-                           html_escape(day_label(review.day)),
-                           review.location_title.empty() ? std::string{} : " · " + html_escape(review.location_title));
+                           html_escape(day_label(review.day)));
         out += std::format("<p class=\"text\">{}</p></div>\n", html_escape(review.text));
     }
 }
@@ -402,9 +397,8 @@ std::string render_report(const ReportData& data) {
         if (staff.reviews_naming == 0) {
             out += "<p class=\"empty\">No reviewer named a staff member in this period.</p>\n";
         } else {
-            const bool with_location = data.locations.size() > 1;
-            staff_table(out, "Recognized by customers", staff.recognized, with_location, "Nobody was named in praise in this period.");
-            staff_table(out, "Named in complaints", staff.complained, with_location, "Nobody was named in a complaint in this period.");
+            staff_table(out, "Recognized by customers", staff.recognized, "Nobody was named in praise in this period.");
+            staff_table(out, "Named in complaints", staff.complained, "Nobody was named in a complaint in this period.");
             out += std::format("<p class=\"sub\">Based on {} {} that named a staff member; each number is a count "
                                "of reviews. Names are as reviewers wrote them, so one person may appear under two spellings.</p>\n",
                                number(staff.reviews_naming), staff.reviews_naming == 1 ? "review" : "reviews");
@@ -471,24 +465,6 @@ std::string render_report(const ReportData& data) {
         out += "</table>\n";
     }
     out += "</section>\n";
-
-    // ---- per location ----
-    if (data.locations.size() > 1) {
-        out += "<section><h2>By location</h2><div class=\"scroll\"><table><tr><th>Location</th><th class=\"num\">New reviews</th>"
-               "<th class=\"num\">Average</th><th class=\"num\">Overall</th><th class=\"num\">Answered</th><th class=\"num\">Views</th>"
-               "<th class=\"num\">Calls</th><th class=\"num\">Directions</th></tr>";
-        for (const auto& location : data.locations) {
-            const auto& v = location.visibility;
-            out += std::format("<tr><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{} ({})</td>"
-                               "<td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td></tr>",
-                               html_escape(location.title), number(location.reviews.new_reviews), rating(location.reviews.average_rating),
-                               rating(location.running_average), number(location.running_count),
-                               as_percent(location.reviews.response_rate),
-                               v ? number(v->views()) : std::string("–"), v ? number(v->calls) : std::string("–"),
-                               v ? number(v->direction_requests) : std::string("–"));
-        }
-        out += "</table></div></section>\n";
-    }
 
     out += std::format("<footer>Period: {} ({}). Compared with {}. Prepared by PONI on {}.</footer>\n", html_escape(period),
                        html_escape(data.time_zone), html_escape(period_label(data.previous_start, data.previous_end)),
