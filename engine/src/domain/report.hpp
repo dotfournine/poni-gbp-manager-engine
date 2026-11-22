@@ -24,7 +24,6 @@ namespace poni::domain {
 // ---- what goes in -----------------------------------------------------------------
 
 struct ReportReview {
-    std::int64_t location_id = 0;
     int rating = 0;  // 1 to 5; 0: Google gave none
     // The day the review was written, in the report's time zone.
     Day day;
@@ -39,14 +38,6 @@ struct ReportReview {
     std::string sentiment;
     std::vector<TopicMention> topics;
     std::vector<ItemMention> items;
-};
-
-struct ReportLocation {
-    std::int64_t id = 0;
-    std::string title;
-    // Every review up to the end of the period.
-    std::int64_t running_count = 0;
-    std::int64_t running_rating_sum = 0;
 };
 
 // One day's value of one of Google's daily metrics
@@ -67,8 +58,7 @@ struct SearchKeyword {
 BOOST_DESCRIBE_STRUCT(SearchKeyword, (), (keyword, impressions, below))
 
 struct LocationPerformance {
-    std::int64_t location_id = 0;
-    // Why Google could not be asked for this location; then the rest is empty.
+    // Why Google could not be asked for the location; then the rest is empty.
     std::optional<std::string> error;
     // The period and the one before it.
     std::vector<MetricDay> days;
@@ -78,13 +68,15 @@ struct LocationPerformance {
 };
 
 struct ReportInput {
-    // The location the report covers (D-102); `locations` holds it alone.
+    // The location the report covers (D-102).
     std::int64_t location_id = 0;
     std::string location_title;
     Period period;
     std::string time_zone;
     std::string generated_at;
-    std::vector<ReportLocation> locations;
+    // Every review up to the end of the period.
+    std::int64_t running_count = 0;
+    std::int64_t running_rating_sum = 0;
     // Reviews written in the period and in the period before it, not removed.
     std::vector<ReportReview> reviews;
     std::vector<ReportReview> previous_reviews;
@@ -96,7 +88,7 @@ struct ReportInput {
     std::set<std::string> person_item_types;
     std::int64_t escalations_opened = 0;
     std::int64_t escalations_closed = 0;
-    std::vector<LocationPerformance> performance;
+    LocationPerformance performance;
 };
 
 // ---- what comes out ---------------------------------------------------------------
@@ -151,7 +143,7 @@ struct Visibility {
     std::string note;
     // Google's own words when it could not be asked. For staff; never on the page.
     std::string detail;
-    // The last day every location's view counts go up to. Google publishes
+    // The last day the location's view counts go up to. Google publishes
     // its metrics with different delays; nothing after this day is counted,
     // for any metric, so the totals are of the same days.
     std::optional<std::string> as_of;
@@ -163,17 +155,6 @@ struct Visibility {
     std::vector<VisibilityDay> daily;
 };
 BOOST_DESCRIBE_STRUCT(Visibility, (), (available, note, detail, as_of, complete, totals, previous, daily))
-
-struct LocationNumbers {
-    std::int64_t location_id = 0;
-    std::string title;
-    ReviewNumbers reviews;
-    std::int64_t running_count = 0;
-    std::optional<double> running_average;
-    // Nothing when Google gave no data for this location.
-    std::optional<VisibilityTotals> visibility;
-};
-BOOST_DESCRIBE_STRUCT(LocationNumbers, (), (location_id, title, reviews, running_count, running_average, visibility))
 
 // A day, or seven days from `start` when the period is longer than a month.
 struct TrendBucket {
@@ -193,28 +174,24 @@ struct Ranked {
 BOOST_DESCRIBE_STRUCT(Ranked, (), (label, count))
 
 struct Highlight {
-    std::string location_title;
     int rating = 0;
     std::string day;
     std::string reviewer_name;
     std::optional<std::string> reviewer_photo_url;
     std::string text;
 };
-BOOST_DESCRIBE_STRUCT(Highlight, (), (location_title, rating, day, reviewer_name, reviewer_photo_url, text))
+BOOST_DESCRIBE_STRUCT(Highlight, (), (rating, day, reviewer_name, reviewer_photo_url, text))
 
-// A staff member named in reviews (D-086): a name as a reviewer wrote it, at
-// one location. The same name at two locations is two rows.
+// A staff member named in reviews (D-086): a name as a reviewer wrote it.
 struct StaffMention {
     // Equal counts share a rank: 1, 1, 3.
     int rank = 0;
-    std::int64_t location_id = 0;
-    std::string location_title;
     std::string name;
     // Reviews in the period that mention the person positively, and negatively.
     std::int64_t positive = 0;
     std::int64_t negative = 0;
 };
-BOOST_DESCRIBE_STRUCT(StaffMention, (), (rank, location_id, location_title, name, positive, negative))
+BOOST_DESCRIBE_STRUCT(StaffMention, (), (rank, name, positive, negative))
 
 struct StaffRecognition {
     // Reviews in the period that mention at least one person positively or negatively.
@@ -234,7 +211,8 @@ BOOST_DESCRIBE_STRUCT(Keywords, (), (month, items))
 
 struct ReportData {
     // 2: has `staff` (D-086). A report stored before it loads with none.
-    int version = 2;
+    // 3: one location's (D-102): no list of locations, and no location in a highlight or a staff row.
+    int version = 3;
     std::int64_t location_id = 0;
     std::string location_title;
     std::string period_start;
@@ -248,7 +226,6 @@ struct ReportData {
     ReviewNumbers previous;
     std::int64_t running_count = 0;
     std::optional<double> running_average;
-    std::vector<LocationNumbers> locations;
     std::vector<TrendBucket> trend;
     std::vector<Ranked> topics_praised;
     std::vector<Ranked> topics_complained;
@@ -271,7 +248,7 @@ struct ReportData {
 };
 BOOST_DESCRIBE_STRUCT(ReportData, (),
                       (version, location_id, location_title, period_start, period_end, previous_start, previous_end, time_zone,
-                       generated_at, reviews, previous, running_count, running_average, locations, trend, topics_praised,
+                       generated_at, reviews, previous, running_count, running_average, trend, topics_praised,
                        topics_complained, items_praised, items_complained, staff, highlights_best, highlights_worst, escalations_opened,
                        escalations_closed, visibility, keywords, summary, summary_note))
 

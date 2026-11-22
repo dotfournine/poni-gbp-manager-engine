@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <format>
 #include <set>
 
 namespace poni::domain {
@@ -33,7 +32,7 @@ std::optional<double> average(std::int64_t sum, std::int64_t count) {
     return static_cast<double>(sum) / static_cast<double>(count);
 }
 
-// Equal counts share a rank (1, 1, 3); equal people are in the order of their name, then of their location.
+// Equal counts share a rank (1, 1, 3); equal people are in the order of their name.
 std::vector<StaffMention> rank_staff(std::vector<StaffMention> people, bool by_positive) {
     const auto key = [by_positive](const StaffMention& m) {
         // The count the list is about first, then the fewer of the other.
@@ -41,10 +40,7 @@ std::vector<StaffMention> rank_staff(std::vector<StaffMention> people, bool by_p
     };
     std::ranges::stable_sort(people, [&](const StaffMention& a, const StaffMention& b) {
         if (key(a) != key(b)) return key(a) > key(b);
-        const auto la = text::ascii_lower(a.name), lb = text::ascii_lower(b.name);
-        if (la != lb) return la < lb;
-        if (a.location_title != b.location_title) return a.location_title < b.location_title;
-        return a.location_id < b.location_id;
+        return text::ascii_lower(a.name) < text::ascii_lower(b.name);
     });
     for (std::size_t i = 0; i < people.size(); ++i) {
         people[i].rank = i > 0 && key(people[i]) == key(people[i - 1]) ? people[i - 1].rank : static_cast<int>(i + 1);
@@ -55,8 +51,8 @@ std::vector<StaffMention> rank_staff(std::vector<StaffMention> people, bool by_p
 
 StaffRecognition staff_recognition(const ReportInput& input) {
     StaffRecognition out;
-    // (location, name folded) -> the person; the name as first written.
-    std::map<std::pair<std::int64_t, std::string>, StaffMention> people;
+    // Name folded -> the person; the name as first written.
+    std::map<std::string, StaffMention> people;
     for (const auto& review : input.reviews) {
         // A review counts once for a person and a polarity, however often it names them.
         std::set<std::string> seen;
@@ -67,13 +63,8 @@ StaffRecognition staff_recognition(const ReportInput& input) {
             if (name.empty()) continue;
             const auto folded = text::ascii_lower(name);
             if (!seen.insert(item.polarity + ":" + folded).second) continue;
-            auto& person = people[{review.location_id, folded}];
-            if (person.name.empty()) {
-                person.name = text::truncate(name, 80);
-                person.location_id = review.location_id;
-                const auto location = std::ranges::find(input.locations, review.location_id, &ReportLocation::id);
-                if (location != input.locations.end()) person.location_title = location->title;
-            }
+            auto& person = people[folded];
+            if (person.name.empty()) person.name = text::truncate(name, 80);
             ++(item.polarity == "positive" ? person.positive : person.negative);
         }
         if (!seen.empty()) ++out.reviews_naming;
@@ -128,9 +119,7 @@ std::vector<Highlight> highlights(const ReportInput& input, bool best) {
     if (picked.size() > kHighlightLimit) picked.resize(kHighlightLimit);
     std::vector<Highlight> out;
     for (const auto* review : picked) {
-        const auto location = std::ranges::find(input.locations, review->location_id, &ReportLocation::id);
-        out.push_back({.location_title = location == input.locations.end() ? std::string{} : location->title,
-                       .rating = review->rating,
+        out.push_back({.rating = review->rating,
                        .day = format_day(review->day),
                        .reviewer_name = review->reviewer_name,
                        .reviewer_photo_url = review->reviewer_photo_url,
@@ -139,92 +128,58 @@ std::vector<Highlight> highlights(const ReportInput& input, bool best) {
     return out;
 }
 
-Visibility visibility(const ReportInput& input, const Period& previous, std::vector<LocationNumbers>& locations) {
+Visibility visibility(const ReportInput& input, const Period& previous) {
     Visibility out;
+    const auto& performance = input.performance;
+    if (performance.error) {
+        out.detail = *performance.error;
+        out.note = "Google could not be asked for the visibility numbers when this report was made.";
+        return out;
+    }
     // Google publishes each metric with its own delay (Maps views a day or
     // two after Search views), and a day without a value is either not there
     // yet or zero. The view counts are the metrics a business has every day,
-    // so the day the numbers go up to is the earliest "last day" among them,
-    // over every location: up to that day every metric is in.
-    std::optional<Day> as_of;
-    std::size_t failed = 0;
-    std::string first_error;
-    for (const auto& location : input.performance) {
-        if (location.error) {
-            if (failed++ == 0) first_error = *location.error;
-            continue;
-        }
-        std::map<std::string, Day> last_day;
-        for (const auto& value : location.days) {
-            if (!is_view(value.metric) || !in_period(value.day, input.period)) continue;
-            auto [entry, inserted] = last_day.try_emplace(value.metric, value.day);
-            if (!inserted && value.day > entry->second) entry->second = value.day;
-        }
-        for (const auto& [metric, day] : last_day) {
-            if (!as_of || day < *as_of) as_of = day;
-        }
+    // so the day the numbers go up to is the earliest "last day" among them:
+    // up to that day every metric is in.
+    std::map<std::string, Day> last_day;
+    for (const auto& value : performance.days) {
+        if (!is_view(value.metric) || !in_period(value.day, input.period)) continue;
+        auto [entry, inserted] = last_day.try_emplace(value.metric, value.day);
+        if (!inserted && value.day > entry->second) entry->second = value.day;
     }
-    if (failed > 0) out.detail = first_error;
+    std::optional<Day> as_of;
+    for (const auto& [metric, day] : last_day) {
+        if (!as_of || day < *as_of) as_of = day;
+    }
     if (!as_of) {
-        out.note = failed > 0 ? std::string("Google could not be asked for the visibility numbers when this report was made.")
-                              : std::string("Google has no visibility numbers for this period yet.");
+        out.note = "Google has no visibility numbers for this period yet.";
         return out;
     }
     out.available = true;
     out.as_of = format_day(*as_of);
     out.complete = *as_of == input.period.end;
-    if (failed > 0) out.note = std::format("Google could not be asked for {} of the locations when this report was made.", failed);
 
     VisibilityTotals before;
     std::map<Day, std::int64_t> views_by_day;
     for (auto day = input.period.start; day <= *as_of; day += days{1}) views_by_day[day] = 0;
-    for (const auto& location : input.performance) {
-        if (location.error) continue;
-        VisibilityTotals own;
-        bool any = false;
-        for (const auto& value : location.days) {
-            if (in_period(value.day, input.period)) {
-                if (value.day > *as_of) continue;  // a metric that is ahead of the others: not counted yet
-                any = true;
-                add_metric(own, value.metric, value.value);
-                add_metric(out.totals, value.metric, value.value);
-                if (is_view(value.metric)) views_by_day[value.day] += value.value;
-            } else if (in_period(value.day, previous)) {
-                add_metric(before, value.metric, value.value);
-            }
+    for (const auto& value : performance.days) {
+        if (in_period(value.day, input.period)) {
+            if (value.day > *as_of) continue;  // a metric that is ahead of the others: not counted yet
+            add_metric(out.totals, value.metric, value.value);
+            if (is_view(value.metric)) views_by_day[value.day] += value.value;
+        } else if (in_period(value.day, previous)) {
+            add_metric(before, value.metric, value.value);
         }
-        const auto numbers = std::ranges::find(locations, location.location_id, &LocationNumbers::location_id);
-        if (any && numbers != locations.end()) numbers->visibility = own;
     }
-    // Every location answered and the period is whole: the two periods can be compared.
-    if (out.complete && failed == 0) out.previous = before;
+    // The period is whole: the two periods can be compared.
+    if (out.complete) out.previous = before;
     for (const auto& [day, views] : views_by_day) out.daily.push_back({format_day(day), views});
     return out;
 }
 
-std::optional<Keywords> keywords(const ReportInput& input) {
-    // The newest month any location has keywords for; the locations of one report are asked for the same months.
-    std::string month;
-    for (const auto& location : input.performance) {
-        if (!location.keywords.empty()) month = std::max(month, location.keywords_month);
-    }
-    if (month.empty()) return std::nullopt;
-    std::map<std::string, SearchKeyword> merged;
-    for (const auto& location : input.performance) {
-        if (location.keywords_month != month) continue;
-        for (const auto& keyword : location.keywords) {
-            auto& entry = merged[keyword.keyword];
-            entry.keyword = keyword.keyword;
-            if (keyword.impressions) entry.impressions = entry.impressions.value_or(0) + *keyword.impressions;
-            if (keyword.below) entry.below = std::max(entry.below.value_or(0), *keyword.below);
-        }
-    }
-    Keywords out{.month = month, .items = {}};
-    for (auto& [key, entry] : merged) {
-        // A count from one location says more than "fewer than" from another.
-        if (entry.impressions) entry.below.reset();
-        out.items.push_back(std::move(entry));
-    }
+std::optional<Keywords> keywords(const LocationPerformance& performance) {
+    if (performance.keywords.empty()) return std::nullopt;
+    Keywords out{.month = performance.keywords_month, .items = performance.keywords};
     // Counted keywords first, by count; then the ones Google only gives a threshold for.
     std::ranges::stable_sort(out.items, [](const SearchKeyword& a, const SearchKeyword& b) {
         if (a.impressions.has_value() != b.impressions.has_value()) return a.impressions.has_value();
@@ -324,21 +279,8 @@ ReportData build_report(const ReportInput& input) {
     out.reviews = review_numbers(input.reviews);
     out.previous = review_numbers(input.previous_reviews);
 
-    std::int64_t running_sum = 0;
-    for (const auto& location : input.locations) {
-        std::vector<ReportReview> own;
-        std::ranges::copy_if(input.reviews, std::back_inserter(own),
-                             [&](const ReportReview& review) { return review.location_id == location.id; });
-        out.locations.push_back({.location_id = location.id,
-                                 .title = location.title,
-                                 .reviews = review_numbers(own),
-                                 .running_count = location.running_count,
-                                 .running_average = average(location.running_rating_sum, location.running_count),
-                                 .visibility = std::nullopt});
-        out.running_count += location.running_count;
-        running_sum += location.running_rating_sum;
-    }
-    out.running_average = average(running_sum, out.running_count);
+    out.running_count = input.running_count;
+    out.running_average = average(input.running_rating_sum, input.running_count);
 
     // Days, or weeks for a period longer than a month.
     const auto length = (input.period.end - input.period.start).count() + 1;
@@ -362,8 +304,8 @@ ReportData build_report(const ReportInput& input) {
     out.highlights_worst = highlights(input, false);
     out.escalations_opened = input.escalations_opened;
     out.escalations_closed = input.escalations_closed;
-    out.visibility = visibility(input, previous, out.locations);
-    out.keywords = keywords(input);
+    out.visibility = visibility(input, previous);
+    out.keywords = keywords(input.performance);
     return out;
 }
 

@@ -210,13 +210,11 @@ std::optional<ReportWork> load_report_work(pqxx::transaction_base& tx, std::int6
                                  "AND rating IS NOT NULL AND created_time < $2::timestamptz",
                                  pqxx::params{input.location_id, to})
                              .one_row();
-    input.locations.push_back({.id = input.location_id,
-                               .title = input.location_title,
-                               .running_count = running[0].as<std::int64_t>(),
-                               .running_rating_sum = running[1].as<std::int64_t>()});
+    input.running_count = running[0].as<std::int64_t>();
+    input.running_rating_sum = running[1].as<std::int64_t>();
 
     const auto reviews = tx.exec(std::format(R"sql(
-        SELECT r.location_id, coalesce(r.rating, 0), ((r.created_time AT TIME ZONE $4)::date)::text, {},
+        SELECT coalesce(r.rating, 0), ((r.created_time AT TIME ZONE $4)::date)::text, {},
                coalesce(r.original_text, r.comment, ''), coalesce(r.reviewer_name, ''), r.reviewer_photo_url,
                CASE WHEN r.reply_text IS NOT NULL THEN {} END, coalesce(a.sentiment, ''), coalesce(a.topics::text, '[]'),
                coalesce(a.items::text, '[]'), r.created_time >= $3::timestamptz
@@ -230,18 +228,17 @@ std::optional<ReportWork> load_report_work(pqxx::transaction_base& tx, std::int6
                                  pqxx::params{input.location_id, earlier, from, input.time_zone, to});
     for (const auto& r : reviews) {
         domain::ReportReview review;
-        review.location_id = r[0].as<std::int64_t>();
-        review.rating = r[1].as<int>();
-        review.day = domain::parse_report_day(r[2].as<std::string>()).value();
-        review.created = from_micros(r[3].as<std::int64_t>());
-        review.text = r[4].as<std::string>();
-        review.reviewer_name = r[5].as<std::string>();
-        review.reviewer_photo_url = r[6].as<OptString>();
-        if (const auto replied = r[7].as<OptId>()) review.replied_at = from_micros(*replied);
-        review.sentiment = r[8].as<std::string>();
-        review.topics = boost::json::value_to<std::vector<domain::TopicMention>>(boost::json::parse(r[9].as<std::string>()));
-        review.items = boost::json::value_to<std::vector<domain::ItemMention>>(boost::json::parse(r[10].as<std::string>()));
-        (r[11].as<bool>() ? input.reviews : input.previous_reviews).push_back(std::move(review));
+        review.rating = r[0].as<int>();
+        review.day = domain::parse_report_day(r[1].as<std::string>()).value();
+        review.created = from_micros(r[2].as<std::int64_t>());
+        review.text = r[3].as<std::string>();
+        review.reviewer_name = r[4].as<std::string>();
+        review.reviewer_photo_url = r[5].as<OptString>();
+        if (const auto replied = r[6].as<OptId>()) review.replied_at = from_micros(*replied);
+        review.sentiment = r[7].as<std::string>();
+        review.topics = boost::json::value_to<std::vector<domain::TopicMention>>(boost::json::parse(r[8].as<std::string>()));
+        review.items = boost::json::value_to<std::vector<domain::ItemMention>>(boost::json::parse(r[9].as<std::string>()));
+        (r[10].as<bool>() ? input.reviews : input.previous_reviews).push_back(std::move(review));
     }
 
     const auto cases = tx.exec(

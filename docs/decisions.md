@@ -212,7 +212,7 @@ Why: Apple speaks only HTTP/2 and Beast only HTTP/1.1. nghttp2 is a small C libr
 Why: a page without scripts is frozen and needs no server of ours; unguessable names in a public bucket take the only public route off the engine.
 
 ### D-086 · Employee recognition in the report
-Only staff a reviewer named count (item types with `"person": true`), in two ranked lists per location and name (`ReportData.staff`): praised and named in complaints. People are left out of the item lists, so the summary model gets no staff name. Counts only; spellings are not merged.
+Only staff a reviewer named count (item types with `"person": true`), in two ranked lists per name (`ReportData.staff`; a report is one location's, D-102): praised and named in complaints. People are left out of the item lists, so the summary model gets no staff name. Counts only; spellings are not merged.
 
 ## Local posts
 
