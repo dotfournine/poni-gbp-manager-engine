@@ -34,8 +34,12 @@ protected:
         : ConnectorTest({gbp::kReviewsApi, google::kOAuthApi, notify::kGmailApi}),
           tokens_(clock_, google::refresh_fetch(http_, limiter_, test::stored_credentials())),
           writer_(api_),
-          gmail_(api_, {.address = "host@xvisionmediaus.com", .name = "PONI GBP Manager"}) {}
+          gmail_(api_, "PONI GBP Manager", [this]() -> boost::asio::awaitable<std::expected<std::string, std::string>> {
+              co_return mailbox_;
+          }) {}
 
+    // What the connected mailbox's address is, as the email channel asks for it before every message (D-100).
+    std::expected<std::string, std::string> mailbox_ = std::string("host@xvisionmediaus.com");
     google::CachedTokenSource tokens_;
     google::Api api_{http_, tokens_, limiter_};
     gbp::HttpReplyWriter writer_;
@@ -710,7 +714,38 @@ TEST_F(WritePath, GmailSendIsAPostWithTheMessageBase64UrlEncoded) {
     const auto raw = core::base64_decode(std::string(boost::json::parse(request.body).at("raw").as_string()));
     ASSERT_TRUE(raw);
     EXPECT_THAT(*raw, HasSubstr("To: <owner@xvisionmediaus.com>"));
+    EXPECT_THAT(*raw, HasSubstr("<host@xvisionmediaus.com>\r\n"));
     EXPECT_EQ(mime_body(*raw), "Hello.");
+}
+
+// The sender is the mailbox connected on the status page, asked for on every message (D-100).
+TEST_F(WritePath, GmailSendsFromTheConnectedMailboxAndFromNothingElse) {
+    using Kind = notify::SendError::Kind;
+    const auto from_of = [&](const http::ClientRequest& request) {
+        const auto raw = core::base64_decode(std::string(boost::json::parse(request.body).at("raw").as_string())).value_or("");
+        const auto at = raw.find("From: ");
+        return raw.substr(at, raw.find("\r\n", at) - at);
+    };
+    mailbox_ = std::string("alerts@xvisionus.com");
+    http_.reply(200, std::string(kTokenOk));
+    http_.reply(200, R"({"id": "m1"})");
+    ASSERT_TRUE(await(gmail_.send({"a@example.com", "s", "b"})));
+    EXPECT_THAT(from_of(http_.requests.back()), testing::EndsWith(" <alerts@xvisionus.com>"));
+
+    // Another mailbox was connected: the next message is sent from it, without a restart.
+    mailbox_ = std::string("host@xvisionmediaus.com");
+    http_.reply(200, R"({"id": "m2"})");
+    ASSERT_TRUE(await(gmail_.send({"a@example.com", "s", "b"})));
+    EXPECT_THAT(from_of(http_.requests.back()), testing::EndsWith(" <host@xvisionmediaus.com>"));
+
+    // No address known: nothing is sent, not even a token is asked for, and the reason goes to the delivery log.
+    mailbox_ = std::unexpected(std::string("the sending mailbox was connected before the engine kept its address"));
+    const auto before = http_.requests.size();
+    const auto refused = await(gmail_.send({"a@example.com", "s", "b"}));
+    ASSERT_FALSE(refused);
+    EXPECT_EQ(refused.error().kind, Kind::not_configured);
+    EXPECT_THAT(refused.error().message, HasSubstr("before the engine kept its address"));
+    EXPECT_EQ(http_.requests.size(), before);
 }
 
 TEST_F(WritePath, GmailFailuresAreSortedIntoRetryRefusedAndNotSignedIn) {
@@ -726,7 +761,9 @@ TEST_F(WritePath, GmailFailuresAreSortedIntoRetryRefusedAndNotSignedIn) {
     google::CachedTokenSource nobody(clock_, google::refresh_fetch(http_, limiter_, []() -> boost::asio::awaitable<google::Result<google::OAuthCredentials>> {
         co_return std::unexpected(google::not_configured("the sending mailbox is not signed in"));
     }));
-    notify::GmailChannel unsigned_channel({http_, nobody, limiter_}, {.address = "host@xvisionmediaus.com", .name = "PONI"});
+    notify::GmailChannel unsigned_channel({http_, nobody, limiter_}, "PONI", []() -> boost::asio::awaitable<std::expected<std::string, std::string>> {
+        co_return std::string("host@xvisionmediaus.com");
+    });
     const auto before = http_.requests.size();
     EXPECT_EQ(await(unsigned_channel.send({"a@example.com", "s", "b"})).error().kind, Kind::not_configured);
     EXPECT_EQ(http_.requests.size(), before) << "nothing was sent anywhere";

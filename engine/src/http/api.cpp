@@ -156,7 +156,6 @@ void add_api_routes(Router& router, db::Database& db, const core::Clock& clock, 
                    auto status = co_await api.query([now](pqxx::work& tx) { return repo::system_status(tx, now); });
                    status.version = std::string(core::kVersion);
                    status.pubsub.enabled = api.options.pubsub_enabled;
-                   status.email.sender = api.options.email_sender;
                    status.connect_configured = api.options.connect_configured;
                    status.ai.providers = api.options.llm_providers;
                    status.ai.llm_configured = std::ranges::contains(api.options.llm_providers, status.ai.analyzer_provider) &&

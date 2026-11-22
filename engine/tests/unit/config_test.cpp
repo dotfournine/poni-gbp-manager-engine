@@ -173,6 +173,16 @@ TEST(Config, TheOldAuthCommandsSettingIsGone) {
     EXPECT_THAT(load_config(env_of({}), file.path()).error(), HasSubstr("unknown setting PONI_AUTH_CALLBACK_PORT"));
 }
 
+// The sending mailbox is the account connected on the status page (D-100): no setting names it any more.
+TEST(Config, TheSendersAddressIsNoSetting) {
+    const ConfigFile file("PONI_EMAIL_FROM=host@xvisionmediaus.com\n");
+    EXPECT_THAT(load_config(env_of({}), file.path()).error(), HasSubstr("unknown setting PONI_EMAIL_FROM"));
+    const ConfigFile name_only("PONI_EMAIL_FROM_NAME=PONI\n");
+    const auto loaded = load_config(env_of({}), name_only.path());
+    ASSERT_TRUE(loaded) << loaded.error();
+    EXPECT_EQ(loaded->email_from_name, "PONI") << "the name shown beside the address stays a setting";
+}
+
 TEST(Config, RejectsBadPhase1Values) {
     EXPECT_THAT(load_config(env_of({{"PONI_TRUST_FORWARDED_FOR", "yes"}}), std::nullopt).error(),
                 HasSubstr("PONI_TRUST_FORWARDED_FOR"));

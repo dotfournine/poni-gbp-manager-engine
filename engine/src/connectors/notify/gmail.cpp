@@ -79,12 +79,17 @@ std::string build_mime(const Sender& from, std::string_view to, std::string_view
 
 asio::awaitable<std::expected<void, SendError>> GmailChannel::send(Message message) {
     using Kind = SendError::Kind;
+    // Without the address nothing is sent: mail from an address that is not the mailbox's own would be rewritten or refused.
+    auto address = co_await address_();
+    if (!address) co_return std::unexpected(SendError{Kind::not_configured, std::move(address.error())});
+    const Sender sender{.address = std::move(*address), .name = name_};
+
     http::ClientRequest request;
     request.method = http::ClientMethod::post;
     request.url = boost::urls::url("https://gmail.googleapis.com/gmail/v1/users/me/messages/send");
     request.content_type = "application/json";
     request.body = boost::json::serialize(boost::json::object{
-        {"raw", core::base64url_encode(build_mime(sender_, message.recipient, message.subject, message.body))}});
+        {"raw", core::base64url_encode(build_mime(sender, message.recipient, message.subject, message.body))}});
 
     WatchedTokens tokens(api_.tokens);
     std::string network_error;

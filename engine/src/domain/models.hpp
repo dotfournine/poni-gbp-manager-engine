@@ -313,11 +313,13 @@ BOOST_DESCRIBE_STRUCT(DatabaseStatus, (), (reachable))
 struct GbpStatus {
     // A refresh token is stored. Whether Google still accepts it shows in the other fields.
     bool connected = false;
+    // The connected account's address, as its connection named it (D-100); none before it was kept.
+    std::optional<std::string> account_email;
     std::optional<std::string> last_ok_at;
     std::optional<std::string> last_error;
     std::optional<std::string> last_error_at;
 };
-BOOST_DESCRIBE_STRUCT(GbpStatus, (), (connected, last_ok_at, last_error, last_error_at))
+BOOST_DESCRIBE_STRUCT(GbpStatus, (), (connected, account_email, last_ok_at, last_error, last_error_at))
 
 struct IntegrationStatus {
     std::optional<std::string> last_ok_at;
@@ -412,7 +414,8 @@ struct EmailStatus {
     bool sending_enabled = false;
     // The sending account has signed in (a credential is stored).
     bool connected = false;
-    std::string sender;
+    // The mailbox's address, as its connection named it (D-100); email is sent from it.
+    std::optional<std::string> account_email;
     std::optional<std::string> last_ok_at;
     std::optional<std::string> last_error;
     std::optional<std::string> last_error_at;
@@ -420,7 +423,7 @@ struct EmailStatus {
     std::int64_t failed = 0;  // in the last 7 days
 };
 BOOST_DESCRIBE_STRUCT(EmailStatus, (),
-                      (sending_enabled, connected, sender, last_ok_at, last_error, last_error_at, pending, failed))
+                      (sending_enabled, connected, account_email, last_ok_at, last_error, last_error_at, pending, failed))
 
 // Which knowledge base is seeded (FR-13); empty strings when none is.
 struct KnowledgeStatus {

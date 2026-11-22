@@ -296,9 +296,6 @@ void check_combinations(Settings& s, const Config& c) {
                           "Xcode, never to the phones staff use");
         }
     }
-    if (c.email_from.find('@') == std::string::npos || c.email_from.find_first_of(" <>\r\n") != std::string::npos) {
-        s.fail(std::format("PONI_EMAIL_FROM: '{}' is not an email address", c.email_from));
-    }
 }
 
 }  // namespace
@@ -434,7 +431,6 @@ std::expected<Config, std::string> load_config(const Environment& env, const std
     s.seconds("PONI_ANALYSIS_TICK_S", 10, c.analysis_tick);
     // Google held the spike's reply for 4 to 6 minutes: less than 10 would give up on replies that are fine.
     s.seconds("PONI_POST_CONFIRM_WINDOW_S", 600, c.post_confirm_window);
-    s.text("PONI_EMAIL_FROM", c.email_from);
     s.text("PONI_EMAIL_FROM_NAME", c.email_from_name);
     s.text("PONI_PUBLIC_BUCKET", c.public_bucket);
     s.parsed("PONI_GOOGLE_MOCK_URL", c.google_mock_url, parse_mock_url);

@@ -423,7 +423,9 @@ model::SystemStatus system_status(pqxx::transaction_base& tx, core::TimePoint no
     if (const auto meta = knowledge_meta(tx)) status.knowledge = {.version = meta->version, .seeded_at = meta->seeded_at};
 
     const auto token = integration(tx, kGbpTokenStatus);
-    status.gbp = {.connected = load_credential(tx, kGbpCredential).has_value(),
+    const auto gbp = load_credential(tx, kGbpCredential);
+    status.gbp = {.connected = gbp.has_value(),
+                  .account_email = gbp ? gbp->account_email : std::nullopt,
                   .last_ok_at = token.last_ok_at,
                   .last_error = token.last_error,
                   .last_error_at = token.last_error_at};

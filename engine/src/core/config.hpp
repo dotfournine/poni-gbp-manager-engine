@@ -170,9 +170,8 @@ struct Config {
     // How long a reply that was sent may stay invisible on Google before the
     // engine stops waiting and returns the draft to the approval queue.
     std::chrono::seconds post_confirm_window{30 * 60};
-    // The mailbox notifications are sent from (D-026), and the name shown
-    // with it. Connecting the mailbox on the status page only accepts a sign-in of this address.
-    std::string email_from = "host@xvisionmediaus.com";
+    // The name shown with the address notifications are sent from. The address is the
+    // mailbox's that was connected on the status page (D-100): no setting names it.
     std::string email_from_name = "PONI GBP Manager";
 
     // ---- reports (D-085) ----

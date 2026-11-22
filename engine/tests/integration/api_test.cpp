@@ -317,6 +317,7 @@ TEST_F(Api, SystemStatusShowsTokenSyncAndFailedJobs) {
 
     status = read("/api/system/status");
     EXPECT_TRUE(status.at("gbp").at("connected").as_bool());
+    EXPECT_TRUE(status.at("gbp").at("account_email").is_null()) << "a token stored without its address: unknown until connected again";
     EXPECT_EQ(status.at("gbp").at("last_error").as_string(), "HTTP 400 invalid_grant");
     const auto& buffet = status.at("locations").at(0);
     EXPECT_EQ(buffet.at("title").as_string(), "Gangnam AYCE Buffet");

@@ -198,7 +198,7 @@ int run(const core::Config& config) {
     // dashboard, every notification is logged as not sent.
     google::CachedTokenSource gmail_tokens(
         clock, google::refresh_fetch(http_client, limiter, http::stored_credentials(database, box, http::kConnectGmail)));
-    notify::GmailChannel email_channel({http_client, gmail_tokens, limiter}, {.address = config.email_from, .name = config.email_from_name});
+    notify::GmailChannel email_channel({http_client, gmail_tokens, limiter}, config.email_from_name, http::stored_mailbox_address(database));
 
     // Push to the phone app (D-097), with the APNs settings only.
     std::optional<notify::ApnsSender> apns;
@@ -317,7 +317,6 @@ int run(const core::Config& config) {
                          {.pubsub_enabled = subscriber.has_value(),
                           .llm_providers = llm_client.providers(),
                           .job_workers = static_cast<int>(std::max(config.job_workers, 1u)),
-                          .email_sender = config.email_from,
                           .connect_configured = connect.configured(),
                           .google_mock = config.google_mock(),
                           .push_environment = config.apns ? std::optional(config.apns->environment) : std::nullopt},

@@ -12,8 +12,6 @@
 #include <boost/json/object.hpp>
 #include <boost/url/url.hpp>
 
-#include "core/text.hpp"
-
 #include <format>
 
 namespace poni::http {
@@ -34,10 +32,16 @@ std::string attempt_key(std::string_view secret) { return core::sha256_hex(std::
 
 bool known_account(std::string_view account) { return account == kConnectGbp || account == kConnectGmail; }
 
-// The "email" claim of the ID token that came with the code exchange; empty if there was none.
-std::string email_claim(const std::optional<boost::json::object>& claims) {
-    const auto* email = claims ? claims->if_contains("email") : nullptr;
-    return email && email->is_string() ? std::string(email->get_string()) : std::string{};
+constexpr std::string_view kNoMailbox = "the sending mailbox is not connected; connect it on the dashboard's status page";
+
+// The address of the account that signed in: the "email" claim of the ID token that came with the
+// engine's own code exchange (D-091 point 12), if Google says it is verified; empty otherwise.
+std::string verified_email(const std::optional<boost::json::object>& claims) {
+    if (!claims) return {};
+    const auto* email = claims->if_contains("email");
+    const auto* verified = claims->if_contains("email_verified");  // a boolean, as sign-in reads it
+    if (!email || !email->is_string() || !verified || !verified->is_bool() || !verified->get_bool()) return {};
+    return std::string(email->get_string());
 }
 
 // A token source that always refreshes with the given credentials: used to
@@ -87,14 +91,25 @@ asio::awaitable<std::expected<void, std::string>> check_gmail(Client& http, core
 google::CredentialsLoader stored_credentials(db::Database& db, const core::SecretBox* box, std::string_view account) {
     const bool gmail = account == kConnectGmail;
     return [&db, box, name = std::string(gmail ? repo::kGmailCredential : repo::kGbpCredential),
-            missing = std::string(gmail ? "the sending mailbox is not connected; connect it on the dashboard's status page"
-                                        : "no GBP account is connected; connect it on the dashboard's status page")]()
+            missing = std::string(gmail ? kNoMailbox : "no GBP account is connected; connect it on the dashboard's status page")]()
                -> asio::awaitable<google::Result<google::OAuthCredentials>> {
         if (!box) co_return std::unexpected(google::not_configured("PONI_SECRET_KEY is not set"));
         auto loaded = co_await db.tx([box, &name](pqxx::work& tx) { return repo::load_oauth_credentials(tx, *box, name); });
         if (!loaded) co_return std::unexpected(google::not_configured(loaded.error()));
         if (!*loaded) co_return std::unexpected(google::not_configured(missing));
         co_return std::move(**loaded);
+    };
+}
+
+notify::MailboxAddress stored_mailbox_address(db::Database& db) {
+    return [&db]() -> asio::awaitable<std::expected<std::string, std::string>> {
+        auto stored = co_await db.tx([](pqxx::work& tx) { return repo::load_credential(tx, repo::kGmailCredential); });
+        if (!stored) co_return std::unexpected(std::string(kNoMailbox));
+        if (!stored->account_email) {
+            co_return std::unexpected(std::string(
+                "the sending mailbox was connected before the engine kept its address; connect it again on the dashboard's status page"));
+        }
+        co_return std::move(*stored->account_email);
     };
 }
 
@@ -143,10 +158,6 @@ asio::awaitable<Response> ConnectService::start(const Request& request) {
         co_return Response::error(409, "not_configured",
                                   "The engine has no key to encrypt the token with. Set PONI_SECRET_KEY in its configuration.");
     }
-    if (account == kConnectGmail && config_.email_from.empty()) {
-        co_return Response::error(409, "not_configured",
-                                  "The engine has no mailbox to send notifications from. Set PONI_EMAIL_FROM in its configuration.");
-    }
 
     const auto now = clock_.now();
     std::erase_if(attempts_, [&](const auto& item) { return item.second.expires <= now; });
@@ -161,16 +172,12 @@ asio::awaitable<Response> ConnectService::start(const Request& request) {
     params.append({"client_id", config_.gbp_oauth_client_id});
     params.append({"redirect_uri", redirect_uri(account)});
     params.append({"response_type", "code"});
-    if (account == kConnectGmail) {
-        // openid and email only to learn which mailbox signed in; the token is used for gmail.send alone.
-        params.append({"scope", std::format("{} openid email", notify::kGmailSendScope)});
-        params.append({"login_hint", config_.email_from});
-    } else {
-        params.append({"scope", kGbpScope});
-    }
-    // offline + consent: Google only returns a refresh token on a fresh consent.
+    // openid and email only to learn which account signed in (D-100); the token is used for its own scope alone.
+    params.append({"scope", std::format("{} openid email", account == kConnectGmail ? notify::kGmailSendScope : kGbpScope)});
+    // offline + consent: Google only returns a refresh token on a fresh consent. The chooser, always: the
+    // account connected is the one picked there, also when the browser is signed in to another.
     params.append({"access_type", "offline"});
-    params.append({"prompt", "consent"});
+    params.append({"prompt", "select_account consent"});
     params.append({"state", flow_.derive("state", secret)});
     params.append({"code_challenge", flow_.code_challenge(secret)});
     params.append({"code_challenge_method", "S256"});
@@ -232,20 +239,18 @@ asio::awaitable<std::optional<std::string>> ConnectService::connect(const Attemp
     const auto& tokens = exchanged->tokens;
     if (!tokens.refresh_token || tokens.refresh_token->empty()) co_return refuse("no_refresh_token", "Google returned no refresh token");
 
+    // Which account this is, as Google says: the status page shows it, and email is sent from it (D-100).
+    auto account_email = verified_email(exchanged->id_token_claims);
+    if (account_email.empty()) co_return refuse("no_email", "Google named no verified address for the account that signed in");
+
     const google::OAuthCredentials credentials{client_id, client_secret, *tokens.refresh_token};
-    boost::json::object stored{{"source", "dashboard"}};
+    boost::json::object stored{{"source", "dashboard"}, {"account_email", account_email}};
     if (gmail) {
-        // The wrong mailbox would send every alert from somebody's own address.
-        const auto signed_in = email_claim(exchanged->id_token_claims);
-        if (signed_in.empty() || !text::ascii_iequals(signed_in, config_.email_from)) {
-            co_return refuse("wrong_mailbox", "the account that signed in is not the configured sender");
-        }
         if (!tokens.scope || !tokens.scope->contains(notify::kGmailSendScope)) {
             co_return refuse("no_send_permission", "the gmail.send scope was not granted");
         }
         const auto works = co_await check_gmail(http_, limiter_, credentials);
         if (!works) co_return refuse("refused", works.error());
-        stored["mailbox"] = config_.email_from;
     } else {
         const auto seen = co_await check_gbp(http_, clock_, limiter_, credentials);
         if (!seen) co_return refuse("no_access", seen.error());
@@ -256,8 +261,9 @@ asio::awaitable<std::optional<std::string>> ConnectService::connect(const Attemp
     const std::string name(gmail ? repo::kGmailCredential : repo::kGbpCredential);
     const std::string status(gmail ? repo::kEmailStatus : repo::kGbpTokenStatus);
     const auto who = audit::Actor::user(attempt.started_by.user_id, attempt.started_by.email, std::move(ip));
-    co_await db_.audited(who, clock_.now(), [this, name, status, credentials, stored = std::move(stored)](pqxx::work& tx, audit::Writer& audit) {
-        repo::save_oauth_credentials(tx, *config_.secret_box, name, credentials, audit.now());
+    co_await db_.audited(who, clock_.now(), [this, name, status, credentials, account_email = std::move(account_email),
+                                             stored = std::move(stored)](pqxx::work& tx, audit::Writer& audit) {
+        repo::save_oauth_credentials(tx, *config_.secret_box, name, credentials, account_email, audit.now());
         repo::mark_integration_ok(tx, status, audit.now());
         // What was connected and what it can see; never the token.
         audit.record({.action = "credential.store", .object_type = "credential", .object_id = name, .after = stored});

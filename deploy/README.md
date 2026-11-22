@@ -51,7 +51,7 @@ The existing app is "External" and "In production" with only the `business.manag
 
 ### Connecting the GBP managing account and the sending mailbox (dashboard)
 
-Both accounts are connected in the dashboard, on **System status**, by a signed-in person (D-079). **Connect** sends the browser to Google; the engine receives Google's redirect, exchanges the code, checks the account, encrypts the refresh token and stores it, with an audit entry in the name of the person who clicked. The client secret, the token and the encryption key never reach the browser. Nothing is stored unless every check passed: the GBP account must be able to list its locations; the mailbox must be `PONI_EMAIL_FROM` with the permission to send granted.
+Both accounts are connected in the dashboard, on **System status**, by a signed-in person (D-079). **Connect** sends the browser to Google; the engine receives Google's redirect, exchanges the code, checks the account, encrypts the refresh token and stores it, with an audit entry in the name of the person who clicked. The client secret, the token and the encryption key never reach the browser. Nothing is stored unless every check passed: Google must name the account's verified address; the GBP account must be able to list its locations; the mailbox must have granted the permission to send. Each connection is the account the person picks in Google's account chooser, and no setting names it (D-100): the status page shows the address of each, the GBP one being the address clients invite to manage their profiles. To move to another account, connect that one: there is one connection of each kind, and the new one replaces the old token. Locations the new GBP account does not manage show as lost after two discoveries.
 
 This needs one OAuth client of type **Web application** in the same Google Auth Platform (**Clients → Create client**), with these **Authorized redirect URIs**:
 
@@ -65,18 +65,18 @@ Until the status page's **Connect** was used, the engine syncs nothing and the s
 
 #### The mailbox notifications are sent from
 
-Notifications (escalations, approvals, system problems) are sent as email through the Gmail API from `host@xvisionmediaus.com` (`PONI_EMAIL_FROM`, D-066). The engine needs a token of that mailbox with one permission, sending mail. Until the steps below are done, and after them until sending is switched on in the dashboard, every notification is recorded in the dashboard's **Delivery log** as not sent and no email leaves.
+Notifications (escalations, approvals, system problems) are sent as email through the Gmail API from the mailbox connected on the status page, at the address its sign-in named (D-066, D-100); today that is `host@xvisionmediaus.com`. A mailbox connected before the engine kept the address sends nothing until it is connected again. The engine needs a token of that mailbox with one permission, sending mail. Until the steps below are done, and after them until sending is switched on in the dashboard, every notification is recorded in the dashboard's **Delivery log** as not sent and no email leaves.
 
 In the Google Cloud console of the project (`xvisionmedia-gbp`), signed in as someone who can edit it:
 
 1. **APIs & Services → Library**: find **Gmail API** and enable it.
 2. **Google Auth Platform → Data access → Add or remove scopes**: add `https://www.googleapis.com/auth/gmail.send` and save. Google lists it as a sensitive scope. The app is "External" and "In production", so until Google has verified the app for this scope, the consent screen shows "Google hasn't verified this app" and the sign-in goes on through **Advanced → Go to … (unsafe)**. That is acceptable for one mailbox of our own; verification is only needed to remove the warning. If the Workspace admin has restricted third-party apps, the app's client ID has to be marked as trusted in the Admin console (**Security → API controls → App access control**).
 
-Then, in the dashboard: **System status → Notification email → Connect**. Sign in at Google as `host@xvisionmediaus.com` and allow "Send email on your behalf". The engine refuses any other account, checks that the permission was granted, and stores the token encrypted under its own name (the GBP token is not touched). Connecting switches no sending on.
+Then, in the dashboard: **System status → Notification email → Connect**. Pick `host@xvisionmediaus.com` (or whichever mailbox should send) in Google's account chooser and allow "Send email on your behalf". The engine takes the account that signed in, checks that the permission was granted, and stores the token encrypted under its own name (the GBP token is not touched). Connecting switches no sending on.
 
 Last, in the dashboard: add at least one rule under **Notification rules** (for example event "System problems", all clients, your own address), switch on **Send notification emails** under **Posting and sending**, and press **Send test email** on the **Delivery log** page. The test message should arrive within a few seconds and show as sent in the log.
 
-The `reports@` send-as alias (FR-7) is not set up: mail comes from `host@` itself. An alias would be added in Gmail's settings of that mailbox and named in `PONI_EMAIL_FROM`; this has not been tried.
+The `reports@` send-as alias (FR-7) is not set up: mail comes from `host@` itself. Mail is sent from the connected mailbox's own address; an alias would need a way to name it, which is not built.
 
 ### The VM
 

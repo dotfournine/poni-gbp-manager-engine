@@ -190,7 +190,7 @@ Why: a voice describes one business, and every reader already asks by location.
 ### D-020 · Superseded by D-097
 
 ### D-026 · Email goes through the Gmail API from a Workspace mailbox
-`PONI_EMAIL_FROM` on `xvisionmediaus.com`; it reuses the engine's Google OAuth code, with no new vendor.
+The mailbox connected on the status page (D-100); it reuses the engine's Google OAuth code, with no new vendor.
 
 ### D-054 · Escalations are the simplest form of a case
 A row of `cases`: kind `escalation`, opened by a severity flag on a review with no reply, `open` or `closed`, one assignee, a closing reason; one case per review, reopened when a newer analysis is still flagged. The full case workflow (FR-12) comes later and grows out of this table.
@@ -254,6 +254,10 @@ Client ID, client secret and refresh token together (a refresh token works only 
 ### D-095 · Sign-in for the phone app; two kinds of session
 (1) One Google sign-in for both, every check in the dashboard's code path: the app starts with `client=ios` and a PKCE S256 challenge, and its callback redirects to the constant `gbpmanager://auth` with a one-time code, setting no cookie. (2) `POST /api/auth/app-token` exchanges code and verifier for a bearer token; a code lives 60 seconds, is stored hashed and is spent by the first request (`repo::take_app_code`); every refusal is the same 400. (3) A session is `browser` (cookie) or `app` (`Authorization: Bearer`, that header only), both through `AuthService::authorize`; a bearer request gets no CSRF or Origin check. (4) An app session lasts 30 days idle, 90 at most. (5) An inactive user has no session. (6) Logout with a token ends it. (8) From the app's first release, removing or renaming a response member or narrowing a response enum is breaking and agreed first; adding is not. No token, code or verifier is logged or put in an address.
 Why: the browser sheet cannot hand a cookie to the app, and PKCE (RFC 8252) makes a code caught by another app useless.
+
+### D-100 · A connection is the Google account that signed in
+(1) Both Google connections, the GBP managing account and the sending mailbox, are the account a signed-in person signs in with after pressing **Connect** on the status page (D-079 point 2). No setting names either account or its address: `PONI_EMAIL_FROM` is removed (`PONI_EMAIL_FROM_NAME`, the name shown beside the address, stays). (2) Each connection asks Google for `openid email` beside its own scope and always shows Google's account chooser (`prompt=select_account consent`). The engine takes the account's address from the verified `email` claim of the ID token of its own code exchange (D-091 point 12) and stores it beside the credential (`credentials.account_email`), replaced with the token on every connection; an answer without a verified address is refused (`no_email`) and stores nothing. (3) The status serves the address of each connection (`GbpStatus.account_email`, `EmailStatus.account_email`), so a client can be told which account to invite, and email is sent from the mailbox's stored address. A credential stored before this has no address: the status shows `null` until the account is connected again, and no email is sent until the mailbox is. (4) One connection of each kind at a time: connecting another account replaces the token. A GBP account that manages other locations shows the old ones as lost through the usual discovery (two listings) and nothing else.
+Why: the account is chosen where it is proved, by the person who signs in with it, so moving to another account (D-009) is a click and not a change of the configuration, and nothing the status says about an account can disagree with the token that is stored.
 
 ## Operations and environment
 
