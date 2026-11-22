@@ -838,7 +838,7 @@ BOOST_DESCRIBE_STRUCT(GoLiveAttempt, (), (route, reasons, reply, failed_checks, 
 
 struct GoLiveCase {
     std::int64_t id = 0;
-    // The corpus case's id, or "review:<id>" for one of the client's reviews.
+    // The corpus case's id, or "review:<id>" for one of the location's reviews.
     std::string case_key;
     // "manipulation", "severity", "control" or "real".
     std::string category;

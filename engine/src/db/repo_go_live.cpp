@@ -287,12 +287,12 @@ bool enabled(pqxx::transaction_base& tx, std::int64_t location_id) {
     return !tx.exec("SELECT 1 FROM locations WHERE id = $1 AND enabled", pqxx::params{location_id}).empty();
 }
 
-// A setting was changed under a running test. The run is cancelled, and the
-// location is tested again as it is now, in the name of the person who
-// submitted the test, if it is still switched on and can be tested.
+// A setting was changed under a running test of a location that is switched
+// on (the caller asked). The run is cancelled, and the location is tested
+// again as it is now, in the name of the person who submitted the test, if
+// it can be tested.
 void restart(pqxx::transaction_base& tx, std::int64_t old_run, std::int64_t location_id, std::optional<std::int64_t> user_id, int parallel,
              core::TimePoint now) {
-    if (!enabled(tx, location_id)) return;
     const auto setup = go_live_setup(tx, location_id);
     if (!setup) return;
     const auto run_id = open_run(tx, *setup, user_id, parallel, now);

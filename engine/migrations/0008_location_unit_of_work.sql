@@ -54,19 +54,39 @@ ALTER TABLE clients
 
 -- ---- End of the section "Locations are switched on by themselves" --------------
 
+-- Nothing is deployed: what a development database holds of a client goes to
+-- one of its locations. Where nothing better says which, it is the client's
+-- earliest-linked location, the one whose reply settings are the oldest (they
+-- were copied when it was linked). The two sections below use it; it is
+-- dropped at the end of the second.
+CREATE TEMPORARY TABLE client_first_location AS
+SELECT DISTINCT ON (l.client_id) l.client_id, l.id AS location_id
+  FROM locations l JOIN reply_settings r ON r.location_id = l.id
+ WHERE l.client_id IS NOT NULL
+ ORDER BY l.client_id, r.created_at, l.id;
+
 -- ---- Go-live runs name a location ----------------------------------------------
 --
 -- A test is submitted for one location and tests that location's
 -- configuration at its policy's width (D-102 point 5); a pass still counts
--- for every location with the same fingerprint (D-074 point 2). Nothing is
--- deployed, so a development database's runs go to the client's
--- earliest-linked location (the first whose reply settings a link wrote), or
--- to the first location the run tested where the client has none linked now.
+-- for every location with the same fingerprint (D-074 point 2). A
+-- development database's run goes to the first location it tested that is
+-- still the client's, so that runs of two configurations keep two locations;
+-- else to the client's earliest-linked location; else to the first location
+-- it tested.
 ALTER TABLE go_live_runs ADD COLUMN location_id bigint REFERENCES locations (id);
 UPDATE go_live_runs g
-   SET location_id = coalesce((SELECT l.id FROM locations l JOIN reply_settings r ON r.location_id = l.id
-                                WHERE l.client_id = g.client_id ORDER BY r.created_at, l.id LIMIT 1),
+   SET location_id = coalesce((SELECT l.id FROM jsonb_array_elements_text(g.location_ids) WITH ORDINALITY AS t (id, n)
+                                 JOIN locations l ON l.id = t.id::bigint
+                                WHERE l.client_id = g.client_id ORDER BY t.n LIMIT 1),
+                              (SELECT f.location_id FROM client_first_location f WHERE f.client_id = g.client_id),
                               (g.location_ids->>0)::bigint);
+-- A run still running would be cancelled and started again by its next case,
+-- spending model calls on a test nobody submitted for that location.
+UPDATE go_live_runs
+   SET status = 'cancelled', finished_at = now(),
+       summary = 'Cancelled when go-live tests came to name a location (D-102). The result counts for nothing.'
+ WHERE status = 'running';
 ALTER TABLE go_live_runs
     ALTER COLUMN location_id SET NOT NULL,
     DROP COLUMN client_id,
@@ -79,16 +99,8 @@ ALTER TABLE go_live_runs
 -- A report and a report schedule are one location's, and a report's
 -- recipients are the location_report rules that name that location (D-102
 -- point 6). A notification rule names a location or none, every location
--- (point 7). Nothing is deployed: what a development database holds of a
--- client goes to the client's earliest-linked location, the one whose reply
--- settings are the oldest (they were copied when it was linked), as the
--- section on go-live runs chooses it.
-
-CREATE TEMPORARY TABLE client_first_location AS
-SELECT DISTINCT ON (l.client_id) l.client_id, l.id AS location_id
-  FROM locations l JOIN reply_settings r ON r.location_id = l.id
- WHERE l.client_id IS NOT NULL
- ORDER BY l.client_id, r.created_at, l.id;
+-- (point 7). What a development database holds of a client goes to the
+-- client's earliest-linked location (client_first_location, above).
 
 -- A schedule of a client that has no location now would report on nothing; it goes.
 DELETE FROM report_schedules WHERE client_id NOT IN (SELECT client_id FROM client_first_location);
@@ -98,14 +110,24 @@ ALTER TABLE report_schedules ALTER COLUMN location_id SET NOT NULL, DROP COLUMN 
 CREATE INDEX report_schedules_location_idx ON report_schedules (location_id);
 
 -- A report of a client that has no location now goes to the first location
--- its numbers list. One without numbers (never built) and without such a
--- client covered nothing; it goes, with its share links.
+-- its numbers list. One whose numbers list none, of a client without such a
+-- location, covered nothing; it goes, with its revoked share links. A link
+-- that works would leave its page public with no report behind it, so a
+-- person revokes it first.
 ALTER TABLE reports ADD COLUMN location_id bigint REFERENCES locations (id);
 UPDATE reports p SET location_id = f.location_id FROM client_first_location f WHERE f.client_id = p.client_id;
 UPDATE reports p SET location_id = l.id
   FROM locations l
  WHERE p.location_id IS NULL AND jsonb_typeof(p.data->'locations'->0->'location_id') = 'number'
    AND l.id = (p.data->'locations'->0->>'location_id')::bigint;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM report_share_links s JOIN reports p ON p.id = s.report_id
+                WHERE p.location_id IS NULL AND s.revoked_at IS NULL) THEN
+        RAISE EXCEPTION 'a report of a client without locations has a share link that works: revoke it, then migrate';
+    END IF;
+END
+$$;
 DELETE FROM report_share_links s USING reports p WHERE p.id = s.report_id AND p.location_id IS NULL;
 DELETE FROM reports WHERE location_id IS NULL;
 -- A built report's numbers name what they cover: the location, by its title
