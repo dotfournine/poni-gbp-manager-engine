@@ -858,7 +858,9 @@ BOOST_DESCRIBE_STRUCT(GoLiveCase, (), (id, case_key, category, review_id, stars,
 
 struct GoLiveRun {
     std::int64_t id = 0;
-    std::int64_t client_id = 0;
+    // The location the run was submitted for (D-102).
+    std::int64_t location_id = 0;
+    std::string location_title;
     std::string fingerprint;
     // "running", "passed", "failed", "inconclusive" or "cancelled".
     std::string status;
@@ -873,7 +875,7 @@ struct GoLiveRun {
     // The knowledge base the run started against; nothing for a run from before there was one.
     std::optional<std::string> kb_version;
     std::int64_t repeats = 0;
-    // How many of the client's own reviews were among the cases (D-075).
+    // How many of the location's own reviews were among the cases (D-075).
     std::int64_t real_reviews = 0;
     std::int64_t cases_total = 0;
     std::int64_t cases_done = 0;
@@ -887,11 +889,9 @@ struct GoLiveRun {
     std::optional<std::vector<GoLiveCase>> cases;
 };
 BOOST_DESCRIBE_STRUCT(GoLiveRun, (),
-                      (id, client_id, fingerprint, status, summary, auto_post_positive, auto_post_rating_only,
+                      (id, location_id, location_title, fingerprint, status, summary, auto_post_positive, auto_post_rating_only,
                        auto_post_min_stars, corpus_version, corpus_current, kb_version, repeats, real_reviews, cases_total, cases_done,
                        model_calls, spent_usd, started_by, started_at, finished_at, cases))
-
-using GoLiveRunList = Paged<GoLiveRun>;
 
 // What a test of one configuration would take, from the number of cases and
 // repeats, the price settings and the recent model calls.
@@ -909,31 +909,32 @@ struct GoLiveEstimate {
 };
 BOOST_DESCRIBE_STRUCT(GoLiveEstimate, (), (cases, real_reviews, model_calls, judge_calls, seconds, cost_usd, notes))
 
-// The locations of a client that share one fingerprint, and where their test stands.
-struct GoLiveConfiguration {
-    std::string fingerprint;
-    std::vector<std::string> location_titles;
+// Where one location's configuration stands (D-102). Locations with the same
+// fingerprint share their runs and their pass, but each is submitted on its own.
+struct GoLiveLocation {
+    std::int64_t location_id = 0;
+    std::string location_title;
+    // The client it is grouped under, for display only.
+    std::optional<std::int64_t> client_id;
+    std::optional<std::string> client_name;
+    // Why this location can't be tested (no industry profile); nothing when it can.
+    std::optional<std::string> problem;
+    // Nothing when the location can't be tested.
+    std::optional<std::string> fingerprint;
     // "not_tested", "running", "passed", "failed", "inconclusive" or "cancelled".
     std::string state;
     // Why, where the state alone doesn't say ("the policy auto-posts more than the last pass covered").
     std::optional<std::string> state_detail;
-    // The pass that lets these locations auto-post, if there is one.
+    // The pass that lets this location auto-post, if there is one.
     std::optional<GoLiveRun> pass;
-    // The newest run of this fingerprint.
+    // The newest run of its fingerprint.
     std::optional<GoLiveRun> latest_run;
-    GoLiveEstimate estimate;
+    // Nothing when the location can't be tested.
+    std::optional<GoLiveEstimate> estimate;
 };
-BOOST_DESCRIBE_STRUCT(GoLiveConfiguration, (),
-                      (fingerprint, location_titles, state, state_detail, pass, latest_run, estimate))
-
-struct GoLiveClient {
-    std::int64_t client_id = 0;
-    std::string client_name;
-    // Why this client can't be tested (no industry profile); nothing when it can.
-    std::optional<std::string> problem;
-    std::vector<GoLiveConfiguration> configurations;
-};
-BOOST_DESCRIBE_STRUCT(GoLiveClient, (), (client_id, client_name, problem, configurations))
+BOOST_DESCRIBE_STRUCT(GoLiveLocation, (),
+                      (location_id, location_title, client_id, client_name, problem, fingerprint, state, state_detail, pass, latest_run,
+                       estimate))
 
 struct GoLiveOverview {
     std::int64_t repeats = 0;
@@ -941,9 +942,10 @@ struct GoLiveOverview {
     std::string judge_model;
     // Every provider the three tasks name has an address and a key; filled in by the API.
     bool providers_configured = false;
-    std::vector<GoLiveClient> clients;
+    // Every enabled location, by title.
+    std::vector<GoLiveLocation> locations;
 };
-BOOST_DESCRIBE_STRUCT(GoLiveOverview, (), (repeats, judge_provider, judge_model, providers_configured, clients))
+BOOST_DESCRIBE_STRUCT(GoLiveOverview, (), (repeats, judge_provider, judge_model, providers_configured, locations))
 
 // ---- reports (FR-8, D-085) ---------------------------------------------------------
 

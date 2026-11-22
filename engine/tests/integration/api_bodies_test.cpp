@@ -80,7 +80,7 @@ const std::vector<std::string> kRoutesWithoutBody = {
     "POST /api/drafts/{id}/unschedule",
     "POST /api/auto-posting/resume",
     "POST /api/locations/{id}/auto-posting/resume",
-    "POST /api/clients/{id}/go-live-test",
+    "POST /api/locations/{id}/go-live-test",
     "POST /api/go-live-runs/{id}/cancel",
     "POST /api/reports/{id}/send",
     "POST /api/reports/{id}/reject",

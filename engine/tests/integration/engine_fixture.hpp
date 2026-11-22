@@ -291,10 +291,10 @@ protected:
     void certify(std::int64_t location) {
         tx([&](pqxx::work& tx) {
             const auto setup = repo::go_live_setup(tx, location).value();
-            tx.exec("INSERT INTO go_live_runs (client_id, fingerprint, fingerprint_inputs, location_ids, status, auto_post_positive, "
+            tx.exec("INSERT INTO go_live_runs (location_id, fingerprint, fingerprint_inputs, status, auto_post_positive, "
                     "auto_post_rating_only, auto_post_min_stars, corpus_version, repeats, started_at, finished_at) "
-                    "VALUES ($1, $2, '{}', '[]', 'passed', true, true, 4, 'test', 3, now(), now())",
-                    pqxx::params{setup.client_id.value(), setup.fingerprint.hash});
+                    "VALUES ($1, $2, '{}', 'passed', true, true, 4, 'test', 3, now(), now())",
+                    pqxx::params{location, setup.fingerprint.hash});
         });
     }
 

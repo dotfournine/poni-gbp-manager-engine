@@ -43,7 +43,7 @@ struct ModelSetup {
 };
 
 struct FingerprintInput {
-    // How replies name the business: the voice's reply_name, or the client's name.
+    // How replies name the business: the voice's reply_name, or the location's title (D-102 point 10).
     std::string business_name;
     const IndustryRules& industry;
     const ResolvedSettings& settings;
