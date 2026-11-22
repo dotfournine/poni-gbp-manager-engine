@@ -267,7 +267,7 @@ TEST_F(Reports, NamedStaffAreListedApartFromTheItems) {
 }
 
 // An industry whose profile has no person type gives no section; a report
-// stored before the section existed is still sent as it was (D-085).
+// stored in an older shape is still sent as it was (D-085).
 TEST_F(Reports, AnIndustryWithoutPeopleHasNoSectionAndAnOldReportIsSentAsItWas) {
     reseed("UPDATE kb_industries SET item_types = (SELECT jsonb_agg(t - 'person') FROM jsonb_array_elements(item_types) t)");
     const auto r = add_review(chelsea_, "s1", 5, "2026-10-05T15:00:00Z", "Anna was wonderful");
@@ -278,8 +278,14 @@ TEST_F(Reports, AnIndustryWithoutPeopleHasNoSectionAndAnOldReportIsSentAsItWas) 
     EXPECT_EQ(d.at("items_praised").at(0).at("label").as_string(), "Anna");
     EXPECT_THAT(html(id), Not(HasSubstr("Employee recognition")));
 
-    // What an older version stored: no "staff" (version 1), and a list of locations (before D-102).
-    exec(std::format("UPDATE reports SET data = (data - 'staff') || '{{\"version\": 1, \"locations\": []}}' WHERE id = {}", id));
+    // What version 2 stored, before D-102: a list of locations, and a location on each highlight and staff row.
+    ASSERT_EQ(d.at("highlights_best").as_array().size(), 1u);
+    exec(std::format("UPDATE reports SET data = jsonb_set(data, '{{highlights_best,0,location_title}}', '\"LU DREAM SPA - Chelsea\"') || "
+                     "'{{\"version\": 2, \"locations\": [], \"staff\": {{\"reviews_naming\": 1, \"recognized\": [{{\"rank\": 1, "
+                     "\"location_id\": {}, \"location_title\": \"LU DREAM SPA - Chelsea\", \"name\": \"Anna\", \"positive\": 1, "
+                     "\"negative\": 0}}], \"complained\": []}}}}' WHERE id = {}",
+                     chelsea_, id));
+    EXPECT_TRUE(data(id).at("highlights_best").at(0).as_object().contains("location_title"));
     recipients(chelsea_, R"(["owner@luspa.test"])");
     sending_on();
     const auto response = post(std::format("/api/reports/{}/send", id));
