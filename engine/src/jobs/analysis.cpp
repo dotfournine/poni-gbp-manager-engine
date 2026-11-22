@@ -286,7 +286,6 @@ asio::awaitable<void> ReviewPipeline::escalate(const repo::ReviewContext& contex
                        {.type = std::string(repo::kEventEscalation),
                         // The analysis is part of the key: a case that is opened again alerts again.
                         .key = std::format("case:{}:opened:{}", opened_case.id, analysis_id),
-                        .client_id = setup.client_id,
                         .location_id = setup.location_id,
                         .review_id = context.review_id,
                         .subject = subject,
@@ -405,7 +404,6 @@ asio::awaitable<bool> ReviewPipeline::store_own_draft(const repo::ReviewContext&
             repo::emit(tx,
                        {.type = std::string(repo::kEventApprovalNeeded),
                         .key = std::format("draft:{}:approval_needed", *id),
-                        .client_id = setup.client_id,
                         .location_id = setup.location_id,
                         .review_id = draft.review_id,
                         .subject = notice_subject,

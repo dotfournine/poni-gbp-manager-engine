@@ -412,20 +412,20 @@ TEST_F(RepliesApi, EscalationsAreListedAssignedAndClosed) {
 }
 
 TEST_F(RepliesApi, NotificationRulesAreManagedAndTheLogShowsWhatHappened) {
-    const auto client = std::to_string(spa_client_);
+    const auto location = std::to_string(spa_);
     EXPECT_EQ(post("/api/notification-rules", R"({"event_type": "escalation", "recipients": []})").status, 400u);
     EXPECT_EQ(post("/api/notification-rules", R"({"event_type": "escalation", "recipients": ["not an address"]})").status, 400u);
-    EXPECT_EQ(error_code(post("/api/notification-rules", R"({"event_type": "escalation", "client_id": 4242, "recipients": ["a@example.com"]})")),
-              "client_not_found");
+    EXPECT_EQ(error_code(post("/api/notification-rules", R"({"event_type": "escalation", "location_id": 4242, "recipients": ["a@example.com"]})")),
+              "location_not_found");
     const auto created = post("/api/notification-rules",
-                              R"({"event_type": "approval_needed", "client_id": )" + client + R"(, "recipients": ["Team@XVisionMediaUS.com"]})");
+                              R"({"event_type": "approval_needed", "location_id": )" + location + R"(, "recipients": ["Team@XVisionMediaUS.com"]})");
     ASSERT_EQ(created.status, 201u) << created.body;
     const auto rule = json(created);
     const auto path = "/api/notification-rules/" + std::to_string(rule.at("id").as_int64());
-    EXPECT_EQ(rule.at("client_name").as_string(), "LU DREAM SPA");
+    EXPECT_EQ(rule.at("location_title").as_string(), "LU DREAM SPA - Chelsea");
     EXPECT_EQ(rule.at("recipients").as_array().at(0).as_string(), "team@xvisionmediaus.com");
     EXPECT_EQ(error_code(post("/api/notification-rules",
-                              R"({"event_type": "approval_needed", "client_id": )" + client + R"(, "recipients": ["b@example.com"]})")),
+                              R"({"event_type": "approval_needed", "location_id": )" + location + R"(, "recipients": ["b@example.com"]})")),
               "rule_exists");
     EXPECT_EQ(read("/api/notification-rules").at("total").as_int64(), 1);
     EXPECT_EQ(read(path).at("event_type").as_string(), "approval_needed");
@@ -740,23 +740,22 @@ TEST_F(RepliesApi, ThePolicyCarriesTheDelayAndTheWindow) {
 }
 
 // The delivery log's filter takes every event type a delivery can have, the
-// client's report among them (the handler once kept a list of its own, which lacked it).
+// location's report among them (the handler once kept a list of its own, which lacked it).
 TEST_F(RepliesApi, TheDeliveryLogFiltersByEveryEventType) {
     tx([&](pqxx::work& tx) {
         ASSERT_TRUE(repo::emit_to(tx,
-                                  {.type = std::string(repo::kEventClientReport),
+                                  {.type = std::string(repo::kEventLocationReport),
                                    .key = "report:1",
-                                   .client_id = spa_client_,
-                                   .location_id = std::nullopt,
+                                   .location_id = spa_,
                                    .review_id = std::nullopt,
                                    .subject = "Your report",
                                    .body = "A made-up report.",
                                    .link_path = "/#/reports/1"},
                                   "owner@example.com", clock_.now()));
     });
-    const auto reports = read("/api/notification-deliveries?event_type=client_report");
+    const auto reports = read("/api/notification-deliveries?event_type=location_report");
     ASSERT_EQ(reports.at("total").as_int64(), 1);
-    EXPECT_EQ(reports.at("items").as_array().at(0).at("event_type").as_string(), "client_report");
+    EXPECT_EQ(reports.at("items").as_array().at(0).at("event_type").as_string(), "location_report");
     for (const auto* type : {"escalation", "approval_needed", "system_problem", "test"}) {
         const auto others = get(std::format("/api/notification-deliveries?event_type={}", type), browser_);
         ASSERT_EQ(others.status, 200u) << type;

@@ -129,7 +129,6 @@ asio::awaitable<void> Notifier::deliver_push(repo::PendingDelivery delivery, boo
         repo::emit(tx,
                    {.type = std::string(repo::kEventSystemProblem),
                     .key = std::format("push_refused:{:%F}", now),
-                    .client_id = std::nullopt,
                     .location_id = std::nullopt,
                     .review_id = std::nullopt,
                     .subject = "Apple refused the engine's push settings",

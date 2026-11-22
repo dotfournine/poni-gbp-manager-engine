@@ -116,7 +116,6 @@ void notify(pqxx::transaction_base& tx, std::int64_t id, std::string key, std::s
     emit(tx,
          {.type = std::string(kEventSystemProblem),
           .key = std::move(key),
-          .client_id = std::nullopt,
           .location_id = row[0].as<std::int64_t>(),
           .review_id = std::nullopt,
           .subject = std::move(subject),

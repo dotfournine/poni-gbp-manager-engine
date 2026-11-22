@@ -241,7 +241,7 @@ bool pause_auto_posting(pqxx::transaction_base& tx, std::optional<std::int64_t> 
     const auto rows = tx.exec(std::format("UPDATE {} SET auto_post_paused_at = $2::timestamptz, auto_post_pause_reason = $3, "
                                           "auto_post_pause_detail = $4, updated_at = $2::timestamptz "
                                           "WHERE {} AND auto_post_paused_at IS NULL RETURNING {}",
-                                          scope.table(), scope.row(), location_id ? "title, client_id" : "1"),
+                                          scope.table(), scope.row(), location_id ? "title" : "1"),
                               pqxx::params{location_id, now_text, std::string(reason), detail});
     if (rows.empty()) return false;
     audit::record(tx, auto_reply(),
@@ -252,7 +252,6 @@ bool pause_auto_posting(pqxx::transaction_base& tx, std::optional<std::int64_t> 
         emit(tx,
              {.type = std::string(kEventSystemProblem),
               .key = std::format("auto-post-pause:location:{}:{}", *location_id, now_text),
-              .client_id = rows[0][1].as<std::optional<std::int64_t>>(),
               .location_id = location_id,
               .review_id = std::nullopt,
               .subject = std::format("Auto-posting paused: {}", title),
@@ -265,7 +264,6 @@ bool pause_auto_posting(pqxx::transaction_base& tx, std::optional<std::int64_t> 
         emit(tx,
              {.type = std::string(kEventSystemProblem),
               .key = std::format("auto-post-pause:all:{}", now_text),
-              .client_id = std::nullopt,
               .location_id = std::nullopt,
               .review_id = std::nullopt,
               .subject = "Auto-posting paused for every location",

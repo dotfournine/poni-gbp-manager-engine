@@ -284,7 +284,6 @@ void add_reply_routes(Router& router, const Api& api, jobs::ReviewPipeline& pipe
                                tx,
                                {.type = std::string(repo::kEventTest),
                                 .key = std::format("test:{}", db::to_timestamptz(audit.now())),
-                                .client_id = std::nullopt,
                                 .location_id = std::nullopt,
                                 .review_id = std::nullopt,
                                 .subject = "Test message from PONI GBP Manager",

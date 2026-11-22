@@ -30,15 +30,15 @@ std::optional<std::int64_t> insert_delivery(pqxx::transaction_base& tx, const No
                                             const OptString& reason, const std::string& now) {
     const auto rows = tx.exec(
         R"sql(
-        INSERT INTO notification_deliveries (event_type, event_key, client_id, location_id, review_id, rule_id, channel,
-                                             recipient, subject, body, link_path, status, status_reason, created_at, updated_at,
-                                             escalation_id, local_post_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::timestamptz, $14::timestamptz, $15, $16)
+        INSERT INTO notification_deliveries (event_type, event_key, location_id, review_id, rule_id, channel, recipient, subject,
+                                             body, link_path, status, status_reason, created_at, updated_at, escalation_id,
+                                             local_post_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::timestamptz, $13::timestamptz, $14, $15)
         ON CONFLICT (event_key, channel, recipient) DO NOTHING
         RETURNING id)sql",
-        pqxx::params{event.type, event.key, event.client_id, event.location_id, event.review_id, rule_id, std::string(channel),
-                     std::string(recipient), event.subject, event.body, event.link_path, std::string(status), reason, now,
-                     event.escalation_id, event.local_post_id});
+        pqxx::params{event.type, event.key, event.location_id, event.review_id, rule_id, std::string(channel), std::string(recipient),
+                     event.subject, event.body, event.link_path, std::string(status), reason, now, event.escalation_id,
+                     event.local_post_id});
     if (rows.empty()) return std::nullopt;
     return rows[0][0].as<std::int64_t>();
 }
@@ -54,16 +54,16 @@ void enqueue_delivery(pqxx::transaction_base& tx, std::int64_t delivery_id, core
 }
 
 std::string rule_select() {
-    return std::format("SELECT n.id, n.event_type, n.client_id, c.name AS client_name, n.channel, n.recipients, n.enabled, "
+    return std::format("SELECT n.id, n.event_type, n.location_id, l.title AS location_title, n.channel, n.recipients, n.enabled, "
                        "{} AS created_at, {} AS updated_at "
-                       "FROM notification_rules n LEFT JOIN clients c ON c.id = n.client_id",
+                       "FROM notification_rules n LEFT JOIN locations l ON l.id = n.location_id",
                        iso("n.created_at"), iso("n.updated_at"));
 }
 
 boost::json::object rule_json(const model::NotificationRule& rule) {
     return {{"event_type", rule.event_type},
             {"channel", rule.channel},
-            {"client_id", rule.client_id ? boost::json::value(*rule.client_id) : boost::json::value(nullptr)},
+            {"location_id", rule.location_id ? boost::json::value(*rule.location_id) : boost::json::value(nullptr)},
             {"recipients", boost::json::value_from(rule.recipients)},
             {"enabled", rule.enabled}};
 }
@@ -85,10 +85,9 @@ std::optional<std::vector<std::string>> clean_recipients(const std::vector<std::
 }
 
 std::string delivery_select() {
-    return std::format("SELECT d.id, d.event_type, d.client_id, c.name AS client_name, d.location_id, d.review_id, d.escalation_id, "
-                       "d.channel, d.recipient, d.subject, d.body, d.status, d.status_reason, d.attempts, {} AS created_at, "
-                       "{} AS sent_at "
-                       "FROM notification_deliveries d LEFT JOIN clients c ON c.id = d.client_id",
+    return std::format("SELECT d.id, d.event_type, d.location_id, d.review_id, d.escalation_id, d.channel, d.recipient, d.subject, "
+                       "d.body, d.status, d.status_reason, d.attempts, {} AS created_at, {} AS sent_at "
+                       "FROM notification_deliveries d",
                        iso("d.created_at"), iso("d.sent_at"));
 }
 
@@ -111,10 +110,10 @@ bool valid_email(std::string_view address) {
 
 int emit(pqxx::transaction_base& tx, const NotificationEvent& event, core::TimePoint now) {
     const auto now_text = to_timestamptz(now);
-    // A client's own rule and the rule for every client both apply.
+    // A location's own rule and the rule for every location both apply.
     const auto rules = tx.exec("SELECT id, channel, recipients::text FROM notification_rules "
-                               "WHERE event_type = $1 AND enabled AND (client_id IS NULL OR client_id = $2) ORDER BY id",
-                               pqxx::params{event.type, event.client_id});
+                               "WHERE event_type = $1 AND enabled AND (location_id IS NULL OR location_id = $2) ORDER BY id",
+                               pqxx::params{event.type, event.location_id});
     int created = 0;
     bool any_recipient = false;
     for (const auto& rule : rules) {
@@ -190,7 +189,7 @@ void mark_delivery(pqxx::transaction_base& tx, std::int64_t id, std::string_view
 
 model::NotificationRuleList list_rules(pqxx::transaction_base& tx) {
     model::NotificationRuleList out;
-    out.items = db::rows_as<model::NotificationRule>(tx, rule_select() + " ORDER BY n.event_type, c.name NULLS FIRST, n.id");
+    out.items = db::rows_as<model::NotificationRule>(tx, rule_select() + " ORDER BY n.event_type, l.title NULLS FIRST, n.id");
     out.total = static_cast<std::int64_t>(out.items.size());
     return out;
 }
@@ -201,12 +200,12 @@ std::optional<model::NotificationRule> get_rule(pqxx::transaction_base& tx, std:
 
 Result<model::NotificationRule> create_rule(pqxx::transaction_base& tx, audit::Writer& audit, const NewRule& rule, bool push_configured) {
     if (!std::ranges::contains(kEventTypes, std::string_view(rule.event_type)) || rule.event_type == kEventTest) {
-        return invalid("\"event_type\" must be escalation, approval_needed, system_problem or client_report.");
+        return invalid("\"event_type\" must be escalation, approval_needed, system_problem or location_report.");
     }
     const std::string channel = rule.channel.value_or(std::string(kEmailChannel));
     if (channel != kEmailChannel && channel != kPushChannel) return invalid("\"channel\" must be email or push.");
     if (channel == kPushChannel) {
-        // Drafts waiting and client reports stay email (D-097).
+        // Drafts waiting and a location's reports stay email (D-097).
         if (rule.event_type != kEventEscalation && rule.event_type != kEventSystemProblem) {
             return invalid("A push rule is for escalation or system_problem only.");
         }
@@ -214,25 +213,25 @@ Result<model::NotificationRule> create_rule(pqxx::transaction_base& tx, audit::W
             return conflict("push_not_configured", "This engine has no APNs settings, so it can't push; ask whoever runs it.");
         }
     }
-    const auto& client_id = rule.client_id.value();
-    if (rule.event_type == kEventClientReport && !client_id) {
-        return invalid("A rule for client reports must name the client whose reports it sends.");
+    const auto& location_id = rule.location_id.value();
+    if (rule.event_type == kEventLocationReport && !location_id) {
+        return invalid("A rule for a location's reports must name the location whose reports it sends.");
     }
     const auto recipients = clean_recipients(rule.recipients);
     if (!recipients) {
         return invalid("\"recipients\" must be 1 to 20 valid email addresses.");
     }
-    if (client_id && tx.exec("SELECT 1 FROM clients WHERE id = $1", pqxx::params{*client_id}).empty()) {
-        return conflict("client_not_found", "There is no such client.");
+    if (location_id && tx.exec("SELECT 1 FROM locations WHERE id = $1", pqxx::params{*location_id}).empty()) {
+        return conflict("location_not_found", "There is no such location.");
     }
     const auto now = to_timestamptz(audit.now());
     const auto rows = tx.exec(
-        "INSERT INTO notification_rules (event_type, client_id, channel, recipients, enabled, created_at, updated_at) "
+        "INSERT INTO notification_rules (event_type, location_id, channel, recipients, enabled, created_at, updated_at) "
         "VALUES ($1, $2, $6, $3::jsonb, $4, $5::timestamptz, $5::timestamptz) "
-        "ON CONFLICT (event_type, channel, coalesce(client_id, 0)) DO NOTHING RETURNING id",
-        pqxx::params{rule.event_type, client_id, db::json_list(*recipients), rule.enabled.value_or(true), now, channel});
+        "ON CONFLICT (event_type, channel, coalesce(location_id, 0)) DO NOTHING RETURNING id",
+        pqxx::params{rule.event_type, location_id, db::json_list(*recipients), rule.enabled.value_or(true), now, channel});
     if (rows.empty()) {
-        return conflict("rule_exists", "A rule for this event type, channel and client already exists; change that one.");
+        return conflict("rule_exists", "A rule for this event type, channel and location already exists; change that one.");
     }
     auto created = *get_rule(tx, rows[0][0].as<std::int64_t>());
     audit.record("notification_rule.create", "notification_rule", created.id, {.after = rule_json(created)});
@@ -347,7 +346,6 @@ void record_gbp_token_health(pqxx::transaction_base& tx, const std::optional<std
     emit(tx,
          {.type = std::string(kEventSystemProblem),
           .key = std::format("gbp_token:{:%F}", now),
-          .client_id = std::nullopt,
           .location_id = std::nullopt,
           .review_id = std::nullopt,
           .subject = "The Google Business Profile token stopped working",
@@ -363,7 +361,6 @@ void emit_job_failed(pqxx::transaction_base& tx, const jobs::Job& job, std::stri
     emit(tx,
          {.type = std::string(kEventSystemProblem),
           .key = std::format("job_failed:{}:{:%F}", job.kind, now),
-          .client_id = std::nullopt,
           .location_id = std::nullopt,
           .review_id = std::nullopt,
           .subject = std::format("A background job failed: {}", job.kind),

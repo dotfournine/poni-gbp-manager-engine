@@ -1,4 +1,4 @@
-// Client reports without a database (D-085): when a schedule runs and what
+// A location's reports without a database (D-085, D-102): when a schedule runs and what
 // a period covers, through both daylight-saving changes; every figure of a
 // report from fixed data, with the empty cases; the page with hostile text
 // in every place text can come from; the summary's prompt and check; and
@@ -63,11 +63,12 @@ ReportReview review(std::int64_t location, int stars, year_month_day day, std::s
     return r;
 }
 
-// One client, two locations, October 2026.
+// October 2026, with two locations: a report is fed one location (D-102),
+// and its figures are computed the same for any number.
 ReportInput october() {
     ReportInput input;
-    input.client_id = 7;
-    input.client_name = "LU DREAM SPA";
+    input.location_id = 1;
+    input.location_title = "LU DREAM SPA - Chelsea";
     input.period = {on(2026y / October / 1), on(2026y / October / 31)};
     input.time_zone = std::string(kNewYork);
     input.generated_at = "2026-11-05T14:00:00Z";
@@ -527,7 +528,7 @@ TEST(ReportMetrics, TheNumbersGoUpToTheDayEveryViewCountHasReached) {
     EXPECT_EQ(lagging.visibility.totals.calls, 3);
     EXPECT_EQ(lagging.visibility.daily.size(), 29u);
 
-    // The same between locations: the client's numbers go as far as its slowest location's.
+    // The same between locations: the report's numbers go as far as its slowest location's.
     LocationPerformance uptown{.location_id = 2};
     for (unsigned d = 1; d <= 27; ++d) uptown.days.push_back({"BUSINESS_IMPRESSIONS_MOBILE_SEARCH", on(2026y / October / d), 1});
     input.performance = {chelsea, uptown};
@@ -614,7 +615,7 @@ TEST(ReportMetrics, AChangeIsInPercentAndNothingAgainstZero) {
 TEST(ReportHtml, HostileTextIsEscapedWhereverTextCanComeFrom) {
     const std::string attack = R"x(</p><script>alert('x')</script><img src=x onerror="alert(1)">)x";
     auto input = october();
-    input.client_name = "Spa " + attack;
+    input.location_title = "Spa " + attack;
     auto hostile = review(1, 5, 2026y / October / 2, "Great. " + attack, "positive");
     hostile.reviewer_name = "Eve " + attack;
     hostile.reviewer_photo_url = "javascript:alert(1)";

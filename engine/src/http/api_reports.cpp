@@ -1,10 +1,10 @@
-// The reports part of the dashboard's API (FR-8, D-085): the list of
-// reports, generating one by hand, reading its page, sending or rejecting
+// The reports part of the dashboard's API (FR-8, D-085, D-102): the list
+// of reports, generating a location's report by hand, reading its page, sending or rejecting
 // it, share links, and the schedules. Paths, parameters and bodies are
 // defined in api/openapi.yaml; change that file first.
 //
 // Every route here needs a signed-in person. The engine serves no report to
-// anyone else: a client reads a copy in the public bucket. Sending and
+// anyone else: the business reads a copy in the public bucket. Sending and
 // sharing go through jobs::Reporter, which puts that copy there.
 
 #include "db/audit.hpp"
@@ -31,7 +31,6 @@ struct ReportCreateBody {
 };
 BOOST_DESCRIBE_STRUCT(ReportCreateBody, (), (period_start, period_end, time_zone))
 
-
 }  // namespace
 
 void add_report_routes(Router& router, const Api& api, jobs::Reporter& reporter) {
@@ -41,23 +40,23 @@ void add_report_routes(Router& router, const Api& api, jobs::Reporter& reporter)
         const QueryParams query(request.query);
         repo::ReportFilter filter;
         bool bad = false;
-        filter.client_id = query.integer("client_id", bad);
+        filter.location_id = query.integer("location_id", bad);
         filter.status = query.get("status").value_or("");
         if (!read_page(query, filter.page, bad)) co_return bad_query();
         co_return ok(co_await api.query([filter](pqxx::work& tx) { return repo::list_reports(tx, filter); }));
     });
 
     // "Generate now": a report for any period that is over, built by a job.
-    router.add(verb::post, "/api/clients/{id}/reports", {Access::user, "reports.create"},
+    router.add(verb::post, "/api/locations/{id}/reports", {Access::user, "reports.create"},
                [api, link_base](const Request& request) -> asio::awaitable<Response> {
                    const auto id = path_id(request);
-                   if (!id) co_return not_found("client");
+                   if (!id) co_return not_found("location");
                    const auto body = body_as<ReportCreateBody>(request);
                    if (!body) co_return body.error();
                    const auto start = domain::parse_report_day(body->period_start);
                    const auto end = domain::parse_report_day(body->period_end);
                    if (!start || !end) co_return invalid("\"period_start\" and \"period_end\" must be days, YYYY-MM-DD.");
-                   repo::NewReport report{.client_id = *id,
+                   repo::NewReport report{.location_id = *id,
                                           .period = {*start, *end},
                                           .time_zone = body->time_zone.value_or("")};
                    co_return respond(co_await api.change(request, [report, link_base](pqxx::work& tx, audit::Writer& audit) {
@@ -89,7 +88,7 @@ void add_report_routes(Router& router, const Api& api, jobs::Reporter& reporter)
                    co_return response;
                });
 
-    // The request that sends email to a client. Its own action name.
+    // The request that sends email to a location's recipients. Its own action name.
     router.add(verb::post, "/api/reports/{id}/send", {Access::user, "reports.send"},
                [api, &reporter](const Request& request) -> asio::awaitable<Response> {
                    const auto id = path_id(request);

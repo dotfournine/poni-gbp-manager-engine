@@ -52,8 +52,8 @@ const std::map<std::string, std::string> kRoutesWithBody = {
     {"POST /api/drafts/{id}/reject", "reason"},
     {"POST /api/drafts/{id}/regenerate", "instructions"},
     {"PATCH /api/locations/{id}/auto-posting", "enabled"},
-    {"POST /api/clients/{id}/reports", "period_start"},
-    {"POST /api/report-schedules", "client_id"},
+    {"POST /api/locations/{id}/reports", "period_start"},
+    {"POST /api/report-schedules", "location_id"},
     {"PATCH /api/report-schedules/{id}", "frequency"},
     {"PUT /api/local-posts/{id}", "topic_type"},
     {"POST /api/local-posts/{id}/approve", "topic_type"},
@@ -268,16 +268,16 @@ TEST_F(Bodies, APostsContentTravelsWhole) {
 TEST_F(Bodies, MembersOfAnotherBodyAreNotTaken) {
     // Each of these was ignored until D-092: the caller believed it was saved.
     expect_refused(post("/api/drafts/999999999/reject", R"({"reason": "x", "note": "y"})"), "note", "a note on a draft's rejection");
-    expect_refused(patch("/api/notification-rules/999999999", R"({"enabled": true, "client_id": 3})"), "client_id", "a rule's client");
+    expect_refused(patch("/api/notification-rules/999999999", R"({"enabled": true, "location_id": 3})"), "location_id", "a rule's location");
     expect_refused(patch("/api/notification-rules/999999999", R"({"event_type": "escalation"})"), "event_type", "a rule's event");
-    expect_refused(patch("/api/report-schedules/999999999", R"({"client_id": 3})"), "client_id", "a schedule's client");
+    expect_refused(patch("/api/report-schedules/999999999", R"({"location_id": 3})"), "location_id", "a schedule's location");
     // A schedule's weekday is dropped by the engine when the frequency does not use it; a caller can't clear it.
     expect_refused(patch("/api/report-schedules/999999999", R"({"weekday": null})"), "weekday", "a null weekday");
     // On a new schedule null says "none", as leaving it out does.
     const auto schedule = post("/api/report-schedules",
-                               std::format(R"({{"client_id": {}, "frequency": "daily", "weekday": null, "month_day": null, "time": "09:00",
+                               std::format(R"({{"location_id": {}, "frequency": "daily", "weekday": null, "month_day": null, "time": "09:00",
                                                "time_zone": "America/New_York"}})",
-                                           spa_client_));
+                                           spa_));
     EXPECT_EQ(schedule.status, 201u) << schedule.body;
     // The body may be left out where the spec says so, and is read like any other where it is sent.
     EXPECT_EQ(post("/api/reviews/999999999/ignore", "").status, 404u);

@@ -1,4 +1,4 @@
-// Client reports (FR-8, D-085): the reports themselves, their share links
+// A location's reports (FR-8, D-085, D-102): the reports themselves, their share links
 // and the schedules that ask for them. A report row is written once as
 // "building"; its job fills in the numbers and the page, after which they
 // never change. Blocking calls on a transaction the caller owns.
@@ -36,7 +36,7 @@ inline constexpr int kBuildReportAttempts = 4;
 // ---- creating and building ---------------------------------------------------------
 
 struct NewReport {
-    std::int64_t client_id = 0;
+    std::int64_t location_id = 0;
     domain::Period period;
     std::string time_zone;
     std::optional<std::int64_t> schedule_id;
@@ -45,9 +45,9 @@ struct NewReport {
 
 // Writes the report as "building" and enqueues its job, requested by the
 // audit's actor (a person, or nobody: a schedule). Without a time zone it
-// takes that of the client's first location that has one, else UTC. Refuses
-// a client that is unknown or archived, a time zone the system does not
-// know, and a period that is upside down, longer than 400 days or not over yet.
+// takes the location's, else UTC. Refuses a location that is unknown or
+// switched off, a time zone the system does not know, and a period that is
+// upside down, longer than 400 days or not over yet.
 Result<model::Report> create_report(pqxx::transaction_base& tx, audit::Writer& audit, const NewReport& report, std::string_view link_base);
 
 struct ReportLocationRef {
@@ -57,15 +57,16 @@ struct ReportLocationRef {
 };
 
 // What the build job needs: everything the numbers are computed from that
-// is in the database, and the locations to ask Google about.
+// is in the database, and the report's location to ask Google about.
 struct ReportWork {
     std::int64_t report_id = 0;
     bool auto_send = false;
     domain::ReportInput input;
-    std::vector<ReportLocationRef> locations;
+    ReportLocationRef location;
 };
 
-// Nothing unless the report is still "building".
+// Nothing unless the report is still "building". A report whose location was
+// switched off meanwhile is marked failed instead, and nothing is returned.
 std::optional<ReportWork> load_report_work(pqxx::transaction_base& tx, std::int64_t report_id, core::TimePoint now);
 
 // building -> draft, with the numbers and the page. False if the report was no longer building.
@@ -77,7 +78,7 @@ void fail_report(pqxx::transaction_base& tx, std::int64_t report_id, const std::
 // ---- reading -------------------------------------------------------------------------
 
 struct ReportFilter {
-    std::optional<std::int64_t> client_id;
+    std::optional<std::int64_t> location_id;
     std::string status;
     db::Page page;
 };
@@ -95,12 +96,13 @@ std::optional<std::string> report_data(pqxx::transaction_base& tx, std::int64_t 
 // The object a share link's token names in the public bucket.
 std::string share_object_name(std::string_view token);
 
-// The page to send, if the report can be sent now: it is a draft, email
-// sending is switched on, and a rule names recipients for the client's reports.
+// The page to send, if the report can be sent now: it is a draft, its
+// location is switched on, email sending is switched on, and a rule names
+// recipients for that location's reports.
 Result<std::string> check_send(pqxx::transaction_base& tx, std::int64_t report_id);
 
 // After the page was put in the public bucket under `token`: records the
-// link, raises the client_report event (one email per recipient) and marks
+// link, raises the location_report event (one email per recipient) and marks
 // the report sent by the audit's actor (nobody when its schedule sends it,
 // actor system:report-schedule). Checks again what check_send checked.
 Result<model::Report> mark_report_sent(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t report_id, const std::string& token,
@@ -132,7 +134,7 @@ Result<model::ReportShareLink> revoke_share_link(pqxx::transaction_base& tx, aud
 
 // Both are the API's request bodies (POST and PATCH /api/report-schedules).
 struct NewSchedule {
-    std::int64_t client_id = 0;
+    std::int64_t location_id = 0;  // an enabled location
     std::string frequency;
     // Each for its frequency; null or left out otherwise.
     core::Nullable<std::int64_t> weekday;
@@ -142,7 +144,7 @@ struct NewSchedule {
     std::optional<bool> auto_send;  // nothing: off
     std::optional<bool> enabled;    // nothing: on
 };
-BOOST_DESCRIBE_STRUCT(NewSchedule, (), (client_id, frequency, weekday, month_day, time, time_zone, auto_send, enabled))
+BOOST_DESCRIBE_STRUCT(NewSchedule, (), (location_id, frequency, weekday, month_day, time, time_zone, auto_send, enabled))
 // weekday and month_day can't be cleared by a PATCH: the one the frequency does not use is dropped.
 struct SchedulePatch {
     std::optional<std::string> frequency;
@@ -155,7 +157,7 @@ struct SchedulePatch {
 };
 BOOST_DESCRIBE_STRUCT(SchedulePatch, (), (frequency, weekday, month_day, time, time_zone, auto_send, enabled))
 
-// Every schedule, by client.
+// Every schedule, by location title.
 model::ReportScheduleList list_schedules(pqxx::transaction_base& tx);
 Result<model::ReportSchedule> create_schedule(pqxx::transaction_base& tx, audit::Writer& audit, const NewSchedule& schedule);
 Result<model::ReportSchedule> update_schedule(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const SchedulePatch& patch);
@@ -167,8 +169,8 @@ Result<void> delete_schedule(pqxx::transaction_base& tx, audit::Writer& audit, s
 inline constexpr std::chrono::minutes kReportStalledAfter{60};
 int fail_stalled_reports(pqxx::transaction_base& tx, core::TimePoint now);
 
-// Builds the report of every enabled schedule whose latest run has come and
-// has not been built yet: one report per schedule and run day, however often
+// Builds the report of every enabled schedule of an enabled location whose
+// latest run has come and has not been built yet: one report per schedule and run day, however often
 // this is called. A schedule made or changed after a run's moment does not
 // run for it. Returns how many reports were started.
 int start_due_reports(pqxx::transaction_base& tx, core::TimePoint now);
