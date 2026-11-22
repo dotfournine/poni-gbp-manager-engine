@@ -78,9 +78,12 @@ tags:
       signed in with, one of each at a time, and the system status shows its
       address (D-100).
   - name: clients
-    description: Clients (brands) that PONI works for.
+    description: Clients (brands) that PONI works for, as groups of locations for bookkeeping (D-102).
   - name: locations
-    description: Google Business Profile locations, discovered from GBP and linked to clients.
+    description: |
+      Google Business Profile locations, discovered from GBP. Everything the
+      engine does is a location's, and a location is worked on only once a
+      person switched it on (D-102).
   - name: reviews
     description: The review inbox, a read-only mirror of the reviews on Google.
   - name: analysis
@@ -97,9 +100,9 @@ tags:
     description: The go-live test (D-074), which a configuration must pass before anything is auto-posted with it.
   - name: reports
     description: |
-      Client reports (FR-8, D-085): built once from the stored reviews and
-      Google's visibility numbers, read by staff here, and shared with the
-      client as a page in a public bucket. The engine serves no report to
+      Location reports (FR-8, D-085, D-102): one location's, built once from
+      its stored reviews and Google's visibility numbers, read by staff here,
+      and shared with its recipients as a page in a public bucket. The engine serves no report to
       anyone who is not signed in.
   - name: local-posts
     description: |
@@ -108,7 +111,7 @@ tags:
       its exact content, and Google publishes, schedules and repeats it. The
       list also shows posts made in Google's own interface.
   - name: settings
-    description: Voices, localization, reply policies and the pipeline's settings, per client and location.
+    description: Voices, localization, reply policies and the pipeline's settings, per location.
   - name: knowledge
     description: |
       The knowledge base (FR-13), read-only: supported industries with their
@@ -592,8 +595,8 @@ paths:
       operationId: updateClient
       summary: Change a client
       description: |
-        Changes the fields that are given. Archiving a client stops the review
-        sync of its locations; nothing is deleted.
+        Changes the fields that are given. Archiving a client changes nothing
+        about its locations (D-102); nothing is deleted.
       tags: [clients]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -641,6 +644,11 @@ paths:
         - name: linked
           in: query
           description: Only locations linked to a client (`true`) or not yet linked (`false`).
+          schema:
+            type: boolean
+        - name: enabled
+          in: query
+          description: Only locations the engine works on (`true`) or only those it lists alone (`false`).
           schema:
             type: boolean
         - name: access_status
@@ -709,19 +717,20 @@ paths:
           $ref: "#/components/responses/NotFound"
     patch:
       operationId: updateLocation
-      summary: Link a location to a client
+      summary: Change a location
       description: |
-        Sets or clears the location's client, changes how often its reviews
-        are polled, or flips its posting switch. Reviews are synced only for
-        locations that are linked to a client; linking starts a full sync
-        within a minute. Everything else about a location comes from Google
-        and can't be changed here.
+        Switches the location on or off (`enabled`), sets its industry, the
+        day its analysis starts from and its audience, groups it under a
+        client or clears that, changes how often its reviews are polled, or
+        flips its posting switch. Everything else about a location comes
+        from Google and can't be changed here.
 
-        Linking gives the location its reply settings (D-093): a copy of the
-        settings of the client's earliest-linked other location, or of the
-        knowledge base's defaults when it is the client's first. Clearing the
-        client removes them, and a move to another client replaces them with
-        a copy from that client: a voice describes one business.
+        The engine works only on an enabled location (D-102); a discovered
+        location starts switched off. Linking, unlinking and moving the
+        location to another client change only the grouping: its reply
+        settings, switches, tests and reports stay as they are. Its reply
+        settings are its own from discovery (D-093), and change only through
+        `PUT /api/locations/{id}/reply-settings`.
       tags: [locations]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -747,7 +756,10 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: The client doesn't exist or is archived (`client_not_found`).
+          description: |
+            The client doesn't exist or is archived (`client_not_found`), or
+            the location can't be switched on because the managing account no
+            longer sees it (`location_not_accessible`).
           content:
             application/json:
               schema:
@@ -760,11 +772,6 @@ paths:
       description: The review inbox. Newest first unless `sort` and `order` say otherwise.
       tags: [reviews]
       parameters:
-        - name: client_id
-          in: query
-          schema:
-            type: integer
-            format: int64
         - name: location_id
           in: query
           schema:
@@ -1035,7 +1042,7 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           description: |
-            The review can't be analyzed: it was removed, its client has no
+            The review can't be analyzed: it was removed, its location has no
             industry profile, or its location isn't synced (`not_analyzable`).
           content:
             application/json:
@@ -1051,10 +1058,9 @@ paths:
       description: |
         The voice, localization preferences and policy the location's replies
         are written with (FR-4, FR-5, D-093). They are the location's own and
-        complete: nothing is merged in from its client or from the knowledge
-        base. A location gets them when it is linked to a client, as a copy
-        of the settings of the client's earliest-linked other location, or of
-        the knowledge base's defaults when it is the client's first.
+        complete: nothing is merged in from the knowledge base. A location
+        gets them when it is discovered, as a copy of the knowledge base's
+        defaults, and keeps them whatever client it is grouped under (D-102).
       tags: [settings]
       responses:
         "200":
@@ -1138,7 +1144,7 @@ paths:
       operationId: getKnowledgeCorpus
       summary: An industry's test corpus
       description: |
-        The synthetic reviews a go-live test of a client of this industry
+        The synthetic reviews a go-live test of a location of this industry
         runs, with what is expected of each (architecture section 10).
       tags: [knowledge]
       responses:
@@ -1204,7 +1210,7 @@ paths:
       summary: LLM usage and cost
       description: |
         Calls, tokens and estimated cost between two days, in total and by
-        day, model, task and client. The cost is an estimate from the prices
+        day, model, task, provider and location. The cost is an estimate from the prices
         in the pipeline settings at the time of each call.
       tags: [llm]
       parameters:
@@ -1469,7 +1475,7 @@ paths:
       summary: Auto-posting everywhere
       description: |
         The pause on every location, the global posting switch, and each
-        linked location's auto-posting settings. Everything is off after
+        enabled location's auto-posting settings. Everything is off after
         installation.
       tags: [auto-posting]
       responses:
@@ -1515,8 +1521,8 @@ paths:
         Switching auto-posting on lets the engine post replies to this
         location's reviews without a person: drafts routed to `auto_post`
         for the chosen star ratings, written from then on. It is refused
-        (400) unless a star rating is chosen, the location is linked and
-        accessible, and the reply policy's timing can be used (a posting
+        (400) unless a star rating is chosen, the location is enabled and
+        accessible (D-102), and the reply policy's timing can be used (a posting
         window needs `time_zone`). The global and the location's posting
         switch still apply on top, and nothing is auto-posted until the
         location's configuration has passed a go-live test (`go_live_state`,
@@ -1599,20 +1605,19 @@ paths:
   /api/go-live:
     get:
       operationId: getGoLive
-      summary: Where every client's go-live test stands
+      summary: Where every location's go-live test stands
       description: |
         A location may auto-post only while its configuration has a passing
         go-live test (D-074). The configuration is identified by a
         fingerprint of everything that changes what the models are asked and
         what the code checks: the prompts as rendered for the location, each
         task's provider, model, temperature, token limit and request extras,
-        and the limits the reply checks read. Locations of a client with the
-        same fingerprint are one configuration. Each comes with its state
-        and an estimate of what a test would take.
+        and the limits the reply checks read. Each location comes with its
+        state and an estimate of what a test would take (D-102).
       tags: [go-live]
       responses:
         "200":
-          description: Every client that has a linked location, by name.
+          description: Every enabled location, by title.
           content:
             application/json:
               schema:
@@ -1620,32 +1625,34 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthenticated"
 
-  /api/clients/{id}/go-live-test:
+  /api/locations/{id}/go-live-test:
     parameters:
       - $ref: "#/components/parameters/Id"
     post:
       operationId: startGoLiveTest
-      summary: Submit a client for go-live testing
+      summary: Submit a location for go-live testing
       description: |
-        Starts one run for each configuration of the client that has none
-        running. A run sends the attack, severity and control cases of the
-        client's industry and the client's own newest 4 and 5 star reviews
-        (D-075) through the analyzer and the writer three times each, and
-        has the judge rate the replies that would have been posted without a
-        person. This calls the models and costs money (`GoLiveEstimate`). A
-        test never starts by itself, nothing is posted, and a pass switches
-        nothing on. Refused (400) when a task's model provider is not
-        configured or the client has no linked location or industry profile.
+        Starts one run of the location's configuration, at its reply
+        policy's width (D-102). A run sends the attack, severity and control
+        cases of the location's industry and the location's own newest 4
+        and 5 star reviews (D-075) through the analyzer and the writer three
+        times each, and has the judge rate the replies that would have been
+        posted without a person. This calls the models and costs money
+        (`GoLiveEstimate`). A test never starts by itself, nothing is
+        posted, and a pass switches nothing on. A pass counts for every
+        location with the same fingerprint. Refused (400) when a task's
+        model provider is not configured, or the location is not enabled or
+        has no industry profile.
       tags: [go-live]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       responses:
         "201":
-          description: The runs that were started.
+          description: The run that was started.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/GoLiveRunList"
+                $ref: "#/components/schemas/GoLiveRun"
         "400":
           $ref: "#/components/responses/InvalidRequest"
         "401":
@@ -1712,7 +1719,7 @@ paths:
       description: Newest first, without their pages and share links.
       tags: [reports]
       parameters:
-        - name: client_id
+        - name: location_id
           in: query
           schema:
             type: integer
@@ -1736,14 +1743,15 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthenticated"
 
-  /api/clients/{id}/reports:
+  /api/locations/{id}/reports:
     parameters:
       - $ref: "#/components/parameters/Id"
     post:
       operationId: createReport
       summary: Generate a report now
       description: |
-        Starts a report of the client for any period that is over. A job
+        Starts a report of the location for any period that is over (D-102).
+        Refused (400) when the location is not enabled. A job
         builds it: the answer is the report as `building`, and it becomes a
         `draft` (or `failed`) shortly after. Building sends nothing and
         shares nothing. It may call the model once, for the summary.
@@ -1821,14 +1829,14 @@ paths:
       - $ref: "#/components/parameters/Id"
     post:
       operationId: sendReport
-      summary: Send a report to the client
+      summary: Send a report to the location's recipients
       description: |
         Puts the page into the public bucket under a new share link and
-        emails the client's recipients (the `client_report` rule of the
-        client) the headline numbers and that link. Only a `draft` can be
-        sent, once. Refused while email sending is switched off or the
-        client has no recipients: a report is never marked sent that reached
-        nobody.
+        emails the location's recipients (the `location_report` rules that
+        name the location) the headline numbers and that link. Only a
+        `draft` can be sent, once. Refused while email sending is switched
+        off or the location has no recipients: a report is never marked sent
+        that reached nobody.
       tags: [reports]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -1946,7 +1954,7 @@ paths:
       tags: [reports]
       responses:
         "200":
-          description: Every schedule, by client.
+          description: Every schedule, by location title.
           content:
             application/json:
               schema:
@@ -1957,7 +1965,7 @@ paths:
       operationId: createReportSchedule
       summary: Add a report schedule
       description: |
-        A client may have any number. A schedule's first run is the first
+        A location may have any number. A schedule's first run is the first
         one after it was made; it never runs for a time that has passed.
       tags: [reports]
       parameters:
@@ -2046,12 +2054,6 @@ paths:
         so that paging is stable either way.
       tags: [local-posts]
       parameters:
-        - name: client_id
-          in: query
-          schema:
-            type: integer
-            format: int64
-            minimum: 1
         - name: location_id
           in: query
           schema:
@@ -2230,8 +2232,8 @@ paths:
         `local_post_edit_not_open`.
 
         A post can have an edit when it is `sent`, has a `google_name`, has
-        no removal requested and belongs to a location that is linked to an
-        active client; a post made in Google's own interface can have one
+        no removal requested and belongs to a location that is enabled and
+        accessible; a post made in Google's own interface can have one
         too. Otherwise the answer is `local_post_not_editable` or
         `location_not_synced`. A post that holds what a draft cannot hold
         (an alert, a button a draft does not have, an event without its
@@ -2517,8 +2519,8 @@ paths:
       operationId: removeLocalPost
       summary: Delete a local post at Google
       description: |
-        Asks for the post to be deleted at Google: any post of a linked
-        location that Google has, also one made in Google's own interface.
+        Asks for the post to be deleted at Google: any post of a location
+        that Google has, also while the location is switched off (D-102), also one made in Google's own interface.
         This is the only way to stop a scheduled post or take one down. A
         job sends the delete; the post is `removed` once Google has
         confirmed it (or answers that it is already gone). The audit entry
@@ -2677,7 +2679,7 @@ paths:
         either too. A read that fails is tried again after a delay, up to
         three reads in all, so a failure may still be followed by a success.
         Neither moves when the location stopped being synced in between (it
-        was unlinked, its client archived, or access lost), so a client
+        was switched off, or access was lost), so a client
         stops waiting after a time of its own choosing. Posts that
         Google no longer has are marked removed after
         `local_posts_synced_at` has moved, one by one, so a removal can
@@ -2735,7 +2737,7 @@ paths:
         Three to five ideas, from the location's reviews of the last 90
         days and their analysis, Google's performance figures and search
         keywords, the recent posts, the industry profile, the voice and the
-        client's `audience`. A reviewer's name or photo is never given to
+        location's `audience`. A reviewer's name or photo is never given to
         the model. Nothing is stored. The call waits for the model. Refused
         with fewer than 10 analysed reviews in the period.
       tags: [local-posts]
@@ -2821,11 +2823,6 @@ paths:
           in: query
           schema:
             $ref: "#/components/schemas/EscalationStatus"
-        - name: client_id
-          in: query
-          schema:
-            type: integer
-            format: int64
         - name: location_id
           in: query
           schema:
@@ -2979,11 +2976,12 @@ paths:
       operationId: listNotificationRules
       summary: List notification rules
       description: |
-        Who is told about what (FR-7): event type × client → recipients. A
-        rule without a client applies to every client and to events that
-        belong to none (system problems). A rule for `client_report` holds
-        the addresses a client's reports are sent to and must name the
-        client (D-085). A `push` rule (D-097) is for `escalation` or
+        Who is told about what (FR-7): event type × location → recipients
+        (D-102). A rule without a location applies to every location and to
+        events that belong to none (system problems). A rule for
+        `location_report` holds the addresses a location's reports are sent
+        to, for example its store manager's, and must name the location
+        (D-085). A `push` rule (D-097) is for `escalation` or
         `system_problem` only; its recipients are staff, and each is
         delivered to that person's devices with the phone app.
       tags: [notifications]
@@ -3423,10 +3421,8 @@ components:
             $ref: "#/components/schemas/Error"
     ReplySettingsConflict:
       description: |
-        `location_not_linked`: the location is not linked to a client, and
-        only a linked location has reply settings. `reply_settings_incomplete`
-        (reading only): the stored settings lack a field, which the message
-        names; replacing them repairs it.
+        `reply_settings_incomplete` (reading only): the stored settings lack
+        a field, which the message names; replacing them repairs it.
       content:
         application/json:
           schema:
@@ -3446,8 +3442,8 @@ components:
             $ref: "#/components/schemas/Error"
     GoLiveConflict:
       description: |
-        `go_live_running`: every configuration of the client already has a
-        test running. `go_live_not_running`: the test has ended, so there is
+        `go_live_running`: a test of the location's configuration is already
+        running. `go_live_not_running`: the test has ended, so there is
         nothing to cancel.
       content:
         application/json:
@@ -3466,8 +3462,9 @@ components:
         `report_not_ready`: the report is not in the state the request needs
         (still building, failed, sent or rejected). `sending_off`: email
         sending is switched off, so a report would reach nobody.
-        `no_recipients`: no enabled `client_report` rule names an address for
-        the client. `client_archived`: the client is archived.
+        `no_recipients`: no enabled `location_report` rule names an address
+        for the location. `location_not_enabled`: the location is switched
+        off.
         `no_public_bucket`: the engine has no public bucket
         (`PONI_PUBLIC_BUCKET`), so nothing can be shared. `report_shared`: a
         report with share links that work can't be rejected; revoke them
@@ -3493,8 +3490,8 @@ components:
         by a draft at all (a part longer than a draft takes). `local_post_changed`: the content sent is not the stored
         content. `checks_failed`: a check fails on the content.
         `posting_disabled`: the global or the location's posting switch is
-        off. `location_not_synced`: the location is not linked to a client
-        that is active, or the engine has lost access to it.
+        off. `location_not_synced`: the location is switched off
+        (`Location.enabled`), or the engine has lost access to it.
         `local_post_not_at_google`: the post was never sent, or the engine
         does not yet know its name at Google, so there is nothing to
         delete. `no_public_bucket`: the engine has no public bucket
@@ -3521,8 +3518,8 @@ components:
             $ref: "#/components/schemas/Error"
     RuleConflict:
       description: |
-        The client named doesn't exist (`client_not_found`), a rule for
-        this event type, channel and client already exists (`rule_exists`),
+        The location named doesn't exist (`location_not_found`), a rule for
+        this event type, channel and location already exists (`rule_exists`),
         or a push rule was asked of an engine without the APNs settings
         (`push_not_configured`).
       content:
@@ -3677,8 +3674,12 @@ components:
     Client:
       type: object
       additionalProperties: false
-      required:
-        [id, name, notes, audience, archived, industry_key, analyze_from, location_count, reply_settings_variants, created_at, updated_at]
+      description: |
+        A group of locations, for bookkeeping only (D-102): a name, notes and
+        the locations linked to it. No setting, switch, test or report is a
+        client's; each is its location's. A client's figures are read
+        location by location, from `location_ids`.
+      required: [id, name, notes, archived, location_count, location_ids, created_at, updated_at]
       properties:
         id:
           type: integer
@@ -3687,41 +3688,22 @@ components:
           type: string
         notes:
           type: string
-        audience:
-          type: string
-          description: |
-            Who the customers are, in a line written by staff (D-088). The
-            model reads it when it is asked for ideas and texts for local
-            posts. Empty when nobody has written one.
         archived:
           type: boolean
-          description: Archived clients stay for history; their locations are no longer synced.
-        industry_key:
-          type: [string, "null"]
           description: |
-            The `key` of the industry whose profile the client's reviews are
-            analyzed with: one of `Knowledge.industries`. Null, or a key
-            that is not among them because a later knowledge base dropped
-            it: its reviews are not analyzed until it is given one.
-        analyze_from:
-          type: [string, "null"]
-          format: date
-          description: |
-            Only reviews written on or after this day (UTC) are analyzed and
-            drafted on their own (D-055). Null, every review is. Staff can
-            still ask for the analysis of an older review by hand.
+            Archived clients stay for history and are left out of lists that
+            ask for active ones. Archiving changes nothing about the
+            client's locations.
         location_count:
           type: integer
           format: int64
           description: Locations linked to the client.
-        reply_settings_variants:
-          type: integer
-          format: int64
-          description: |
-            How many different reply settings the client's linked locations
-            have (D-093): 0 without a linked location, 1 when they are all
-            equal. A location whose settings are missing counts as one of its
-            own.
+        location_ids:
+          type: array
+          description: The ids of the locations linked to the client, in id order.
+          items:
+            type: integer
+            format: int64
         created_at:
           type: string
           format: date-time
@@ -3740,14 +3722,6 @@ components:
         notes:
           type: string
           maxLength: 5000
-        audience:
-          type: string
-          maxLength: 500
-          description: As in `Client`.
-        analyze_from:
-          type: [string, "null"]
-          format: date
-          description: As in `Client`. Left out, every review is analyzed.
     ClientUpdate:
       type: object
       additionalProperties: false
@@ -3759,19 +3733,8 @@ components:
         notes:
           type: string
           maxLength: 5000
-        audience:
-          type: string
-          maxLength: 500
-          description: As in `Client`.
         archived:
           type: boolean
-        industry_key:
-          type: [string, "null"]
-          description: The `key` of an industry profile, or null for none.
-        analyze_from:
-          type: [string, "null"]
-          format: date
-          description: As in `Client`; null for every review. Left out, it stays as it is.
     ClientList:
       type: object
       additionalProperties: false
@@ -3801,6 +3764,10 @@ components:
         - gbp_account_id
         - client_id
         - client_name
+        - enabled
+        - industry_key
+        - analyze_from
+        - audience
         - title
         - store_code
         - primary_category
@@ -3842,9 +3809,41 @@ components:
         client_id:
           type: [integer, "null"]
           format: int64
-          description: The client the location is linked to; null until staff link it.
+          description: |
+            The client the location is grouped under; null until staff link
+            it. Bookkeeping only (D-102): the link changes nothing about what
+            the engine does with the location.
         client_name:
           type: [string, "null"]
+        enabled:
+          type: boolean
+          description: |
+            Whether the engine works on this location (D-102). False when
+            the location is discovered: it is then only listed, with no
+            review poll or sync, no analysis or draft, no local posts, no
+            go-live test, no report and no auto-post. Only a person switches
+            it, with `PATCH /api/locations/{id}`; no client is needed.
+        industry_key:
+          type: [string, "null"]
+          description: |
+            The `key` of the industry whose profile the location's reviews
+            are analyzed with: one of `Knowledge.industries`. Null, or a key
+            that is not among them because a later knowledge base dropped
+            it: its reviews are not analyzed until it is given one. The
+            engine does not take it from `primary_category`.
+        analyze_from:
+          type: [string, "null"]
+          format: date
+          description: |
+            Only reviews written on or after this day (UTC) are analyzed and
+            drafted on their own (D-102). Null, every review is. Staff can
+            still ask for the analysis of an older review by hand.
+        audience:
+          type: string
+          description: |
+            Who the customers are, in a line written by staff (D-088). The
+            model reads it when it is asked for ideas and texts for local
+            posts. Empty when nobody has written one.
         title:
           type: string
         store_code:
@@ -3937,8 +3936,8 @@ components:
             the only one a location has. Google gives none, so it is null
             until a person enters it, in one place only,
             `PATCH /api/locations/{id}/auto-posting`; `LocationUpdate` does
-            not take it. A report takes the zone of the client's
-            location with the lowest id that has one (`ReportCreate.time_zone`). It does not change how
+            not take it. A report of the location takes this zone unless
+            it names another (`ReportCreate.time_zone`). It does not change how
             date-times are written: they stay UTC, `scheduled_time` and
             `recurrence.until` of a local post included.
     LocationUpdate:
@@ -3948,7 +3947,28 @@ components:
         client_id:
           type: [integer, "null"]
           format: int64
-          description: The client to link to; null unlinks. Left out, the link stays as it is.
+          description: The client to group the location under; null unlinks. Left out, the link stays as it is.
+        enabled:
+          type: boolean
+          description: |
+            As in `Location`. Switching on needs a location whose
+            `access_status` is `active`, and starts a full sync within a
+            minute; it switches nothing else on and lifts no pause.
+            Switching off also switches the location's auto-posting off,
+            and stops an approved reply, local post or edit before it is
+            sent; a removal of a local post that a person asked for still
+            goes ahead.
+        industry_key:
+          type: [string, "null"]
+          description: The `key` of an industry in `Knowledge.industries`, or null for none.
+        analyze_from:
+          type: [string, "null"]
+          format: date
+          description: As in `Location`; null for every review. Left out, it stays as it is.
+        audience:
+          type: string
+          maxLength: 500
+          description: As in `Location`.
         review_poll_interval_s:
           type: integer
           minimum: 60
@@ -4393,7 +4413,7 @@ components:
           $ref: "#/components/schemas/AccessStatus"
         syncing:
           type: boolean
-          description: Linked to an active client and accessible, so its reviews are being synced.
+          description: Enabled and accessible, so its reviews are being synced.
         review_count:
           type: integer
           format: int64
@@ -4456,7 +4476,7 @@ components:
       properties:
         id:
           type: string
-          description: A topic of the client's industry profile.
+          description: A topic of the location's industry profile.
         polarity:
           type: string
           enum: [positive, negative, neutral]
@@ -4471,7 +4491,7 @@ components:
           description: As the reviewer wrote it.
         type:
           type: string
-          description: An item type of the client's industry profile.
+          description: An item type of the location's industry profile.
         polarity:
           type: string
           enum: [positive, negative, neutral]
@@ -4858,7 +4878,7 @@ components:
           type: string
         person:
           description: >-
-            True: an item of this type is a staff member a reviewer named; a client report lists such items in its
+            True: an item of this type is a staff member a reviewer named; a location's report lists such items in its
             employee recognition section, not among the items (D-086). Null where the profile does not say, which
             means no. The analyzer is not told it.
           type: [boolean, "null"]
@@ -4947,7 +4967,7 @@ components:
       properties:
         reply_name:
           type: string
-          description: How replies refer to the business. Empty, the client's name.
+          description: How replies refer to the business. Empty, the location's title (D-102).
         business_facts:
           type: array
           description: The only facts about the business the generator may rely on.
@@ -5152,14 +5172,14 @@ components:
         location_title:
           type: string
         client_id:
-          type: integer
+          type: [integer, "null"]
           format: int64
-          description: The client the location is linked to; only a linked location has reply settings.
+          description: The client the location is grouped under, for display only; null when it has none.
         client_name:
-          type: string
+          type: [string, "null"]
         industry_key:
           type: [string, "null"]
-          description: The client's industry (`Client.industry_key`); null, the location's reviews are not analyzed.
+          description: The location's industry (`Location.industry_key`); null, the location's reviews are not analyzed.
         voice:
           $ref: "#/components/schemas/Voice"
         localization:
@@ -5216,7 +5236,7 @@ components:
           description: When this version was seeded.
         industries:
           type: array
-          description: The supported industries; a client can be given one of these.
+          description: The supported industries; a location can be given one of these.
           items:
             $ref: "#/components/schemas/KnowledgeIndustry"
         common_severity_flags:
@@ -5239,11 +5259,11 @@ components:
       type: object
       description: A supported industry. Its pack was complete when it was seeded.
       additionalProperties: false
-      required: [key, label, topics, item_types, severity_flags, test_client_name, corpus, client_count]
+      required: [key, label, topics, item_types, severity_flags, test_client_name, corpus, location_count]
       properties:
         key:
           type: string
-          description: What `Client.industry_key` names.
+          description: What `Location.industry_key` names.
         label:
           type: string
         topics:
@@ -5264,10 +5284,10 @@ components:
           description: The made-up business the test suites run as.
         corpus:
           $ref: "#/components/schemas/KnowledgeCorpusSummary"
-        client_count:
+        location_count:
           type: integer
           format: int64
-          description: Clients that name this industry, archived ones left out.
+          description: Enabled locations that name this industry.
     KnowledgeCorpusSummary:
       type: object
       additionalProperties: false
@@ -5303,7 +5323,7 @@ components:
     KnowledgeDefaults:
       type: object
       description: |
-        What the first location of a client starts from (D-093), and the default of
+        What every location starts from when it is discovered (D-093, D-102), and the default of
         every analysis setting.
       additionalProperties: false
       required: [voice, localization, policy, analysis]
@@ -5564,7 +5584,7 @@ components:
       properties:
         key:
           type: string
-          description: The day (`2026-11-11`), the model, the task, or the client's or location's id, by grouping. `total` for the total.
+          description: The day (`2026-11-11`), the model, the task, the provider or the location's id, by grouping. `total` for the total.
         label:
           type: string
         calls:
@@ -5593,7 +5613,7 @@ components:
     LlmUsage:
       type: object
       additionalProperties: false
-      required: [from, to, total, by_day, by_model, by_task, by_client, by_location, by_provider]
+      required: [from, to, total, by_day, by_model, by_task, by_location, by_provider]
       properties:
         from:
           type: string
@@ -5616,13 +5636,9 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/LlmUsageRow"
-        by_client:
-          type: array
-          items:
-            $ref: "#/components/schemas/LlmUsageRow"
         by_location:
           type: array
-          description: One row per location, labelled with its client's name and its title. Most expensive first.
+          description: One row per location, labelled with its title (D-057, D-102). Most expensive first.
           items:
             $ref: "#/components/schemas/LlmUsageRow"
         by_provider:
@@ -5640,8 +5656,6 @@ components:
         - task
         - provider
         - model
-        - client_id
-        - client_name
         - location_id
         - review_id
         - attempt
@@ -5667,11 +5681,6 @@ components:
           description: The model provider the request went to. Null for calls made before providers were named.
         model:
           type: string
-        client_id:
-          type: [integer, "null"]
-          format: int64
-        client_name:
-          type: [string, "null"]
         location_id:
           type: [integer, "null"]
           format: int64
@@ -5890,22 +5899,22 @@ components:
 
     NotificationEventType:
       type: string
-      enum: [escalation, approval_needed, system_problem, test, client_report]
+      enum: [escalation, approval_needed, system_problem, test, location_report]
       description: |
         `escalation`: a severity flag opened an escalation, or opened a
-        closed one again. Subject: `Escalation: <client name> - <flag
+        closed one again. Subject: `Escalation: <location title> - <flag
         labels, joined with ", ">`. It carries the ids of the escalation,
         its review and its location.
 
         `approval_needed`: a reply draft waits in the approval queue, or
         was on its way to an automatic post and is back in the queue.
-        Subject: `Approval needed: <location title> (<client name>)`. Email
+        Subject: `Approval needed: <location title>`. Email
         only; its ids are the review and the location.
 
-        `client_report`: a client's report was sent. It is the report's
-        email to the client's recipients: subject `Your Google reviews and
-        visibility report, <period>`. Email only, and a rule for it names
-        one client.
+        `location_report`: a location's report was sent (D-102). It is the
+        report's email to the location's recipients: subject `Your Google
+        reviews and visibility report, <period>`. Email only, and a rule for
+        it names one location. It carries the location's id.
 
         `test`: a test message; no rule can name it.
 
@@ -5922,7 +5931,7 @@ components:
         - `Apple refused the engine's push settings`: the APNs key, team or
           topic was refused. At most once a day. No ids.
         - `Lost access to a location`: two listings of the managing account
-          in a row did not include a location that is linked to a client.
+          in a row did not include a location that is enabled.
           `location_id`.
         - `Auto-posting paused: <location title>`: the engine paused
           auto-posting at one location (checks kept failing, an automatic
@@ -5972,19 +5981,19 @@ components:
     NotificationRule:
       type: object
       additionalProperties: false
-      required: [id, event_type, client_id, client_name, channel, recipients, enabled, created_at, updated_at]
+      required: [id, event_type, location_id, location_title, channel, recipients, enabled, created_at, updated_at]
       properties:
         id:
           type: integer
           format: int64
         event_type:
           type: string
-          enum: [escalation, approval_needed, system_problem, client_report]
-        client_id:
+          enum: [escalation, approval_needed, system_problem, location_report]
+        location_id:
           type: [integer, "null"]
           format: int64
-          description: Null applies the rule to every client.
-        client_name:
+          description: The location the rule is for (D-102); null applies it to every location.
+        location_title:
           type: [string, "null"]
         channel:
           type: string
@@ -6023,7 +6032,7 @@ components:
       properties:
         event_type:
           type: string
-          enum: [escalation, approval_needed, system_problem, client_report]
+          enum: [escalation, approval_needed, system_problem, location_report]
         channel:
           type: string
           enum: [email, push]
@@ -6032,10 +6041,12 @@ components:
             `push` only for `escalation` and `system_problem`, and only on an
             engine that has the APNs settings (otherwise a 409,
             `push_not_configured`).
-        client_id:
+        location_id:
           type: [integer, "null"]
           format: int64
-          description: The client the rule is for; null or left out for every client.
+          description: |
+            The location the rule is for; null or left out for every
+            location. A `location_report` rule must name one.
         recipients:
           type: array
           minItems: 1
@@ -6112,7 +6123,7 @@ components:
         Each id is there only when the event has it. An `escalation` event
         carries `escalation_id`, `review_id` and `location_id`; a
         `system_problem` carries the ids listed with its subject in
-        `NotificationEventType`. `client_id` is never in a push. An app opens a screen from
+        `NotificationEventType`. An app opens a screen from
         the ids and reads the rest from the API.
 
         Apple is given a collapse id made from the event, so the same event
@@ -6168,8 +6179,6 @@ components:
       required:
         - id
         - event_type
-        - client_id
-        - client_name
         - location_id
         - review_id
         - escalation_id
@@ -6188,11 +6197,6 @@ components:
           format: int64
         event_type:
           $ref: "#/components/schemas/NotificationEventType"
-        client_id:
-          type: [integer, "null"]
-          format: int64
-        client_name:
-          type: [string, "null"]
         location_id:
           type: [integer, "null"]
           format: int64
@@ -6408,7 +6412,7 @@ components:
           type: [string, "null"]
         locations:
           type: array
-          description: Every location linked to a client, by title.
+          description: Every enabled location, by title.
           items:
             $ref: "#/components/schemas/AutoPosting"
     GoLiveState:
@@ -6467,14 +6471,14 @@ components:
           format: int64
         case_key:
           type: string
-          description: The corpus case's id (`M-01`), or `review:<id>` for one of the client's own reviews.
+          description: The corpus case's id (`M-01`), or `review:<id>` for one of the location's own reviews.
         category:
           type: string
           enum: [manipulation, severity, control, real]
           description: |
             `manipulation` and `severity` cases must not reach auto-post.
             `control` (an ordinary review from the corpus) and `real` (one
-            of the client's reviews, D-075) may, and are then judged.
+            of the location's reviews, D-075) may, and are then judged.
         review_id:
           type: [integer, "null"]
           format: int64
@@ -6506,7 +6510,8 @@ components:
       additionalProperties: false
       required:
         - id
-        - client_id
+        - location_id
+        - location_title
         - fingerprint
         - status
         - summary
@@ -6530,9 +6535,12 @@ components:
         id:
           type: integer
           format: int64
-        client_id:
+        location_id:
           type: integer
           format: int64
+          description: The location the run was submitted for (D-102).
+        location_title:
+          type: string
         fingerprint:
           type: string
         status:
@@ -6549,7 +6557,7 @@ components:
           type: integer
         corpus_version:
           type: string
-          description: A hash of the cases of the client's industry that the run used.
+          description: A hash of the cases of the location's industry that the run used.
         corpus_current:
           type: boolean
           description: False when the industry's corpus in the knowledge base has changed since. The pass still counts.
@@ -6560,7 +6568,7 @@ components:
           type: integer
         real_reviews:
           type: integer
-          description: How many of the client's own reviews were among the cases (D-075).
+          description: How many of the location's own reviews were among the cases (D-075).
         cases_total:
           type: integer
           format: int64
@@ -6587,18 +6595,6 @@ components:
           description: Only when one run is read.
           items:
             $ref: "#/components/schemas/GoLiveCase"
-    GoLiveRunList:
-      type: object
-      additionalProperties: false
-      required: [items, total]
-      properties:
-        items:
-          type: array
-          items:
-            $ref: "#/components/schemas/GoLiveRun"
-        total:
-          type: integer
-          format: int64
     GoLiveEstimate:
       type: object
       description: What a test would take, from the cases, the repeats, the price settings and the recent model calls.
@@ -6630,24 +6626,39 @@ components:
           description: What the numbers leave out.
           items:
             type: string
-    GoLiveConfiguration:
+    GoLiveLocation:
       type: object
-      description: The locations of a client that share one fingerprint.
+      description: |
+        Where one location's configuration stands (D-102). Locations with
+        the same fingerprint share their runs and their pass, but each is
+        submitted on its own.
       additionalProperties: false
-      required: [fingerprint, location_titles, state, state_detail, pass, latest_run, estimate]
+      required:
+        [location_id, location_title, client_id, client_name, problem, fingerprint, state, state_detail, pass, latest_run, estimate]
       properties:
-        fingerprint:
+        location_id:
+          type: integer
+          format: int64
+        location_title:
           type: string
-        location_titles:
-          type: array
-          items:
-            type: string
+        client_id:
+          type: [integer, "null"]
+          format: int64
+          description: The client the location is grouped under, for display only.
+        client_name:
+          type: [string, "null"]
+        problem:
+          type: [string, "null"]
+          description: Why this location can't be tested (no industry profile); null when it can.
+        fingerprint:
+          type: [string, "null"]
+          description: Null when the location can't be tested.
         state:
           $ref: "#/components/schemas/GoLiveState"
         state_detail:
           type: [string, "null"]
         pass:
-          description: The pass that lets these locations auto-post, if there is one.
+          description: The pass that lets this location auto-post, if there is one.
           oneOf:
             - $ref: "#/components/schemas/GoLiveRun"
             - type: "null"
@@ -6656,28 +6667,14 @@ components:
             - $ref: "#/components/schemas/GoLiveRun"
             - type: "null"
         estimate:
-          $ref: "#/components/schemas/GoLiveEstimate"
-    GoLiveClient:
-      type: object
-      additionalProperties: false
-      required: [client_id, client_name, problem, configurations]
-      properties:
-        client_id:
-          type: integer
-          format: int64
-        client_name:
-          type: string
-        problem:
-          type: [string, "null"]
-          description: Why this client can't be tested (no industry profile); null when it can.
-        configurations:
-          type: array
-          items:
-            $ref: "#/components/schemas/GoLiveConfiguration"
+          oneOf:
+            - $ref: "#/components/schemas/GoLiveEstimate"
+            - type: "null"
+          description: Null when the location can't be tested.
     GoLiveOverview:
       type: object
       additionalProperties: false
-      required: [repeats, judge_provider, judge_model, providers_configured, clients]
+      required: [repeats, judge_provider, judge_model, providers_configured, locations]
       properties:
         repeats:
           type: integer
@@ -6688,10 +6685,11 @@ components:
         providers_configured:
           type: boolean
           description: The analyzer's, the writer's and the judge's provider each have an address and a key. A test needs all three.
-        clients:
+        locations:
           type: array
+          description: Every enabled location, by title.
           items:
-            $ref: "#/components/schemas/GoLiveClient"
+            $ref: "#/components/schemas/GoLiveLocation"
     AutoPost:
       type: object
       description: One reply the engine posted without a person.
@@ -6858,19 +6856,19 @@ components:
       description: |
         `building`: its job has not finished. `failed`: the job gave up.
         `draft`: built, and waiting for a person to send or reject it.
-        `sent`: emailed to the client's recipients. `rejected`: a person
+        `sent`: emailed to the location's recipients. `rejected`: a person
         set it aside.
     Report:
       type: object
       description: |
-        A client report (D-085). Its numbers and its page are made once,
+        A location's report (D-085, D-102). Its numbers and its page are made once,
         when it is built, and never change; "generate again" makes a new
         report.
       additionalProperties: false
       required:
         - id
-        - client_id
-        - client_name
+        - location_id
+        - location_title
         - period_start
         - period_end
         - time_zone
@@ -6892,10 +6890,11 @@ components:
         id:
           type: integer
           format: int64
-        client_id:
+        location_id:
           type: integer
           format: int64
-        client_name:
+          description: The location the report covers (D-102).
+        location_title:
           type: string
         period_start:
           type: string
@@ -6988,12 +6987,12 @@ components:
         time_zone:
           type: string
           maxLength: 64
-          description: An IANA name. Without one, the time zone of the client's location with the lowest id that has one, else UTC.
+          description: An IANA name. Without one, the location's time zone, else UTC.
     ReportShareLink:
       type: object
       description: |
         A copy of a report's page in the public bucket. The address is the
-        whole secret: it holds 32 random bytes and nothing about the client
+        whole secret: it holds 32 random bytes and nothing about the location
         or the report. Old pages are removed by the bucket's lifecycle rule.
       additionalProperties: false
       required: [id, url, origin, created_by, created_at, revoked_at]
@@ -7027,8 +7026,8 @@ components:
       additionalProperties: false
       required:
         - id
-        - client_id
-        - client_name
+        - location_id
+        - location_title
         - frequency
         - weekday
         - month_day
@@ -7043,10 +7042,11 @@ components:
         id:
           type: integer
           format: int64
-        client_id:
+        location_id:
           type: integer
           format: int64
-        client_name:
+          description: The location whose reports the schedule builds (D-102).
+        location_title:
           type: string
         frequency:
           $ref: "#/components/schemas/ReportFrequency"
@@ -7071,7 +7071,7 @@ components:
           description: |
             Off (the default): a report this schedule builds waits for a
             person. On: it is sent as soon as it is built, if email sending
-            is on and the client has recipients; otherwise it waits, with
+            is on and the location has recipients; otherwise it waits, with
             the reason.
         enabled:
           type: boolean
@@ -7100,11 +7100,12 @@ components:
     ReportScheduleCreate:
       type: object
       additionalProperties: false
-      required: [client_id, frequency, time, time_zone]
+      required: [location_id, frequency, time, time_zone]
       properties:
-        client_id:
+        location_id:
           type: integer
           format: int64
+          description: An enabled location.
         frequency:
           $ref: "#/components/schemas/ReportFrequency"
         weekday:
@@ -7498,7 +7499,7 @@ components:
         client_id:
           type: [integer, "null"]
           format: int64
-          description: Null when the location is no longer linked to a client.
+          description: The client the location is grouped under, for display only; null when it has none.
         client_name:
           type: [string, "null"]
         origin:
