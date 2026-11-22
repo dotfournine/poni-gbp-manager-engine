@@ -325,7 +325,9 @@ model::SystemSettings update_system_settings(pqxx::transaction_base& tx, audit::
 model::EmailStatus email_status(pqxx::transaction_base& tx, core::TimePoint now) {
     model::EmailStatus status;
     status.sending_enabled = get_system_settings(tx).email_sending_enabled;
-    status.connected = load_credential(tx, kGmailCredential).has_value();
+    const auto mailbox = load_credential(tx, kGmailCredential);
+    status.connected = mailbox.has_value();
+    if (mailbox) status.account_email = mailbox->account_email;
     auto health = integration(tx, kEmailStatus);
     status.last_ok_at = std::move(health.last_ok_at);
     status.last_error = std::move(health.last_error);

@@ -107,7 +107,6 @@ services:
       PONI_LLM_ANTHROPIC_API_KEY: ${PONI_LLM_ANTHROPIC_API_KEY:-}
       PONI_LLM_ANTHROPIC_PROTOCOL: ${PONI_LLM_ANTHROPIC_PROTOCOL:-}
       # Notifications are sent from this mailbox (connect it once on the status page).
-      PONI_EMAIL_FROM: ${PONI_EMAIL_FROM:-host@xvisionmediaus.com}
       PONI_EMAIL_FROM_NAME: ${PONI_EMAIL_FROM_NAME:-PONI GBP Manager}
       # Reports (D-085): the public bucket shared report pages are put in.
       # Empty: nothing can be shared or sent.

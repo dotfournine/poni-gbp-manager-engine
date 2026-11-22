@@ -33,7 +33,6 @@ protected:
         ApiTest::SetUp();
         pipeline_.emplace(db(), clock_, llm_, queue(), jobs::AnalysisOptions{});
         api_pipeline_ = &*pipeline_;
-        api_options_.email_sender = "host@xvisionmediaus.com";
         api_options_.llm_providers = {"anthropic", "dashscope"};
         build({});
         browser_ = sign_in();
@@ -465,7 +464,7 @@ TEST_F(RepliesApi, NotificationRulesAreManagedAndTheLogShowsWhatHappened) {
     const auto email = read("/api/system/status").at("email");
     EXPECT_TRUE(email.at("sending_enabled").as_bool());
     EXPECT_FALSE(email.at("connected").as_bool()) << "no sending account has signed in";
-    EXPECT_EQ(email.at("sender").as_string(), "host@xvisionmediaus.com");
+    EXPECT_TRUE(email.at("account_email").is_null());
     EXPECT_FALSE(email.at("last_ok_at").is_null());
 
     EXPECT_EQ(del(path).status, 204u);

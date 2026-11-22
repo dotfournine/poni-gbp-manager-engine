@@ -74,7 +74,7 @@ asio::awaitable<void> Notifier::deliver(std::int64_t delivery_id, bool last_atte
         co_return;
     }
     if (sent.error().kind == notify::SendError::Kind::not_configured) {
-        co_await not_sent(db_, clock_, delivery_id, "no sending account is signed in: " + sent.error().message);
+        co_await not_sent(db_, clock_, delivery_id, sent.error().message);  // the channel says why: no mailbox, or no address
         co_return;
     }
     co_await channel_failed(db_, clock_, delivery_id, repo::kEmailStatus, sent.error(), last_attempt);

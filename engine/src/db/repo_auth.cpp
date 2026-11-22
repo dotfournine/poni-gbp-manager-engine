@@ -17,24 +17,27 @@ void save_credential(pqxx::transaction_base& tx, std::string_view name, const St
                      core::TimePoint now) {
     tx.exec(
           R"sql(
-        INSERT INTO credentials (name, ciphertext, key_id, created_at, updated_at)
-        VALUES ($1, $2, $3, $4::timestamptz, $4::timestamptz)
+        INSERT INTO credentials (name, ciphertext, key_id, account_email, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5::timestamptz, $5::timestamptz)
         ON CONFLICT (name) DO UPDATE
-           SET ciphertext = EXCLUDED.ciphertext, key_id = EXCLUDED.key_id, updated_at = EXCLUDED.updated_at)sql",
-          pqxx::params{std::string(name), credential.ciphertext, credential.key_id, to_timestamptz(now)})
+           SET ciphertext = EXCLUDED.ciphertext, key_id = EXCLUDED.key_id, account_email = EXCLUDED.account_email,
+               updated_at = EXCLUDED.updated_at)sql",
+          pqxx::params{std::string(name), credential.ciphertext, credential.key_id, credential.account_email, to_timestamptz(now)})
         .no_rows();
 }
 
 std::optional<StoredCredential> load_credential(pqxx::transaction_base& tx, std::string_view name) {
-    const auto rows = tx.exec("SELECT ciphertext, key_id FROM credentials WHERE name = $1", pqxx::params{std::string(name)});
+    const auto rows =
+        tx.exec("SELECT ciphertext, key_id, account_email FROM credentials WHERE name = $1", pqxx::params{std::string(name)});
     if (rows.empty()) return std::nullopt;
-    return StoredCredential{rows[0][0].as<std::string>(), rows[0][1].as<std::string>()};
+    return StoredCredential{rows[0][0].as<std::string>(), rows[0][1].as<std::string>(), rows[0][2].as<std::optional<std::string>>()};
 }
 
 void save_oauth_credentials(pqxx::transaction_base& tx, const core::SecretBox& box, std::string_view name,
-                            const google::OAuthCredentials& credentials, core::TimePoint now) {
+                            const google::OAuthCredentials& credentials, std::optional<std::string> account_email,
+                            core::TimePoint now) {
     const auto plaintext = boost::json::serialize(boost::json::value_from(credentials));
-    save_credential(tx, name, {box.seal(plaintext, name), box.key_id()}, now);
+    save_credential(tx, name, {box.seal(plaintext, name), box.key_id(), std::move(account_email)}, now);
 }
 
 std::expected<std::optional<google::OAuthCredentials>, std::string> load_oauth_credentials(pqxx::transaction_base& tx,
@@ -56,7 +59,7 @@ std::expected<std::optional<google::OAuthCredentials>, std::string> load_oauth_c
 
 void save_gbp_credentials(pqxx::transaction_base& tx, const core::SecretBox& box,
                           const google::OAuthCredentials& credentials, core::TimePoint now) {
-    save_oauth_credentials(tx, box, kGbpCredential, credentials, now);
+    save_oauth_credentials(tx, box, kGbpCredential, credentials, std::nullopt, now);
 }
 
 std::expected<std::optional<google::OAuthCredentials>, std::string> load_gbp_credentials(pqxx::transaction_base& tx,

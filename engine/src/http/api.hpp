@@ -18,8 +18,6 @@ struct ApiOptions {
     std::vector<std::string> llm_providers;
     // How many job workers the engine runs: that many cases of a go-live test are in the queue at a time.
     int job_workers = 2;
-    // Shown on the status page: the address notifications are sent from.
-    std::string email_sender;
     // Shown on the status page: the engine has the OAuth client and the key
     // that the "Connect" buttons need (http/connect.hpp).
     bool connect_configured = false;

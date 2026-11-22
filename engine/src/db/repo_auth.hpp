@@ -28,6 +28,8 @@ inline constexpr std::string_view kGbpCredential = "gbp";
 struct StoredCredential {
     std::string ciphertext;  // core::SecretBox::seal output
     std::string key_id;
+    // The Google account's address, from the connection's ID token (D-100); none for a credential stored before.
+    std::optional<std::string> account_email;
 };
 
 void save_credential(pqxx::transaction_base& tx, std::string_view name, const StoredCredential& credential,
@@ -35,10 +37,13 @@ void save_credential(pqxx::transaction_base& tx, std::string_view name, const St
 std::optional<StoredCredential> load_credential(pqxx::transaction_base& tx, std::string_view name);
 
 // An OAuth client and refresh token stored under `name` ("gbp", "gmail"),
-// encrypted with `box`. Loading returns nothing if none is stored, and an
-// error message if the stored value can't be read with this key.
+// encrypted with `box`, with the address of the account they belong to,
+// which replaces the one stored before (none: unknown). Loading returns
+// nothing if none is stored, and an error message if the stored value can't
+// be read with this key.
 void save_oauth_credentials(pqxx::transaction_base& tx, const core::SecretBox& box, std::string_view name,
-                            const google::OAuthCredentials& credentials, core::TimePoint now);
+                            const google::OAuthCredentials& credentials, std::optional<std::string> account_email,
+                            core::TimePoint now);
 std::expected<std::optional<google::OAuthCredentials>, std::string> load_oauth_credentials(pqxx::transaction_base& tx,
                                                                                            const core::SecretBox& box,
                                                                                            std::string_view name);

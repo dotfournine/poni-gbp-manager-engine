@@ -8,8 +8,10 @@
 //
 // `account` is "gbp" or "gmail". A signed-in person starts; the engine
 // builds Google's address, receives the redirect, exchanges the code, checks
-// the account, encrypts the token and stores it, with an audit entry in that
-// person's name. The client secret, the refresh token and the encryption key
+// the account, encrypts the token and stores it with the account's address,
+// with an audit entry in that person's name. The account is whichever one the
+// person picks at Google, and its address is what the ID token of the
+// exchange says (D-100): no setting names it. The client secret, the refresh token and the encryption key
 // never reach the browser, and nothing is stored unless every check passed.
 //
 // The session cookie is SameSite=Strict, so it is not sent with Google's
@@ -20,6 +22,7 @@
 #pragma once
 
 #include "connectors/google/auth.hpp"
+#include "connectors/notify/gmail.hpp"
 #include "core/clock.hpp"
 #include "core/config.hpp"
 #include "core/rate_limiter.hpp"
@@ -50,6 +53,10 @@ using OnConnected = std::function<void(std::string_view account)>;
 // refresh, so a new connection is used without a restart. `box` may be
 // null (no PONI_SECRET_KEY): nothing can then be read. `db` must outlive the loader.
 google::CredentialsLoader stored_credentials(db::Database& db, const core::SecretBox* box, std::string_view account);
+
+// The address of the connected mailbox, as its connection named it (D-100),
+// for the email channel; read on every message. `db` must outlive it.
+notify::MailboxAddress stored_mailbox_address(db::Database& db);
 
 class ConnectService {
 public:
