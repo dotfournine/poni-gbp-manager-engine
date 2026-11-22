@@ -107,25 +107,23 @@ def cmd_seed(args: argparse.Namespace, config: settings.Settings) -> int:
 
 
 def _say_whom_it_changes(result: seed.Seeded) -> None:
-    def lines(clients: list[seed.Client]) -> str:
-        return "\n".join(
-            f"  - {c.name} ({c.industry}): {', '.join(c.locations) if c.locations else 'no location'}" for c in clients
-        )
+    def lines(locations: list[seed.Location]) -> str:
+        return "\n".join(f"  - {x.title} ({x.industry})" for x in locations)
 
     if result.retest:
         print(
-            "\nThis version changes what the analyzer is told about an industry. These clients are analyzed with the "
-            "new profile from now on, and none of their locations auto-posts until a new go-live test has passed "
+            "\nThis version changes what the analyzer is told about an industry. These locations are analyzed with the "
+            "new profile from now on, and none of them auto-posts until a new go-live test has passed "
             "(replies go to the approval queue meanwhile). Start the tests on the Go-live test page:\n"
             + lines(result.retest)
         )
     if result.stranded:
         print(
-            "\nThis version no longer has the industry of these clients. Their reviews are not analyzed until each "
+            "\nThis version no longer has the industry of these locations. Their reviews are not analyzed until each "
             "is given another industry in the dashboard, and then passes a go-live test:\n" + lines(result.stranded)
         )
     if not result.retest and not result.stranded:
-        print("No client needs a new go-live test because of it.")
+        print("No location needs a new go-live test because of it.")
 
 
 def cmd_pack(args: argparse.Namespace, config: settings.Settings) -> int:

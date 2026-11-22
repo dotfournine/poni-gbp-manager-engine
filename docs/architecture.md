@@ -89,18 +89,18 @@ An auto-post is `scheduled` before `approved`; one that is stopped returns to th
 
 ### 4.2 Sync
 
-Only linked locations are synced (D-038). Every change ends in one store routine that records edits, outside replies and removals in `review_events` (D-039) and does nothing when nothing changed (D-037).
+Only enabled locations are synced (D-102): a location is switched on by a person, and discovery lists it switched off. Every change ends in one store routine that records edits, outside replies and removals in `review_events` (D-039) and does nothing when nothing changed (D-037).
 
 - **Discover:** accounts and locations every 15 minutes.
 - **Poll:** every minute, the locations whose poll is due (2 minutes by default), one `batchGetReviews` per account, newest first, stopping at a page with nothing new.
-- **Full reconciliation:** on link, then hourly, every review listed and compared; it finds outside replies, which do not change a review's update time. Only `NOT_FOUND` for a review marks it removed.
+- **Full reconciliation:** on switching a location on, then hourly, every review listed and compared; it finds outside replies, which do not change a review's update time. Only `NOT_FOUND` for a review marks it removed.
 - **Notifications** (Pub/Sub, every 30 seconds) name a review, fetched and stored the same way.
 
 ### 4.3 Reports
 
 A person ("Generate now", any finished period) or `reports.schedule` (every five minutes; daily is the day before, weekly the seven days before, monthly the previous month, in the schedule's time zone) writes a `building` row. `reports.build` reads the period's and the previous period's reviews and analyses; asks the Performance API for daily metrics and the month's keywords, storing nothing else (Google lags about three days: the report says the day its numbers reach and compares only whole periods; without an answer it is built without them); computes every figure in `domain/report.hpp`; asks the `summary` task for a few sentences, checked for links, addresses, phone numbers and length; and renders one HTML page without script (`domain/report_html.hpp`). Numbers and page (`reports.data`, `reports.html`) never change (D-085).
 
-A person reads the draft in a sandboxed frame and sends, regenerates or rejects it. Sending uploads `r/<token>.html` to the public bucket and raises `client_report`; revoking overwrites the object. "noindex" and the content security policy are `<meta>` elements; the bucket's lifecycle rule removes pages after 365 days.
+A person reads the draft in a sandboxed frame and sends, regenerates or rejects it. Sending uploads `r/<token>.html` to the public bucket and raises `location_report`; revoking overwrites the object. "noindex" and the content security policy are `<meta>` elements; the bucket's lifecycle rule removes pages after 365 days.
 
 ### 4.4 Local posts (D-088)
 
@@ -117,7 +117,7 @@ A person reads the draft in a sandboxed frame and sends, regenerates or rejects 
 - **Help:** praise of the last 90 days counted without a model (`GET /api/locations/{id}/review-highlights`), and ideas or a text from the `posts` task through `jobs::PostAdvisor`; nothing stored.
 - **Remove:** `repo::request_local_post_removal`, then `local_posts.remove`; the only way to stop a scheduled post.
 - **Edit (D-099):** a post that is at Google gets an edit beside it (`local_post_edits`, one open edit per post), written and approved like a draft, with the post's content the person wrote it against (which the client sends, and the engine checks). `repo::approve_local_post_edit` enqueues `local_posts.edit`, which claims the edit, reads the post from Google and sends one PATCH that names the fields the edit's author changed and Google does not have yet, and no other. A field changed on both sides stops the edit. Accepted: the post's row takes Google's answer, and the location is read again after 1, 5 and 15 minutes. A certain refusal: the edit is a draft again with Google's message (429 and token errors are tried again). Anything else: the edit is a draft again saying that Google did not confirm it, and nothing is sent again without a new approval. Built from the documentation, without a trial.
-- **Read:** `local_posts.sync_due` (every five minutes) queues a sync for each linked location unread for an hour or holding an unsettled send. A sync settles sends of unknown outcome by adoption (CLAUDE.md), stores the listed posts, and marks `removed` only a post whose own get answers `NOT_FOUND`. None of this runs against the mock.
+- **Read:** `local_posts.sync_due` (every five minutes) queues a sync for each enabled location unread for an hour or holding an unsettled send. A sync settles sends of unknown outcome by adoption (CLAUDE.md), stores the listed posts, and marks `removed` only a post whose own get answers `NOT_FOUND`. None of this runs against the mock.
 
 ### 4.5 Sign-in, sessions and audit
 
@@ -134,8 +134,8 @@ Migrations in `engine/migrations/`, applied by `poni-tools migrate`, from `0001_
 | Area | Tables |
 | ---- | ------ |
 | People | `users`, `sessions` (kind `browser` or `app`), `app_sign_in_codes`, `audit_log` |
-| Clients | `clients` (industry key), `locations` (GBP account and location IDs, time zone, posting switch, auto-posting switches per star rating, daily cap, pause) |
-| Settings | `reply_settings` (one complete row per linked location: voice, localization, policy, delay, window; D-093), `ai_settings` (analysis settings, each task's provider and model) |
+| Clients | `clients` (a name, notes and an archived flag: grouping only, D-102), `locations` (GBP account and location IDs, the optional `client_id`, the `enabled` switch, industry key, `analyze_from`, audience, time zone, posting switch, auto-posting switches per star rating, daily cap, pause) |
+| Settings | `reply_settings` (one complete row per location, written from the defaults at discovery: voice, localization, policy, delay, window; D-093, D-102), `ai_settings` (analysis settings, each task's provider and model) |
 | Reviews | `reviews` (rating, original and translated text, language, script, reviewer, current reply), `review_events`, `review_analyses` |
 | Replies | `reply_drafts` (draft, scheduled, approved, posting, posted, published, rejected, cancelled, superseded; model text beside a person's edit), `reply_posts` (one per PUT, at most one open per review) |
 | Local posts | `local_posts` (draft, approved, sending, sent, unknown, failed, rejected, removed, beside Google's state), `local_post_media`, `local_post_edits` (the open edit of a post at Google: draft, approved, sending) |
@@ -169,9 +169,9 @@ C++23, CMake, Ninja, vcpkg manifest (D-001); clang only, Homebrew LLVM on macOS 
 `poni-tools check` (JSON Schema, cross-checks, the complete-pack rule) → `publish` (one archive, by date and version, to a Cloud Storage bucket) → `seed` (production names the archive in `poni.env`; download, compare the hash, check, replace the tables) → the engine reads; the dashboard shows them read-only.
 
 - **Version:** `manifest.json`, `YYYYMMDD` or `YYYYMMDD-N` (D-084). `kb_meta` keeps the content's hash; changed content under a seeded version is refused.
-- **The engine reads** the industry profile with the common flags (every analysis), the corpus (go-live), prices, the defaults (a client's first link) and the industry list. It writes and caches none.
-- **Copies:** a location's settings are its own row (D-093), copied on link, never read from the tables again; a new field reaches rows by a migration. The industry key is the one reference, without a foreign key; a client whose industry is gone is not analyzed (D-084).
-- **A new version** that changes what the analyzer is told about an industry changes its clients' fingerprints; `poni-tools seed` prints them.
+- **The engine reads** the industry profile with the common flags (every analysis), the corpus (go-live), prices, the defaults (written for a newly discovered location) and the industry list. It writes and caches none.
+- **Copies:** a location's settings are its own row (D-093), written from the defaults when the location is discovered and never read from the tables again; a new field reaches rows by a migration. The industry key (`locations.industry_key`) is the one reference, without a foreign key; a location whose industry is gone is not analyzed (D-084, D-102).
+- **A new version** that changes what the analyzer is told about an industry changes its locations' fingerprints; `poni-tools seed` prints the enabled ones.
 - **Tests** copy (`CREATE DATABASE ... TEMPLATE`) a database `poni-tools test-db` migrated and seeded once per run.
 
 ## 10. Reply safety and AI testing
@@ -189,11 +189,11 @@ Strangers write the reviews, so every review is hostile input (D-021). Layered d
 | Check unit tests | Each check, fixed inputs | Every build |
 | Adversarial corpus, offline | Known attacks (English, Chinese, mixed, hidden in spacing or emoji, role-play, fake "system" text) against scripted models: a raised flag is acted on, and a reply with a link, address or number is stopped even when both models were fooled | Every build |
 | Adversarial corpus, live | The same against the real model with the seeded configuration; nothing may reach auto-post | By hand, before a release that changes prompts or checks |
-| Go-live test (D-074) | The industry's corpus and the client's recent 4 and 5 star reviews, three runs each, with the client's configuration; an AI judge rates the replies | Started by a person per client |
+| Go-live test (D-074) | The industry's corpus and the location's recent 4 and 5 star reviews, three runs each, with the location's configuration; an AI judge rates the replies | Started by a person per location |
 
 The decisions are plain functions in `domain/review_pipeline.hpp`, called by the job and the offline suite; each case runs as its pack's made-up business.
 
-**Go-live gate** (D-074 to D-077; the rule in CLAUDE.md): `domain/go_live.hpp` computes the fingerprint; `repo::go_live_gate` is a condition of `auto_verdict`; `jobs/go_live.cpp` runs one case per job through the pipeline's functions and asks the judge (by default Anthropic's API). A run writes no draft or post and sends nothing to Google; the client's reviews reach the judge's provider without name or photo (D-075). `ReplySettingsGolden` (`tests/ai/fixtures/reply_settings_golden.json`) fails when a code change alters a prompt for fixed settings.
+**Go-live gate** (D-074 to D-077; the rule in CLAUDE.md): `domain/go_live.hpp` computes the fingerprint; `repo::go_live_gate` is a condition of `auto_verdict`; `jobs/go_live.cpp` runs one case per job through the pipeline's functions and asks the judge (by default Anthropic's API). A run writes no draft or post and sends nothing to Google; the location's reviews reach the judge's provider without name or photo (D-075). `ReplySettingsGolden` (`tests/ai/fixtures/reply_settings_golden.json`) fails when a code change alters a prompt for fixed settings.
 
 ## 11. Localization
 
@@ -203,7 +203,7 @@ The decisions are plain functions in `domain/review_pipeline.hpp`, called by the
 
 ## 12. Requirements
 
-PONI runs Google Business Profiles (GBP) for its clients. The system automates review replies, client reports and local posts for every client location, through the GBP and LLM APIs directly, with no paid review platform.
+PONI runs Google Business Profiles (GBP) for its clients. The system automates review replies, location reports and local posts for every client location, through the GBP and LLM APIs directly, with no paid review platform.
 
 ### 12.1 Users and access
 
@@ -221,19 +221,19 @@ PONI runs Google Business Profiles (GBP) for its clients. The system automates r
 
 ### 12.3 Functional requirements
 
-- **FR-1 Clients and locations.** A client (brand) owns one or more locations, discovered through the GBP API and linked by staff. Noticing invitations or lost access is not built; lost access shows as an error on the status page.
+- **FR-1 Clients and locations.** Locations are discovered through the GBP API and are the unit of work (D-102): each is switched on by a person, with its own industry, analysis start day and audience, and does nothing until then. A client (brand) only groups locations, for display; a person may delete one, which unlinks its locations and changes nothing else (`repo::delete_client`). Noticing invitations or lost access is not built; lost access shows as an error on the status page.
 - **FR-2 Review ingestion.** Polling is the main path, Pub/Sub a second source, an hourly full reconciliation the safety net (D-037, D-091 point 1). The whole review is stored; a reply posted outside the system is detected.
 - **FR-3 Review analysis.** Sentiment, topics, items (dishes, treatments, staff), language and script, severity flags, suspected manipulation. Topics, item types and industry flags come from the industry profile; every industry also has discrimination or harassment, staff misconduct, legal or regulatory threat, threats of violence. Flags and manipulation are the model's alone (D-058).
-- **FR-4 Reply generation.** Each linked location has its own complete voice and localization (D-093), started from the knowledge base's defaults or templates. A reply is in the review's language as localization shapes it (section 11). Every draft records model, prompt version and inputs.
+- **FR-4 Reply generation.** Each location has its own complete voice and localization (D-093), started from the knowledge base's defaults or templates. A reply is in the review's language as localization shapes it (section 11). Every draft records model, prompt version and inputs.
 - **FR-5 Tiered reply policy.** Per location: 4 and 5 stars without a complaint may auto-post (no text: a short, varied thank-you); a complaint, three stars or fewer, a severity flag, suspected manipulation, a failed check, an edited review and a draft a person edited go to the approval queue. Auto-posts wait an optional random delay inside an optional posting window in local time (for example 09:00 to 21:00); the review is read again just before posting. In the queue a person edits, regenerates with instructions, approves, rejects, or sets the review aside (D-068).
 - **FR-6 Escalation.** A severity flag on an unreplied review raises an immediate alert and an escalation (`open` or `closed`, one assignee; D-065), a row in `cases`.
-- **FR-7 Notifications.** Channels behind one interface (D-097): email through Gmail, and push to the phone app through Apple's push service, for escalations and system problems (D-097). Rules map event type × client to recipients. Events: `escalation`, `approval_needed`, `system_problem` (lost access, token failure, failing jobs, a post rejected or a send failed), `client_report`. Every delivery is logged and retried.
-- **FR-8 Reports.** One kind, the client report per client and period, per location (D-085): reviews, ratings and their change, response rate and time, sentiment, topics and items, highlights, escalations, employee recognition (D-086), Performance API visibility and search keywords, and a model-written summary. Built once; schedules daily, weekly or monthly; PDF is the browser's print (D-035).
+- **FR-7 Notifications.** Channels behind one interface (D-097): email through Gmail, and push to the phone app through Apple's push service, for escalations and system problems (D-097). Rules map event type × location (or every location) to recipients. Events: `escalation`, `approval_needed`, `system_problem` (lost access, token failure, failing jobs, a post rejected or a send failed), `location_report`. Every delivery is logged and retried.
+- **FR-8 Reports.** One kind, a location's report per period (D-085, D-102): reviews, ratings and their change, response rate and time, sentiment, topics and items, highlights, escalations, employee recognition (D-086), Performance API visibility and search keywords, and a model-written summary. Built once; schedules daily, weekly or monthly; PDF is the browser's print (D-035).
 - **FR-9 Profile accuracy.** Not built: compare a profile with a reference record and alert, never edit.
 - **FR-10 Dashboard.** Its own repository (section 1): reviews, approval queue, escalations, clients and locations, reply settings, posts, knowledge base (read-only), notification rules, reports, audit log, status.
 - **FR-11 Users and audit.** Google sign-in and sign-out; the audit log is append-only, viewable and filterable.
 - **FR-12 Cases.** After the MVP: following a negative review from first alert to final public response; today's escalation is its simplest form (D-054).
-- **FR-13 Knowledge base (D-078).** What is the same for every client and nobody changes while the system runs is files reviewed like code, checked and seeded by `poni-tools` into static, versioned tables. An industry is supported only with a complete pack; settings start as copies (section 9).
+- **FR-13 Knowledge base (D-078).** What is the same for every client and nobody changes while the system runs is files reviewed like code, checked and seeded by `poni-tools` into static, versioned tables. An industry is supported only with a complete pack; a location's settings start as a copy of the defaults (section 9).
 - **FR-14 Local posts (D-088, D-099).** Updates, offers and events with Google's fields and up to ten photos and videos (D-101). A person approves the exact content; Google schedules and repeats. Every post of a location is shown with its state at Google, including posts made there; staff may remove any, and correct one in place by an edit a person approves (D-099). The model helps only when asked. Not included: client approval, figures per post, product posts.
 
 ### 12.4 Non-functional requirements

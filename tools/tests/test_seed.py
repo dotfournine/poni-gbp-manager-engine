@@ -181,26 +181,21 @@ def test_changed_content_under_the_same_version_is_refused(migrated, kb):
 # ---- whom a new version changes (D-084): the seed says it, the engine watches nothing ----
 
 
-def client(conn, name, industry, locations=(), archived=False):
-    id_ = conn.execute(
-        "INSERT INTO clients (name, industry_key, archived, created_at, updated_at) VALUES (%s, %s, %s, now(), now()) "
-        "RETURNING id",
-        (name, industry, archived),
-    ).fetchone()[0]
-    for title in locations:
-        conn.execute(
-            "INSERT INTO locations (gbp_location_id, gbp_account_id, client_id, title, raw, first_seen_at, last_seen_at, "
-            "updated_at) VALUES (%s, 'a1', %s, %s, '{}', now(), now(), now())",
-            (f"loc-{id_}-{title}", id_, title),
-        )
+def location(conn, title, industry, enabled=True):
+    conn.execute(
+        "INSERT INTO locations (gbp_location_id, gbp_account_id, title, industry_key, enabled, raw, first_seen_at, "
+        "last_seen_at, updated_at) VALUES (%s, 'a1', %s, %s, %s, '{}', now(), now(), now())",
+        (f"loc-{title}", title, industry, enabled),
+    )
 
 
-def test_a_version_that_changes_what_the_analyzer_is_told_names_the_clients_to_test_again(migrated, kb, capsys):
+def test_a_version_that_changes_what_the_analyzer_is_told_names_the_locations_to_test_again(migrated, kb, capsys):
     seed.seed(migrated, knowledge.load(kb.root), T1)
-    client(migrated, "Willow Spa", "wellness", ["Willow - Midtown", "Willow - Chelsea"])
-    client(migrated, "Closed Spa", "wellness", archived=True)
-    client(migrated, "Harbor Buffet", "food_beverage", ["Harbor"])
-    client(migrated, "No Industry Yet", None)
+    location(migrated, "Willow - Midtown", "wellness")
+    location(migrated, "Willow - Chelsea", "wellness")
+    location(migrated, "Switched Off", "wellness", enabled=False)
+    location(migrated, "Harbor", "food_beverage")
+    location(migrated, "No Industry Yet", None)
 
     # Prices, a template, new corpus cases and a topic's label: nothing the analyzer is told.
     kb.set_version("20270101")
@@ -219,16 +214,17 @@ def test_a_version_that_changes_what_the_analyzer_is_told_names_the_clients_to_t
     kb.set_version("20270102")
     kb.edit("industries/wellness/profile.json", lambda p: p["severity_flags"][0].update(description="Reworded."))
     changed = seed.seed(migrated, knowledge.load(kb.root), T2)
-    assert [(c.name, c.industry, c.locations) for c in changed.retest] == [
-        ("Willow Spa", "wellness", ["Willow - Chelsea", "Willow - Midtown"])
+    assert [(x.title, x.industry) for x in changed.retest] == [
+        ("Willow - Chelsea", "wellness"),
+        ("Willow - Midtown", "wellness"),
     ]
     assert changed.stranded == []
 
-    # A flag every industry shares: every industry's clients.
+    # A flag every industry shares: every industry's locations.
     kb.set_version("20270103")
     kb.edit("common/profile.json", lambda p: p["severity_flags"][0].update(description="Reworded."))
     everyone = seed.seed(migrated, knowledge.load(kb.root), T2)
-    assert [c.name for c in everyone.retest] == ["Harbor Buffet", "Willow Spa"]
+    assert [x.title for x in everyone.retest] == ["Harbor", "Willow - Chelsea", "Willow - Midtown"]
 
 
 def test_the_command_prints_whom_a_version_changes(db_url, db, kb, tmp_path, monkeypatch, capsys):
@@ -238,8 +234,8 @@ def test_the_command_prints_whom_a_version_changes(db_url, db, kb, tmp_path, mon
     monkeypatch.setenv("HOME", str(tmp_path))
     assert cli.main(["migrate"]) == 0
     assert cli.main(["seed"]) == 0
-    client(db, "Willow Spa", "wellness", ["Willow - Midtown"])
-    client(db, "Harbor Buffet", "food_beverage", ["Harbor"])
+    location(db, "Willow - Midtown", "wellness")
+    location(db, "Harbor", "food_beverage")
     capsys.readouterr()
 
     kb.set_version("20270101")
@@ -249,12 +245,12 @@ def test_the_command_prints_whom_a_version_changes(db_url, db, kb, tmp_path, mon
     (kb.root / "industries/wellness").rmdir()
     assert cli.main(["seed"]) == 0
     out = capsys.readouterr().out
-    assert "none of their locations auto-posts until a new go-live test has passed" in out
-    assert "  - Harbor Buffet (food_beverage): Harbor" in out
-    assert "no longer has the industry of these clients" in out
-    assert "  - Willow Spa (wellness): Willow - Midtown" in out
+    assert "none of them auto-posts until a new go-live test has passed" in out
+    assert "  - Harbor (food_beverage)" in out
+    assert "no longer has the industry of these locations" in out
+    assert "  - Willow - Midtown (wellness)" in out
 
     kb.set_version("20270102")
     kb.edit("models.json", lambda m: m["prices"].update({"new-model": {"input_per_mtok": 1, "output_per_mtok": 2}}))
     assert cli.main(["seed"]) == 0
-    assert "No client needs a new go-live test because of it." in capsys.readouterr().out
+    assert "No location needs a new go-live test because of it." in capsys.readouterr().out
