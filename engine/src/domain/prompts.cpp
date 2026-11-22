@@ -1,6 +1,6 @@
 // The analyzer's, the writer's and the judge's prompts: what a go-live
 // fingerprint (D-074) and prompt_version() hash. A change here changes every
-// client's fingerprint. The prompts that are in no fingerprint, the summary
+// location's fingerprint. The prompts that are in no fingerprint, the summary
 // of a report and the help with posts, are in report_post_prompts.cpp.
 #include "domain/prompts.hpp"
 

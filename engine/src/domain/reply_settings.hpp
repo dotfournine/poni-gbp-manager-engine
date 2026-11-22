@@ -44,7 +44,7 @@ struct LengthLimits {
 BOOST_DESCRIBE_STRUCT(LengthLimits, (), (rating_only, positive, complaint, severity))
 
 struct Voice {
-    // How replies refer to the business. Empty: the client's name.
+    // How replies refer to the business. Empty: the location's title (D-102).
     std::string reply_name;
     // The only facts about the business the generator may rely on.
     std::vector<std::string> business_facts;

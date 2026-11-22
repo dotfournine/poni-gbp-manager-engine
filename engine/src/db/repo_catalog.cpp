@@ -190,7 +190,8 @@ std::optional<model::Location> get_location(pqxx::transaction_base& tx, std::int
 Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const LocationPatch& patch) {
     const auto rows = tx.exec(
         "SELECT l.client_id, c.name, l.review_poll_interval_s, l.posting_enabled, l.enabled, l.access_status, l.industry_key, "
-        "to_char(l.analyze_from, 'YYYY-MM-DD'), l.audience FROM locations l LEFT JOIN clients c ON c.id = l.client_id "
+        "to_char(l.analyze_from, 'YYYY-MM-DD'), l.audience, l.auto_post_enabled, l.auto_post_five_star, l.auto_post_four_star "
+        "FROM locations l LEFT JOIN clients c ON c.id = l.client_id "
         "WHERE l.id = $1 FOR UPDATE OF l",
         pqxx::params{id});
     if (rows.empty()) return not_found("location");
@@ -203,6 +204,7 @@ Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Write
     const auto old_industry = rows[0][6].as<OptString>();
     const auto old_from = rows[0][7].as<OptString>();
     const auto old_audience = rows[0][8].as<std::string>();
+    const auto old_auto_post = rows[0][9].as<bool>(), old_five_star = rows[0][10].as<bool>(), old_four_star = rows[0][11].as<bool>();
     const auto now = to_timestamptz(audit.now());
 
     // Check everything before writing anything: a refused request changes nothing.
@@ -216,7 +218,9 @@ Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Write
     const auto from = patch.analyze_from.over(old_from);
     if (!is_day_or_none(from)) return invalid(std::string(kBadAnalyzeFrom));
     const auto audience = patch.audience ? trimmed(*patch.audience) : old_audience;
-    if (text::length(audience) > kMaxAudienceLength) return invalid("\"audience\" may be up to 500 characters.");
+    if (text::length(audience) > kMaxAudienceLength) {
+        return invalid(std::format("\"audience\" may be up to {} characters.", kMaxAudienceLength));
+    }
     const auto& client_id = patch.client_id.value();
     const bool new_client = patch.client_id.given() && client_id != old_client;
     OptString new_client_name;
@@ -265,18 +269,15 @@ Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Write
         audit.record("location.enable", "location", id, {.before = {{"enabled", false}}, .after = {{"enabled", true}}});
     } else if (new_enabled) {
         // Auto-posting goes with it, and a person switches it on again (D-070).
-        const auto auto_post = tx.exec("SELECT auto_post_enabled, auto_post_five_star, auto_post_four_star FROM locations WHERE id = $1",
-                                       pqxx::params{id})
-                                   .one_row();
         tx.exec("UPDATE locations SET enabled = false, auto_post_enabled = false, auto_post_five_star = false, "
                 "auto_post_four_star = false, updated_at = $2::timestamptz WHERE id = $1",
                 pqxx::params{id, now})
             .no_rows();
         audit.record("location.disable", "location", id,
                      {.before = {{"enabled", true},
-                                 {"auto_post_enabled", auto_post[0].as<bool>()},
-                                 {"auto_post_five_star", auto_post[1].as<bool>()},
-                                 {"auto_post_four_star", auto_post[2].as<bool>()}},
+                                 {"auto_post_enabled", old_auto_post},
+                                 {"auto_post_five_star", old_five_star},
+                                 {"auto_post_four_star", old_four_star}},
                       .after = {{"enabled", false}, {"auto_post_enabled", false}, {"auto_post_five_star", false}, {"auto_post_four_star", false}}});
     }
 

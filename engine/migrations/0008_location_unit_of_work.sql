@@ -20,6 +20,9 @@ UPDATE locations l
    SET industry_key = c.industry_key, analyze_from = c.analyze_from, audience = c.audience, enabled = NOT c.archived
   FROM clients c
  WHERE c.id = l.client_id;
+-- A location left off keeps no auto-posting (D-070): switched on later, it
+-- would auto-post again without anyone switching auto-posting on.
+UPDATE locations SET auto_post_enabled = false, auto_post_five_star = false, auto_post_four_star = false WHERE NOT enabled;
 
 -- Every location has its reply settings, enabled or not (D-093, D-102 point
 -- 4): one that has none, because it was never linked, gets the knowledge
