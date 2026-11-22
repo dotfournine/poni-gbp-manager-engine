@@ -139,7 +139,7 @@ Migrations in `engine/migrations/`, applied by `poni-tools migrate`, from `0001_
 | Reviews | `reviews` (rating, original and translated text, language, script, reviewer, current reply), `review_events`, `review_analyses` |
 | Replies | `reply_drafts` (draft, scheduled, approved, posting, posted, published, rejected, cancelled, superseded; model text beside a person's edit), `reply_posts` (one per PUT, at most one open per review) |
 | Local posts | `local_posts` (draft, approved, sending, sent, unknown, failed, rejected, removed, beside Google's state), `local_post_media`, `local_post_edits` (the open edit of a post at Google: draft, approved, sending) |
-| Other | `cases`, `go_live_runs`, `go_live_cases`, `notification_rules`, `notification_deliveries`, `reports`, `report_share_links`, `report_schedules` |
+| Other | `cases`, `go_live_runs` (one location's test), `go_live_cases`, `notification_rules`, `notification_deliveries`, `reports` and `report_schedules` (each names a location), `report_share_links` |
 | Knowledge base | `kb_meta`, `kb_industries`, `kb_common`, `kb_corpus_cases`, `kb_defaults`, `kb_voice_templates`, `kb_model_prices` (written only by `poni-tools seed`) |
 | Operations | `jobs`, `credentials` (encrypted, D-043), `integration_status`, `llm_calls`, `system_settings` (posting and email switches, the Google the database belongs to) |
 
