@@ -87,7 +87,6 @@ inline constexpr std::array<std::string_view, 6> kLocalPostGoogleStateFilter{"pr
                                                                              "recurring",  "rejected",  kNoGoogleState};
 
 struct LocalPostFilter {
-    std::optional<std::int64_t> client_id;
     std::optional<std::int64_t> location_id;
     // Any of these; empty: any. google_states may hold kNoGoogleState.
     std::vector<std::string> statuses;
@@ -105,7 +104,7 @@ std::optional<model::LocalPost> get_local_post(pqxx::transaction_base& tx, std::
 
 // ---- drafts and their approval (D-088 points 3 and 10) -----------------------------------
 
-// A new draft for the location, which must be linked to an active client.
+// A new draft for the location, which must be switched on and accessible.
 // The content is normalized (domain::normalize_local_post) and its checks
 // are stored with it; a draft with a failed check is stored all the same.
 Result<model::LocalPost> create_local_post(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
@@ -355,8 +354,8 @@ model::LocalPostMedia create_local_post_media(pqxx::transaction_base& tx, audit:
 // ---- removal (D-088 point 7) ----------------------------------------------------------------
 
 // A signed-in person asks for a post to be deleted at Google: any post that
-// Google has, of a linked location, also one made in Google's own
-// interface. The only function that enqueues local_posts.remove. It works
+// Google has, of an accessible location, also while it is switched off
+// (D-102), also one made in Google's own interface. The only function that enqueues local_posts.remove. It works
 // while posting is switched off: deleting is the only way to stop a
 // scheduled post or to take one down. The audit entry keeps a copy of the
 // post's content and of what it showed. Asking again while a removal is
@@ -372,7 +371,7 @@ Result<model::LocalPost> request_local_post_removal(pqxx::transaction_base& tx, 
 // Google and the post's id from its name. Otherwise why nothing is deleted,
 // for the log: no person asked, the post is removed already, or the request
 // can't be carried out and was given back with the reason. A post whose name
-// does not belong to its location, or whose location is no longer linked, is
+// does not belong to its location, or whose location is no longer accessible, is
 // not deleted. Nor is one whose request is older than `removal_valid_for`: a
 // job that ran late deletes nothing. An answer without a name may have
 // written (the request given back, its audit entry, the notification): the

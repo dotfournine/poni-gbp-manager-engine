@@ -28,10 +28,6 @@ constexpr std::string_view kPartsAsJson = "jsonb_build_object('voice', voice, 'l
 
 constexpr std::string_view kNoRow = "the location has no reply settings";
 
-Result<model::ReplySettings> not_linked() {
-    return conflict("location_not_linked", "The location is not linked to a client, so it has no reply settings.");
-}
-
 }  // namespace
 
 // ---- reply settings ------------------------------------------------------------
@@ -51,16 +47,14 @@ Result<model::ReplySettings> reply_settings(pqxx::transaction_base& tx, std::int
     // Whose settings they are; the three parts are read and checked by the one reader.
     auto answer = db::row_as<model::ReplySettings>(
         tx,
-        std::format("SELECT l.id AS location_id, l.title AS location_title, l.client_id, c.name AS client_name, c.industry_key, "
-                    "{} AS updated_at FROM locations l JOIN clients c ON c.id = l.client_id "
+        std::format("SELECT l.id AS location_id, l.title AS location_title, l.client_id, c.name AS client_name, l.industry_key, "
+                    "{} AS updated_at FROM locations l LEFT JOIN clients c ON c.id = l.client_id "
                     "JOIN reply_settings r ON r.location_id = l.id WHERE l.id = $1",
                     iso("r.updated_at")),
         pqxx::params{location_id}, db::FilledLater{"voice", "localization", "policy"});
     if (!answer) {
-        // No such location, a location without a client, or a linked one without a row.
-        const auto location = tx.exec("SELECT client_id FROM locations WHERE id = $1", pqxx::params{location_id});
-        if (location.empty()) return not_found("location");
-        if (location[0][0].is_null()) return not_linked();
+        // No such location, or one without a row.
+        if (tx.exec("SELECT 1 FROM locations WHERE id = $1", pqxx::params{location_id}).empty()) return not_found("location");
         return conflict("reply_settings_incomplete", unreadable_reply_settings(kNoRow));
     }
     auto settings = stored_reply_settings(tx, location_id);
@@ -73,9 +67,7 @@ Result<model::ReplySettings> reply_settings(pqxx::transaction_base& tx, std::int
 
 Result<model::ReplySettings> replace_reply_settings(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
                                                     const domain::ResolvedSettings& settings) {
-    const auto location = tx.exec("SELECT client_id FROM locations WHERE id = $1 FOR UPDATE", pqxx::params{location_id});
-    if (location.empty()) return not_found("location");
-    if (location[0][0].is_null()) return not_linked();
+    if (tx.exec("SELECT 1 FROM locations WHERE id = $1 FOR UPDATE", pqxx::params{location_id}).empty()) return not_found("location");
     if (auto problem = domain::check_settings(settings)) return invalid(std::move(*problem));
 
     const auto after = boost::json::value_from(settings);
@@ -104,33 +96,12 @@ Result<model::ReplySettings> replace_reply_settings(pqxx::transaction_base& tx, 
     return reply_settings(tx, location_id);
 }
 
-boost::json::value copy_reply_settings_on_link(pqxx::transaction_base& tx, std::int64_t location_id, std::int64_t client_id,
-                                               core::TimePoint now) {
-    const auto when = to_timestamptz(now);
-    const auto source = tx.exec("SELECT r.location_id FROM reply_settings r JOIN locations l ON l.id = r.location_id "
-                                "WHERE l.client_id = $2 AND l.id <> $1 ORDER BY r.created_at, r.location_id LIMIT 1",
-                                pqxx::params{location_id, client_id});
-    if (!source.empty()) {
-        const auto from = source[0][0].as<std::int64_t>();
-        tx.exec("INSERT INTO reply_settings (location_id, voice, localization, policy, created_at, updated_at) "
-                "SELECT $1, voice, localization, policy, $3::timestamptz, $3::timestamptz FROM reply_settings WHERE location_id = $2",
-                pqxx::params{location_id, from, when})
-            .no_rows();
-        return boost::json::object{{"location_id", from}};
-    }
-    // The client's first location: the knowledge base's defaults, which the engine does not start without.
-    const auto copied = tx.exec("INSERT INTO reply_settings (location_id, voice, localization, policy, created_at, updated_at) "
-                                "SELECT $1, voice, localization, policy, $2::timestamptz, $2::timestamptz FROM kb_defaults",
-                                pqxx::params{location_id, when});
-    // Never a link without settings that says it has them.
-    if (copied.affected_rows() != 1) throw std::runtime_error("no knowledge base is seeded: there are no default reply settings to copy");
-    return "defaults";
-}
-
-boost::json::value remove_reply_settings(pqxx::transaction_base& tx, std::int64_t location_id) {
-    const auto removed =
-        tx.exec(std::format("DELETE FROM reply_settings WHERE location_id = $1 RETURNING {}", kPartsAsJson), pqxx::params{location_id});
-    return removed.empty() ? boost::json::value(nullptr) : json_column(removed[0][0]);
+void write_default_reply_settings(pqxx::transaction_base& tx, std::int64_t location_id, core::TimePoint now) {
+    const auto written = tx.exec("INSERT INTO reply_settings (location_id, voice, localization, policy, created_at, updated_at) "
+                                 "SELECT $1, voice, localization, policy, $2::timestamptz, $2::timestamptz FROM kb_defaults",
+                                 pqxx::params{location_id, to_timestamptz(now)});
+    // Never a location without settings.
+    if (written.affected_rows() != 1) throw std::runtime_error("no knowledge base is seeded: there are no default reply settings to copy");
 }
 
 // ---- pipeline settings ---------------------------------------------------------

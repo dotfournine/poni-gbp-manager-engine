@@ -33,7 +33,6 @@ asio::awaitable<NetClient::Attempt> NetClient::attempt(const ChatRequest& reques
                            .task = request.task,
                            .provider = request.provider,
                            .model = request.model,
-                           .client_id = request.client_id,
                            .location_id = request.location_id,
                            .review_id = request.review_id,
                            .go_live_run_id = request.go_live_run_id,

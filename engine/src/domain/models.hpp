@@ -62,26 +62,15 @@ struct Client {
     std::int64_t id = 0;
     std::string name;
     std::string notes;
-    // Who the customers are, in a line written by staff. The model reads it when a person
-    // asks it for ideas and texts for local posts (D-088).
-    std::string audience;
+    // A group of locations for bookkeeping only (D-102): archiving changes nothing about them.
     bool archived = false;
-    // The industry whose profile the client's reviews are analyzed with; none, or one the
-    // knowledge base does not have (Knowledge.industries): not analyzed.
-    std::optional<std::string> industry_key;
-    // "YYYY-MM-DD" (UTC): only reviews written on or after this day are analyzed
-    // and drafted (D-055); none: every review.
-    std::optional<std::string> analyze_from;
     std::int64_t location_count = 0;
-    // How many different reply settings its linked locations have (D-093):
-    // 0 without one, 1 when they are all equal.
-    std::int64_t reply_settings_variants = 0;
+    // The locations linked to it, in id order.
+    std::vector<std::int64_t> location_ids;
     std::string created_at;
     std::string updated_at;
 };
-BOOST_DESCRIBE_STRUCT(Client, (),
-                      (id, name, notes, audience, archived, industry_key, analyze_from, location_count, reply_settings_variants,
-                       created_at, updated_at))
+BOOST_DESCRIBE_STRUCT(Client, (), (id, name, notes, archived, location_count, location_ids, created_at, updated_at))
 
 using ClientList = Paged<Client>;
 
@@ -89,8 +78,20 @@ struct Location {
     std::int64_t id = 0;
     std::string gbp_location_id;
     std::string gbp_account_id;
+    // The client it is grouped under: bookkeeping only (D-102).
     std::optional<std::int64_t> client_id;
     std::optional<std::string> client_name;
+    // Whether the engine works on the location (D-102); off at discovery, switched by a person only.
+    bool enabled = false;
+    // The industry whose profile its reviews are analyzed with; none, or one the
+    // knowledge base does not have (Knowledge.industries): not analyzed.
+    std::optional<std::string> industry_key;
+    // "YYYY-MM-DD" (UTC): only reviews written on or after this day are analyzed
+    // and drafted on their own; none: every review.
+    std::optional<std::string> analyze_from;
+    // Who the customers are, in a line written by staff. The model reads it when a person
+    // asks it for ideas and texts for local posts (D-088).
+    std::string audience;
     std::string title;
     std::optional<std::string> store_code;
     std::optional<std::string> primary_category;
@@ -124,7 +125,8 @@ struct Location {
     std::optional<std::string> time_zone;
 };
 BOOST_DESCRIBE_STRUCT(Location, (),
-                      (id, gbp_location_id, gbp_account_id, client_id, client_name, title, store_code, primary_category,
+                      (id, gbp_location_id, gbp_account_id, client_id, client_name, enabled, industry_key, analyze_from, audience,
+                       title, store_code, primary_category,
                        address, locality, administrative_area, postal_code, region_code, phone, website_uri, maps_uri,
                        access_status, access_lost_at, first_seen_at, last_seen_at, review_poll_interval_s,
                        posting_enabled, review_count,
@@ -342,7 +344,7 @@ struct LocationSyncStatus {
     std::string title;
     std::optional<std::string> client_name;
     std::string access_status;
-    // Linked to an active client and accessible, so its reviews are being synced.
+    // Enabled and accessible, so its reviews are being synced.
     bool syncing = false;
     std::int64_t review_count = 0;
     std::optional<std::string> reviews_polled_at;
@@ -386,7 +388,7 @@ struct AiStatus {
     std::optional<std::string> last_ok_at;
     std::optional<std::string> last_error;
     std::optional<std::string> last_error_at;
-    // Reviews of analyzed clients that still lack an analysis, or a draft when they have no reply.
+    // Reviews of analyzed locations that still lack an analysis, or a draft when they have no reply.
     std::int64_t waiting_reviews = 0;
     std::int64_t analyzed_reviews = 0;
 };
@@ -456,9 +458,9 @@ BOOST_DESCRIBE_STRUCT(SystemStatus, (),
 struct ReplySettings {
     std::int64_t location_id = 0;
     std::string location_title;
-    // Only a location that is linked to a client has settings.
-    std::int64_t client_id = 0;
-    std::string client_name;
+    // The client the location is grouped under, for display only.
+    std::optional<std::int64_t> client_id;
+    std::optional<std::string> client_name;
     std::optional<std::string> industry_key;
     domain::Voice voice;
     domain::Localization localization;
@@ -497,11 +499,11 @@ struct KnowledgeIndustry {
     // The made-up business the test suites run as.
     std::string test_client_name;
     KnowledgeCorpusSummary corpus;
-    // Clients that name this industry, archived ones left out.
-    std::int64_t client_count = 0;
+    // Enabled locations that name this industry.
+    std::int64_t location_count = 0;
 };
 BOOST_DESCRIBE_STRUCT(KnowledgeIndustry, (),
-                      (key, label, topics, item_types, severity_flags, test_client_name, corpus, client_count))
+                      (key, label, topics, item_types, severity_flags, test_client_name, corpus, location_count))
 
 struct KnowledgeVoiceTemplate {
     std::string key;
@@ -598,7 +600,7 @@ BOOST_DESCRIBE_STRUCT(AiSettings, (),
 // ---- LLM usage -------------------------------------------------------------------
 
 struct LlmUsageRow {
-    // The day ("2026-11-11"), the model, the task, or the client's or location's id, by grouping.
+    // The day ("2026-11-11"), the model, the task, the provider or the location's id, by grouping.
     std::string key;
     std::string label;
     std::int64_t calls = 0;
@@ -622,11 +624,10 @@ struct LlmUsage {
     std::vector<LlmUsageRow> by_day;
     std::vector<LlmUsageRow> by_model;
     std::vector<LlmUsageRow> by_task;
-    std::vector<LlmUsageRow> by_client;
     std::vector<LlmUsageRow> by_location;
     std::vector<LlmUsageRow> by_provider;
 };
-BOOST_DESCRIBE_STRUCT(LlmUsage, (), (from, to, total, by_day, by_model, by_task, by_client, by_location, by_provider))
+BOOST_DESCRIBE_STRUCT(LlmUsage, (), (from, to, total, by_day, by_model, by_task, by_location, by_provider))
 
 struct LlmCall {
     std::int64_t id = 0;
@@ -635,8 +636,6 @@ struct LlmCall {
     // Null for calls made before providers were named.
     std::optional<std::string> provider;
     std::string model;
-    std::optional<std::int64_t> client_id;
-    std::optional<std::string> client_name;
     std::optional<std::int64_t> location_id;
     std::optional<std::int64_t> review_id;
     std::int64_t attempt = 0;
@@ -649,7 +648,7 @@ struct LlmCall {
     std::optional<double> estimated_cost_usd;
 };
 BOOST_DESCRIBE_STRUCT(LlmCall, (),
-                      (id, occurred_at, task, provider, model, client_id, client_name, location_id, review_id, attempt, status, error,
+                      (id, occurred_at, task, provider, model, location_id, review_id, attempt, status, error,
                        http_status, prompt_tokens, completion_tokens, latency_ms, estimated_cost_usd))
 
 using LlmCallList = Paged<LlmCall>;
@@ -1063,7 +1062,7 @@ struct LocalPost {
     std::int64_t id = 0;
     std::int64_t location_id = 0;
     std::string location_title;
-    std::optional<std::int64_t> client_id;  // nothing: the location is no longer linked
+    std::optional<std::int64_t> client_id;  // for display only; nothing: the location has no client
     std::optional<std::string> client_name;
     std::string origin;  // "system" or "google"
     // Ours: "draft", "approved", "sending", "sent", "unknown", "failed", "rejected" or "removed".

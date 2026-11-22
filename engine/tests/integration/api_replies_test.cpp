@@ -698,16 +698,16 @@ TEST_F(RepliesApi, APersonResumesAPausedLocationAndAPauseOnEverything) {
 
 // A location that lost its client lost its reply settings with it (D-093): a draft that waited there can't be
 // checked against a voice any more, and is refused for what is the matter, not for unreadable settings.
-TEST_F(RepliesApi, ADraftOfALocationThatLostItsClientCanNeitherBeEditedNorApproved) {
+// The location keeps its settings while it is switched off (D-102), so a draft can still be edited; it can't be approved.
+TEST_F(RepliesApi, ADraftOfALocationThatIsSwitchedOffCannotBeApproved) {
     posting(true);
     const auto draft_id = draft_for("r1");
-    const auto target = "/api/drafts/" + std::to_string(draft_id);
-    ASSERT_EQ(patch("/api/locations/" + std::to_string(spa_), R"({"client_id": null})").status, 200u);
-    for (const auto& refused : {patch(target, body_of("text", "Thanks!")), approve(draft_id)}) {
-        EXPECT_EQ(refused.status, 409u);
-        EXPECT_EQ(error_code(refused), "review_not_postable");
-        EXPECT_THAT(error_message(refused), HasSubstr("no longer synced"));
-    }
+    ASSERT_EQ(patch("/api/locations/" + std::to_string(spa_), R"({"enabled": false})").status, 200u);
+    const auto refused = approve(draft_id);
+    EXPECT_EQ(refused.status, 409u);
+    EXPECT_EQ(error_code(refused), "review_not_postable");
+    EXPECT_THAT(error_message(refused), HasSubstr("no longer synced"));
+    EXPECT_EQ(count("jobs WHERE kind = 'replies.post'"), 0);
     EXPECT_TRUE(gbp_.puts.empty());
 }
 

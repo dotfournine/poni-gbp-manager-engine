@@ -240,6 +240,23 @@ TEST_F(Posting, ALocationsOwnSwitchStopsThatLocationOnly) {
     EXPECT_EQ(draft(spa_draft, "status"), "draft");
 }
 
+// D-102 point 2: the location's own switch is read at the claim as the posting switches are.
+TEST_F(Posting, ALocationSwitchedOffAfterTheApprovalIsNotPostedTo) {
+    const auto draft_id = waiting_draft();
+    ASSERT_TRUE(approve(draft_id));
+    switch_location(spa_, false);
+    run_jobs();
+    EXPECT_TRUE(gbp_.puts.empty());
+    EXPECT_EQ(draft(draft_id, "status"), "draft") << "back in the queue: it does not go out later on its own";
+    EXPECT_THAT(draft(draft_id, "status_reason"), HasSubstr("no longer synced"));
+    EXPECT_EQ(count("reply_posts"), 0);
+
+    switch_location(spa_, true);
+    clock_.advance(1h);
+    run_jobs();
+    EXPECT_TRUE(gbp_.puts.empty()) << "switching back on posts nothing; a person approves again";
+}
+
 // ---- the review is read again before posting ------------------------------------------
 
 TEST_F(Posting, AReviewThatVanishedIsNotRepliedTo) {

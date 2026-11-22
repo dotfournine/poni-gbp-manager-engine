@@ -216,8 +216,8 @@ TEST_F(LocalPostsSync, AListThatCannotBeReadChangesNothingAndIsShown) {
     EXPECT_EQ(error(), "") << "a read that worked clears the error";
     EXPECT_EQ(error_at(), "") << "and the time of the failure";
 
-    // A location that is no longer linked is not read at all.
-    exec(std::format("UPDATE locations SET client_id = NULL WHERE id = {}", buffet_));
+    // A location that is switched off is not read at all.
+    switch_location(buffet_, false);
     const auto lists = google_.list_calls;
     EXPECT_EQ(sync(buffet_).listed, 0);
     EXPECT_EQ(google_.list_calls, lists);
@@ -430,7 +430,7 @@ TEST_F(LocalPostsSync, GoogleRejectingAPostIsToldToStaffOnce) {
 
 // ---- when a location is read ------------------------------------------------------------------
 
-TEST_F(LocalPostsSync, EveryLinkedLocationIsReadOnceAnHourAndOneWithAnUnsettledSendOnEveryTick) {
+TEST_F(LocalPostsSync, EveryEnabledLocationIsReadOnceAnHourAndOneWithAnUnsettledSendOnEveryTick) {
     google_.add(kSpaPosts, make_local_post("111", kSpaPosts, "1", "Spa."));
     google_.add(kBuffetPosts, make_local_post("111", kBuffetPosts, "2", "Buffet."));
     EXPECT_EQ(await(local_posts_->enqueue_due()), 2u) << "never read yet";
@@ -459,9 +459,10 @@ TEST_F(LocalPostsSync, EveryLinkedLocationIsReadOnceAnHourAndOneWithAnUnsettledS
     clock_.advance(5min);
     EXPECT_EQ(await(local_posts_->enqueue_due()), 0u);
 
-    // An archived client's locations are not read.
+    // A location that is switched off is not read; one whose client is archived is (D-102).
     clock_.advance(2h);
-    exec(std::format("UPDATE clients SET archived = true WHERE id = {}", buffet_client_));
+    switch_location(buffet_, false);
+    exec(std::format("UPDATE clients SET archived = true WHERE id = {}", spa_client_));
     EXPECT_EQ(await(local_posts_->enqueue_due()), 1u);
 }
 

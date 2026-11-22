@@ -25,16 +25,17 @@ namespace poni::repo {
 
 struct PostHelp {
     std::int64_t location_id = 0;
-    std::optional<std::int64_t> client_id;
-    std::string client_name;
     std::string location_title;
     std::string gbp_location_id;
-    // Linked to a client that is not archived, and access to the location is not lost.
+    // A person switched the location on (D-102): the help is for such a location only.
+    bool enabled = false;
+    // Access to the location is not lost, so Google's figures can be read.
     bool accessible = false;
+    // The location's own: who the customers are, and its industry.
     std::string audience;
     std::optional<domain::IndustryRules> industry;
     // The location's reply settings, or why there are none to read.
-    std::expected<domain::ResolvedSettings, std::string> reply_settings = std::unexpected(std::string("the location is not linked to a client"));
+    std::expected<domain::ResolvedSettings, std::string> reply_settings = std::unexpected(std::string("not read"));
     // The period, in UTC: the last domain::kPostHelpDays days up to today.
     domain::Day period_start;
     domain::Day period_end;

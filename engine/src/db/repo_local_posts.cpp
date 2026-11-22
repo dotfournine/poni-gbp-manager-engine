@@ -287,18 +287,21 @@ BOOST_DESCRIBE_STRUCT(RemovalRequest, (), (status, google_name, removal_requeste
 struct SendingState {
     bool global_posting = false;
     bool location_posting = false;
+    // The engine can reach the location: all a removal needs (D-102 point 2).
+    bool accessible = false;
+    // ... and it is switched on: what a send, an edit and a read need.
     bool synced = false;
     std::string gbp_account_id;
     std::string gbp_location_id;
 };
-BOOST_DESCRIBE_STRUCT(SendingState, (), (global_posting, location_posting, synced, gbp_account_id, gbp_location_id))
+BOOST_DESCRIBE_STRUCT(SendingState, (), (global_posting, location_posting, accessible, synced, gbp_account_id, gbp_location_id))
 
 std::optional<SendingState> sending_state(pqxx::transaction_base& tx, std::int64_t location_id) {
     return db::row_as<SendingState>(
         tx,
         "SELECT (SELECT posting_enabled FROM system_settings) AS global_posting, l.posting_enabled AS location_posting, "
-        "l.access_status = 'active' AND c.id IS NOT NULL AND NOT c.archived AS synced, l.gbp_account_id, l.gbp_location_id "
-        "FROM locations l LEFT JOIN clients c ON c.id = l.client_id WHERE l.id = $1",
+        "l.access_status = 'active' AS accessible, l.enabled AND l.access_status = 'active' AS synced, l.gbp_account_id, "
+        "l.gbp_location_id FROM locations l WHERE l.id = $1",
         pqxx::params{location_id});
 }
 
@@ -308,7 +311,8 @@ OptString switch_obstacle(const SendingState& state) {
     return std::nullopt;
 }
 
-constexpr std::string_view kNotSynced = "The location is not linked to an active client, or the engine has lost access to it.";
+constexpr std::string_view kNotSynced = "The location is switched off, or the engine has lost access to it.";
+constexpr std::string_view kNotAccessible = "The engine has lost access to the location.";
 
 // A post returns to the drafts with the reason: nothing goes out later by itself.
 void back_to_draft(pqxx::transaction_base& tx, std::int64_t id, const std::string& reason, core::TimePoint now) {
@@ -392,7 +396,6 @@ BOOST_DESCRIBE_STRUCT(CopySource, (), (location_id, content, media_at_google))
 model::LocalPostList list_local_posts(pqxx::transaction_base& tx, const LocalPostFilter& filter, std::string_view media_base) {
     db::Conditions where;
     const auto base = where.bind(std::string(media_base));
-    if (filter.client_id) where.add("l.client_id = " + where.bind(*filter.client_id));
     if (filter.location_id) where.add("p.location_id = " + where.bind(*filter.location_id));
     // The column is any of the values; no values, no filter.
     const auto any_of = [&](std::string_view column, const std::vector<std::string>& values) {
@@ -1284,8 +1287,9 @@ Result<model::LocalPost> request_local_post_removal(pqxx::transaction_base& tx, 
                         open ? "It is not known yet whether Google has this post, so there is nothing to delete. Try again in a few minutes."
                              : "Google does not have this post, so there is nothing to delete there.");
     }
+    // Also while the location is switched off: deleting is the only way to stop a scheduled post.
     const auto location = sending_state(tx, state->location_id);
-    if (!location || !location->synced) return conflict("location_not_synced", std::string(kNotSynced));
+    if (!location || !location->accessible) return conflict("location_not_synced", std::string(kNotAccessible));
 
     // Asked already, and the job that carries it out is still there: nothing new.
     const bool under_way = !tx.exec("SELECT 1 FROM local_posts p WHERE p.id = $1 AND p.removal_requested_at IS NOT NULL AND " + has_live_job("$2"),
@@ -1350,7 +1354,7 @@ std::expected<gbp::LocalPostName, std::string> local_post_removal_target(pqxx::t
     const auto name = post->google_name ? gbp::parse_local_post_name(*post->google_name) : std::nullopt;
     if (!name) return cancel("the post has no name at Google that the engine can use");
     const auto location = sending_state(tx, post->location_id);
-    if (!location || !location->synced) return cancel(std::string(kNotSynced));
+    if (!location || !location->accessible) return cancel(std::string(kNotAccessible));
     // The post is deleted as a post of its own location, or not at all.
     if (name->location_id != location->gbp_location_id) return cancel("the post's name at Google is not one of its location's");
     // The location's ids as they are now: an account may have changed since the post was read.
@@ -1430,8 +1434,7 @@ Result<void> request_local_posts_sync(pqxx::transaction_base& tx, audit::Writer&
 std::vector<SyncLocation> locations_due_for_local_posts_sync(pqxx::transaction_base& tx, core::TimePoint read_before) {
     return db::rows_as<SyncLocation>(
         tx,
-        "SELECT l.id, l.gbp_location_id, l.gbp_account_id FROM locations l JOIN clients c ON c.id = l.client_id "
-        "WHERE l.access_status = 'active' AND NOT c.archived "
+        "SELECT l.id, l.gbp_location_id, l.gbp_account_id FROM locations l WHERE l.enabled AND l.access_status = 'active' "
         "AND (l.local_posts_synced_at IS NULL OR l.local_posts_synced_at <= $1::timestamptz "
         "     OR EXISTS (SELECT 1 FROM local_posts p WHERE p.location_id = l.id AND p.status IN ('sending', 'unknown'))) "
         "ORDER BY l.id",

@@ -1,4 +1,4 @@
-// The dashboard's API over a real PostgreSQL: clients, locations, the review
+// The dashboard's API over a real PostgreSQL: clients, locations and their switch, the review
 // inbox and its filters, the audit log (and that it is append-only), and the
 // system status.
 
@@ -96,33 +96,106 @@ TEST_F(Api, ClientRequestsAreValidated) {
 
 // ---- locations -------------------------------------------------------------------
 
-TEST_F(Api, LocationsAreLinkedToClientsAndTheLinkIsAudited) {
+TEST_F(Api, LocationsAreGroupedUnderClientsAndTheLinkChangesNothingElse) {
     discover_spa_and_buffet();
     const auto client = json(post("/api/clients", R"({"name": "LU DREAM SPA"})")).at("id").as_int64();
+    const auto other = json(post("/api/clients", R"({"name": "Willow Moon"})")).at("id").as_int64();
     const auto spa = location_id("9001");
+    const auto target = "/api/locations/" + std::to_string(spa);
 
     EXPECT_EQ(read("/api/locations").at("total").as_int64(), 2);
     EXPECT_EQ(read("/api/locations?linked=false").at("total").as_int64(), 2);
+    // A location the engine works on, with settings and auto-posting of its own.
+    ASSERT_EQ(patch(target, R"({"enabled": true, "industry_key": "wellness", "audience": "Office workers"})").status, 200u);
+    ASSERT_EQ(save_settings(spa, "voice", R"({"reply_name": "Willow Moon Head Spa"})").status, 200u);
+    const auto on = patch(target + "/auto-posting", R"({"enabled": true, "five_star": true, "time_zone": "America/New_York"})");
+    ASSERT_EQ(on.status, 200u) << on.body;
+    // All of it but the client, as it is before and after each change of the link.
+    const auto auto_posting = [&] {
+        return value<std::string>(std::format("SELECT concat(auto_post_enabled, auto_post_five_star, auto_post_four_star, time_zone) "
+                                              "FROM locations WHERE id = {}",
+                                              spa));
+    };
+    const auto all_but_the_client = [&] {
+        auto location = read(target).as_object();
+        location.erase("client_id");
+        location.erase("client_name");
+        return boost::json::object{{"location", location}, {"settings", read(settings_path(spa)).at("voice")}, {"auto_posting", auto_posting()}};
+    };
+    const auto before = all_but_the_client();
+    const auto syncs = value<std::string>(std::format("SELECT concat(next_review_poll_at, next_full_sync_at) FROM locations WHERE id = {}", spa));
 
-    const auto linked = patch("/api/locations/" + std::to_string(spa), std::format(R"({{"client_id": {}}})", client));
+    const auto linked = patch(target, std::format(R"({{"client_id": {}}})", client));
     ASSERT_EQ(linked.status, 200u) << linked.body;
     EXPECT_EQ(json(linked).at("client_name").as_string(), "LU DREAM SPA");
-    EXPECT_EQ(json(linked).at("gbp_location_id").as_string(), "9001");
-    EXPECT_EQ(count("locations WHERE id = " + std::to_string(spa) + " AND next_review_poll_at IS NOT NULL AND next_full_sync_at IS NOT NULL"), 1)
-        << "linking makes the reviews due for a sync at once";
-
+    EXPECT_EQ(all_but_the_client(), before);
     EXPECT_EQ(read("/api/locations?linked=true").at("items").as_array().size(), 1u);
     EXPECT_EQ(read(std::format("/api/locations?client_id={}", client)).at("total").as_int64(), 1);
     EXPECT_EQ(read("/api/locations?q=gangnam").at("items").at(0).at("title").as_string(), "Gangnam AYCE Buffet");
-    EXPECT_EQ(read(std::format("/api/clients/{}", client)).at("location_count").as_int64(), 1);
-
+    const auto grouped = read(std::format("/api/clients/{}", client));
+    EXPECT_EQ(grouped.at("location_count").as_int64(), 1);
+    EXPECT_EQ(boost::json::serialize(grouped.at("location_ids")), std::format("[{}]", spa));
     const auto entry = read("/api/audit-log?action=location.link").at("items").at(0);
     EXPECT_TRUE(entry.at("before").at("client_id").is_null());
     EXPECT_EQ(entry.at("after").at("client_name").as_string(), "LU DREAM SPA");
+    EXPECT_FALSE(entry.at("after").as_object().contains("reply_settings_from")) << "nothing is copied";
 
-    ASSERT_EQ(patch("/api/locations/" + std::to_string(spa), R"({"client_id": null})").status, 200u);
-    EXPECT_TRUE(read("/api/locations/" + std::to_string(spa)).at("client_id").is_null());
+    // A move to another client, archiving the client, and unlinking: the grouping alone changes (D-102).
+    ASSERT_EQ(patch(target, std::format(R"({{"client_id": {}}})", other)).status, 200u);
+    EXPECT_EQ(all_but_the_client(), before);
+    ASSERT_EQ(patch(std::format("/api/clients/{}", other), R"({"archived": true})").status, 200u);
+    EXPECT_EQ(all_but_the_client(), before);
+    ASSERT_EQ(patch(target, R"({"client_id": null})").status, 200u);
+    EXPECT_TRUE(read(target).at("client_id").is_null());
+    EXPECT_EQ(all_but_the_client(), before);
     EXPECT_EQ(read("/api/audit-log?action=location.unlink").at("total").as_int64(), 1);
+    EXPECT_EQ(value<std::string>(std::format("SELECT concat(next_review_poll_at, next_full_sync_at) FROM locations WHERE id = {}", spa)), syncs)
+        << "a link starts no sync";
+    EXPECT_EQ(count("go_live_runs"), 0);
+}
+
+// D-102 point 2: only a person switches a location on, and only one the managing account still sees.
+TEST_F(Api, ALocationIsSwitchedOnAndOffByAPerson) {
+    discover_spa_and_buffet();
+    const auto spa = location_id("9001");
+    const auto target = "/api/locations/" + std::to_string(spa);
+    EXPECT_FALSE(read(target).at("enabled").as_bool()) << "off at discovery";
+    EXPECT_EQ(read("/api/locations?enabled=false").at("total").as_int64(), 2);
+    EXPECT_EQ(get("/api/locations?enabled=yes", browser_).status, 400u);
+
+    // Switching on starts a full sync, and needs no client.
+    const auto on = patch(target, R"({"enabled": true})");
+    ASSERT_EQ(on.status, 200u) << on.body;
+    EXPECT_TRUE(json(on).at("enabled").as_bool());
+    EXPECT_TRUE(json(on).at("client_id").is_null());
+    EXPECT_EQ(read("/api/locations?enabled=true").at("total").as_int64(), 1);
+    EXPECT_EQ(read("/api/audit-log?action=location.enable").at("items").at(0).at("actor").as_string(), "staff@xvisionmediaus.com");
+    jobs::Sync sync(db(), clock_, gbp_, queue(), {});
+    await(sync.poll_reviews());
+    EXPECT_EQ(count(std::format("jobs WHERE kind = 'reviews.full_sync' AND (payload->>'location_id')::bigint = {}", spa)), 1);
+    ASSERT_EQ(patch(target, R"({"enabled": true})").status, 200u);
+    EXPECT_EQ(read("/api/audit-log?action=location.enable").at("total").as_int64(), 1) << "no change, no entry";
+
+    // Switching off switches auto-posting off with it, and a person switches that on again (D-070).
+    ASSERT_EQ(patch(target + "/auto-posting", R"({"enabled": true, "five_star": true, "time_zone": "America/New_York"})").status, 200u);
+    const auto off = patch(target, R"({"enabled": false})");
+    ASSERT_EQ(off.status, 200u) << off.body;
+    EXPECT_FALSE(json(off).at("enabled").as_bool());
+    EXPECT_FALSE(value<bool>(std::format("SELECT auto_post_enabled OR auto_post_five_star FROM locations WHERE id = {}", spa)));
+    const auto entry = read("/api/audit-log?action=location.disable").at("items").at(0);
+    EXPECT_TRUE(entry.at("before").at("auto_post_enabled").as_bool());
+    EXPECT_FALSE(entry.at("after").at("auto_post_enabled").as_bool());
+    EXPECT_EQ(patch(target + "/auto-posting", R"({"enabled": true, "five_star": true})").status, 400u)
+        << "auto-posting needs a location that is switched on";
+
+    // A location the managing account no longer sees can't be switched on, and the refusal changes nothing else.
+    exec(std::format("UPDATE locations SET access_status = 'lost' WHERE id = {}", spa));
+    const auto lost = patch(target, R"({"enabled": true, "audience": "Families"})");
+    EXPECT_EQ(lost.status, 409u);
+    EXPECT_EQ(error_code(lost), "location_not_accessible");
+    EXPECT_FALSE(read(target).at("enabled").as_bool());
+    EXPECT_EQ(read(target).at("audience").as_string(), "");
+    EXPECT_EQ(patch(target, R"({"enabled": null})").status, 400u);
 }
 
 TEST_F(Api, ARefusedLocationChangeChangesNothing) {
@@ -139,9 +212,13 @@ TEST_F(Api, ARefusedLocationChangeChangesNothing) {
     EXPECT_EQ(patch("/api/locations/" + spa, std::format(R"({{"client_id": {}}})", archived)).status, 409u);
     EXPECT_EQ(patch("/api/locations/" + spa, R"({"review_poll_interval_s": 5})").status, 400u);
     EXPECT_EQ(patch("/api/locations/" + spa, R"({"client_id": "one"})").status, 400u);
+    EXPECT_EQ(patch("/api/locations/" + spa, R"({"enabled": true, "industry_key": "no_such_industry"})").status, 400u);
+    EXPECT_EQ(patch("/api/locations/" + spa, R"({"enabled": true, "analyze_from": "2026-02-30"})").status, 400u);
+    EXPECT_EQ(patch("/api/locations/" + spa, R"({"enabled": true, "audience": ")" + std::string(501, 'x') + R"("})").status, 400u);
     EXPECT_EQ(patch("/api/locations/12345", R"({"client_id": null})").status, 404u);
 
     EXPECT_EQ(read("/api/locations/" + spa).at("review_poll_interval_s").as_int64(), 120);
+    EXPECT_FALSE(read("/api/locations/" + spa).at("enabled").as_bool());
     EXPECT_EQ(count("audit_log"), entries_before);
 
     ASSERT_EQ(patch("/api/locations/" + spa, R"({"review_poll_interval_s": 300})").status, 200u);
@@ -184,7 +261,6 @@ TEST_F(Api, TheReviewInboxFiltersSortsAndPages) {
     EXPECT_EQ(read("/api/reviews").at("total").as_int64(), 4);
     EXPECT_EQ(review_ids("?status=removed"), (Ids{"b2"}));
     EXPECT_EQ(review_ids("?status=all").size(), 5u);
-    EXPECT_EQ(review_ids(std::format("?client_id={}", spa_client)), (Ids{"s3", "s2", "s1"}));
     EXPECT_EQ(review_ids(std::format("?location_id={}", location_id("9002"))), (Ids{"b1"}));
     EXPECT_EQ(review_ids("?rating=1,2"), (Ids{"b1"}));
     EXPECT_EQ(review_ids("?rating=4&rating=1"), (Ids{"b1", "s3"}));
@@ -199,9 +275,9 @@ TEST_F(Api, TheReviewInboxFiltersSortsAndPages) {
     EXPECT_EQ(review_ids("?sort=updated_time"), (Ids{"b1", "s3", "s2", "s1"}));
     EXPECT_EQ(review_ids("?per_page=2&page=2"), (Ids{"s2", "s1"}));
     EXPECT_EQ(read("/api/reviews?per_page=2&page=2").at("total").as_int64(), 4);
-    EXPECT_EQ(review_ids("?has_reply=false&rating=5&client_id=" + std::to_string(spa_client)), (Ids{"s2"}));
+    EXPECT_EQ(review_ids("?has_reply=false&rating=5&location_id=" + std::to_string(location_id("9001"))), (Ids{"s2"}));
 
-    for (const auto* bad : {"?rating=6", "?rating=x", "?status=gone", "?has_reply=1", "?sort=id", "?order=up", "?client_id=x",
+    for (const auto* bad : {"?rating=6", "?rating=x", "?status=gone", "?has_reply=1", "?sort=id", "?order=up", "?location_id=x",
                             "?per_page=0"}) {
         EXPECT_EQ(get(std::string("/api/reviews") + bad, browser_).status, 400u) << bad;
     }
@@ -296,11 +372,10 @@ TEST_F(Api, SystemStatusShowsTokenSyncAndFailedJobs) {
     EXPECT_FALSE(status.at("pubsub").at("enabled").as_bool());
     EXPECT_FALSE(status.at("location_discovery").at("last_ok_at").is_null());
     EXPECT_EQ(status.at("locations").as_array().size(), 2u);
-    EXPECT_FALSE(status.at("locations").at(0).at("syncing").as_bool()) << "not linked yet";
+    EXPECT_FALSE(status.at("locations").at(0).at("syncing").as_bool()) << "not switched on yet";
     EXPECT_EQ(status.at("jobs").at("failed").as_int64(), 0);
 
-    const auto client = make_client("Gangnam AYCE Buffet");
-    link("9002", client);
+    switch_location(location_id("9002"), true);
     {
         const auto box = core::SecretBox::from_base64_key(core::base64_encode(std::string(32, 'k'))).value();
         pqxx::connection conn{url()};

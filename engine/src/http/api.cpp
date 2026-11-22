@@ -64,6 +64,7 @@ void add_api_routes(Router& router, db::Database& db, const core::Clock& clock, 
                    bool bad = false;
                    filter.client_id = query.integer("client_id", bad);
                    filter.linked = query.boolean("linked", bad);
+                   filter.enabled = query.boolean("enabled", bad);
                    read_choice(query, "access_status", repo::kAccessStatuses, filter.access_status, bad);
                    filter.q = query.get("q").value_or("");
                    if (!read_page(query, filter.page, bad)) co_return bad_query();
@@ -97,7 +98,6 @@ void add_api_routes(Router& router, db::Database& db, const core::Clock& clock, 
                    const QueryParams query(request.query);
                    repo::ReviewFilter filter;
                    bool bad = false;
-                   filter.client_id = query.integer("client_id", bad);
                    filter.location_id = query.integer("location_id", bad);
                    for (const auto& rating : query.all("rating")) {
                        if (rating.size() == 1 && rating[0] >= '1' && rating[0] <= '5') {

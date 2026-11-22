@@ -80,12 +80,12 @@ struct PostHelpPerformance {
 };
 
 struct PostHelpInput {
-    std::string business_name;   // the voice's reply_name, or the client's name
+    std::string business_name;   // the voice's reply_name, or the location's title
     std::string location_title;  // as the profile has it
     std::string industry_label;  // "" without an industry
     // The industry profile's topics, id to label: a review's topics are given to the model by their labels.
     std::map<std::string, std::string> topic_labels;
-    std::string audience;        // the client's setting; "" when not set
+    std::string audience;        // the location's setting; "" when not set
     std::string today;           // in words
     ResolvedSettings settings;
     std::vector<HelpReview> reviews;  // from reviews_for_model

@@ -45,8 +45,7 @@ BOOST_DESCRIBE_STRUCT(PendingReview, (), (id, updated_time, needs_analysis))
 // Reviews that lack an analysis of their current version, or a live draft
 // while they have no reply, or an escalation although they are flagged and
 // unanswered, and that no queued or running job is working on.
-// Only reviews of an accessible location whose client has an industry and
-// isn't archived. Unreplied reviews first, then newest first.
+// Only reviews of an enabled and accessible location that has an industry. Unreplied reviews first, then newest first.
 std::vector<PendingReview> pending_reviews(pqxx::transaction_base& tx, std::int64_t limit);
 
 // Jobs of kind reviews.analyze that are queued or running.
@@ -62,16 +61,16 @@ struct ReviewContext {
     // A person decided that it needs no reply (D-068): analyzed, never drafted for.
     bool ignored = false;
     bool removed = false;
-    // False: the location isn't linked to an active client, or was lost.
+    // False: the location is switched off, or was lost.
     bool synced = false;
     // Analysis is switched on (the AI settings).
     bool enabled = false;
-    // What the review's location runs with: the client's names, the industry,
+    // What the review's location runs with: its names, the industry,
     // the reply settings and the analyzer's and the writer's model. It is the
     // setup a go-live test of the location tests, from the same loader.
     std::expected<GoLiveSetup, NoSetup> setup = std::unexpected(NoSetup{});
     // The location has nothing to run a review with, and that is its state
-    // (no client, no industry profile), not a fault in its stored settings.
+    // (no industry profile), not a fault in its stored settings.
     bool unsupported() const { return !setup && !setup.error().settings_error; }
     // The newest analysis of this version, if there is one.
     std::optional<model::ReviewAnalysis> analysis;
@@ -159,7 +158,7 @@ bool close_live_draft(pqxx::transaction_base& tx, std::int64_t review_id, std::s
 // One llm_calls row; the cost estimate comes from the knowledge base's model prices.
 void record_llm_call(pqxx::transaction_base& tx, const llm::CallRecord& call);
 
-// Totals from `from` (inclusive) to `to` (exclusive), by day (UTC), model, task and client.
+// Totals from `from` (inclusive) to `to` (exclusive), by day (UTC), model, task, provider and location.
 model::LlmUsage llm_usage(pqxx::transaction_base& tx, core::TimePoint from, core::TimePoint to);
 
 // Newest first.

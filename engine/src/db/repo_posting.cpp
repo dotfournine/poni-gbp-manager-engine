@@ -109,10 +109,10 @@ std::optional<DraftState> lock_draft(pqxx::transaction_base& tx, std::int64_t dr
 
     const auto review = tx.exec(std::format(R"sql(
         SELECT r.removed_at IS NOT NULL, {}, r.reply_text IS NOT NULL, coalesce(r.reply_origin, ''), r.location_id,
-               l.posting_enabled, l.access_status = 'active' AND c.id IS NOT NULL AND NOT c.archived,
+               l.posting_enabled, l.enabled AND l.access_status = 'active',
                (SELECT posting_enabled FROM system_settings),
                EXISTS (SELECT 1 FROM reply_posts p WHERE p.review_id = r.id AND p.status IN {})
-          FROM reviews r JOIN locations l ON l.id = r.location_id LEFT JOIN clients c ON c.id = l.client_id
+          FROM reviews r JOIN locations l ON l.id = r.location_id
          WHERE r.id = $1)sql",
                                             iso("r.updated_time"), kOpenPost),
                                 pqxx::params{state.review_id})
@@ -140,8 +140,7 @@ OptString review_obstacle(const DraftState& state) {
     return std::nullopt;
 }
 
-// Why a draft's text can't be checked: its location has no readable reply
-// settings. A location that lost its client lost them with it (D-093).
+// Why a draft's text can't be checked: its location has no readable reply settings.
 std::string no_settings(const DraftState& state) {
     return state.synced ? "The reply settings of the review's location can't be read." : "The review's location is no longer synced.";
 }
@@ -289,7 +288,7 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
                EXISTS (SELECT 1 FROM cases k WHERE k.review_id = r.id AND k.status = 'open'),
                l.auto_post_enabled, l.auto_post_five_star, l.auto_post_four_star, l.auto_post_daily_cap, l.time_zone,
                l.auto_post_paused_at IS NOT NULL, s.auto_post_paused_at IS NOT NULL, s.posting_enabled, l.posting_enabled,
-               l.access_status = 'active' AND c.id IS NOT NULL AND NOT c.archived,
+               l.enabled AND l.access_status = 'active',
                {},
                (SELECT count(*) FROM reply_drafts o JOIN reviews orv ON orv.id = o.review_id
                  WHERE orv.location_id = l.id AND o.status = 'scheduled' AND o.id <> d.id),
@@ -297,7 +296,7 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
                -- This draft's own attempt that Google refused outright posted nothing and may be retried.
                OR EXISTS (SELECT 1 FROM reply_posts q WHERE q.review_id = r.id AND NOT (q.draft_id = d.id AND q.status = 'failed'))
           FROM reply_drafts d JOIN reviews r ON r.id = d.review_id JOIN locations l ON l.id = r.location_id
-          LEFT JOIN clients c ON c.id = l.client_id CROSS JOIN system_settings s
+          CROSS JOIN system_settings s
          WHERE d.id = $1)sql",
                                           auto_posts_since("l.id", "$2")),
                               pqxx::params{draft_id, to_timestamptz(now - kAutoPostCapWindow)});
@@ -395,16 +394,14 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
 // "Approval needed" for a draft that was on its way to an automatic post
 // and is back in the queue. Review text and the draft go in the body only.
 void emit_approval_needed(pqxx::transaction_base& tx, std::int64_t draft_id, const std::string& why, core::TimePoint now) {
-    const auto row = tx.exec("SELECT r.id, l.id, l.client_id, l.title, coalesce(c.name, ''), coalesce(r.rating, 0), coalesce(r.comment, ''), "
+    const auto row = tx.exec("SELECT r.id, l.id, l.client_id, l.title, coalesce(r.rating, 0), coalesce(r.comment, ''), "
                              "d.text FROM reply_drafts d JOIN reviews r ON r.id = d.review_id JOIN locations l ON l.id = r.location_id "
-                             "LEFT JOIN clients c ON c.id = l.client_id WHERE d.id = $1",
+                             "WHERE d.id = $1",
                              pqxx::params{draft_id})
                          .one_row();
-    const auto title = row[3].as<std::string>();
-    const auto client = row[4].as<std::string>();
-    const auto place = client.empty() ? title : std::format("{} ({})", title, client);
-    const int stars = row[5].as<int>();
-    const auto comment = row[6].as<std::string>();
+    const auto place = row[3].as<std::string>();
+    const int stars = row[4].as<int>();
+    const auto comment = row[5].as<std::string>();
     emit(tx,
          {.type = std::string(kEventApprovalNeeded),
           .key = std::format("draft:{}:approval_needed", draft_id),
@@ -415,7 +412,7 @@ void emit_approval_needed(pqxx::transaction_base& tx, std::int64_t draft_id, con
           .body = std::format("A reply to a review at {} was not posted automatically and is waiting for approval.\n\nWhy: {}\n\n"
                               "Rating: {}\n\nReview:\n{}\n\nDraft:\n{}\n\nNothing is posted until a person approves it.",
                               place, why, stars > 0 ? std::format("{} of 5 stars", stars) : std::string("none"),
-                              comment.empty() ? std::string("(no text)") : comment, row[7].as<std::string>()),
+                              comment.empty() ? std::string("(no text)") : comment, row[6].as<std::string>()),
           .link_path = std::format("/#/drafts/{}/show", row[0].as<std::int64_t>())},
          now);
 }
@@ -847,8 +844,8 @@ void close_posts_of_removed_review(pqxx::transaction_base& tx, std::int64_t revi
 model::PostingStatus posting_status(pqxx::transaction_base& tx) {
     return db::one_as<model::PostingStatus>(tx, std::format(R"sql(
         SELECT (SELECT posting_enabled FROM system_settings) AS enabled,
-               (SELECT count(*) FROM locations l JOIN clients c ON c.id = l.client_id
-                 WHERE l.access_status = 'active' AND NOT c.archived AND NOT l.posting_enabled) AS paused_locations,
+               (SELECT count(*) FROM locations l
+                 WHERE l.enabled AND l.access_status = 'active' AND NOT l.posting_enabled) AS paused_locations,
                (SELECT count(*) FROM reply_drafts WHERE status = 'draft') AS drafts_waiting,
                (SELECT count(*) FROM reply_drafts WHERE status IN ('approved', 'posting', 'posted')) AS in_flight,
                (SELECT count(*) FROM reply_posts WHERE status = 'published') AS published,

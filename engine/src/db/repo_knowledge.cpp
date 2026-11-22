@@ -146,7 +146,7 @@ model::Knowledge knowledge(pqxx::transaction_base& tx) {
                    'severity_cases', (SELECT count(*) FROM kb_corpus_cases k WHERE k.industry_key = i.key AND k.category = 'severity'),
                    'manipulation_cases', (SELECT count(*) FROM kb_corpus_cases k WHERE k.industry_key = i.key AND k.category = 'manipulation'),
                    'control_cases', (SELECT count(*) FROM kb_corpus_cases k WHERE k.industry_key = i.key AND k.category = 'control')) AS corpus,
-               (SELECT count(*) FROM clients c WHERE c.industry_key = i.key AND NOT c.archived) AS client_count
+               (SELECT count(*) FROM locations l WHERE l.industry_key = i.key AND l.enabled) AS location_count
           FROM kb_industries i ORDER BY i.position, i.key)sql");
     const auto common = tx.exec("SELECT severity_flags::text FROM kb_common");
     if (!common.empty()) out.common_severity_flags = typed_column<std::vector<domain::SeverityFlag>>(common[0][0]);

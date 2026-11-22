@@ -39,9 +39,9 @@ std::string run_select() {
     return std::format(R"sql(
         SELECT g.id, g.client_id, g.fingerprint, g.status, g.summary, g.auto_post_positive,
                g.auto_post_rating_only, g.auto_post_min_stars, g.corpus_version,
-               -- Is the corpus the run used the one its client's industry has now?
-               coalesce(g.corpus_version = (SELECT i.corpus_version FROM kb_industries i JOIN clients c ON c.industry_key = i.key
-                                             WHERE c.id = g.client_id), false) AS corpus_current,
+               -- Is the corpus the run used the one the industry of its first location has now?
+               coalesce(g.corpus_version = (SELECT i.corpus_version FROM kb_industries i JOIN locations l ON l.industry_key = i.key
+                                             WHERE l.id = (g.location_ids->>0)::bigint), false) AS corpus_current,
                g.kb_version, g.repeats, g.real_reviews,
                (SELECT count(*) FROM go_live_cases k WHERE k.run_id = g.id) AS cases_total,
                (SELECT count(*) FROM go_live_cases k WHERE k.run_id = g.id AND k.verdict <> 'pending') AS cases_done,
@@ -259,7 +259,8 @@ struct LinkedLocation {
 
 std::vector<LinkedLocation> linked_locations(pqxx::transaction_base& tx, std::int64_t client_id) {
     std::vector<LinkedLocation> out;
-    for (const auto& row : tx.exec("SELECT id, title FROM locations WHERE client_id = $1 AND access_status = 'active' ORDER BY lower(title), id",
+    for (const auto& row : tx.exec("SELECT id, title FROM locations WHERE client_id = $1 AND enabled AND access_status = 'active' "
+                                   "ORDER BY lower(title), id",
                                    pqxx::params{client_id})) {
         out.push_back({row[0].as<std::int64_t>(), row[1].as<std::string>()});
     }
@@ -369,15 +370,11 @@ std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, st
 
 std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, std::int64_t location_id, const model::AiSettings& ai) {
     const auto none = [](std::string reason) { return std::unexpected(NoSetup{.reason = std::move(reason), .settings_error = {}}); };
-    const auto rows = tx.exec("SELECT l.title, l.client_id, c.name, c.industry_key FROM locations l "
-                              "LEFT JOIN clients c ON c.id = l.client_id WHERE l.id = $1",
-                              pqxx::params{location_id});
+    const auto rows = tx.exec("SELECT title, client_id, industry_key FROM locations WHERE id = $1", pqxx::params{location_id});
     if (rows.empty()) return none("The location no longer exists.");
-    const auto client_id = rows[0][1].as<OptId>();
-    if (!client_id) return none("The location is not linked to a client.");
-    const auto industry_key = rows[0][3].as<OptString>();
+    const auto industry_key = rows[0][2].as<OptString>();
     auto industry = industry_key ? industry_rules(tx, *industry_key) : std::nullopt;
-    if (!industry) return none("The client has no industry profile.");
+    if (!industry) return none("The location has no industry profile.");
     auto settings = stored_reply_settings(tx, location_id);
     if (!settings) {
         return std::unexpected(NoSetup{.reason = unreadable_reply_settings(settings.error()), .settings_error = settings.error()});
@@ -385,10 +382,9 @@ std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, st
 
     GoLiveSetup setup;
     setup.location_id = location_id;
-    setup.client_id = *client_id;
-    setup.client_name = rows[0][2].as<std::string>();
+    setup.client_id = rows[0][1].as<OptId>();
     setup.location_title = rows[0][0].as<std::string>();
-    setup.business_name = domain::business_name(settings->voice, setup.client_name);
+    setup.business_name = domain::business_name(settings->voice, setup.location_title);
     setup.industry = std::move(*industry);
     setup.settings = std::move(*settings);
     setup.analyzer = {.provider = ai.analyzer_provider,

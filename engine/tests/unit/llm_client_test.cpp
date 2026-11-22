@@ -65,7 +65,6 @@ protected:
                 .temperature = 0.25,
                 .max_tokens = 900,
                 .extras = boost::json::object{{"enable_thinking", false}, {"model", "sneaky-other-model"}},
-                .client_id = 7,
                 .location_id = 8,
                 .review_id = 9};
     }
@@ -118,7 +117,6 @@ TEST_F(LlmClient, EveryAttemptIsReportedWithTokensAndLatency) {
     EXPECT_TRUE(record.ok);
     EXPECT_EQ(record.task, "analyzer");
     EXPECT_EQ(record.model, "qwen3.7-plus");
-    EXPECT_EQ(record.client_id, 7);
     EXPECT_EQ(record.location_id, 8);
     EXPECT_EQ(record.review_id, 9);
     EXPECT_EQ(record.attempt, 1);

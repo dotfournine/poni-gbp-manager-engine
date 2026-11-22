@@ -47,8 +47,8 @@ inline constexpr int kGoLiveRealWithoutText = 2;
 // something else than the pipeline runs.
 struct GoLiveSetup {
     std::int64_t location_id = 0;
-    std::int64_t client_id = 0;
-    std::string client_name;
+    // The client it is grouped under, if any: what a notification about it is matched with.
+    std::optional<std::int64_t> client_id;
     std::string location_title;
     std::string business_name;
     domain::IndustryRules industry;
@@ -66,13 +66,14 @@ struct NoSetup {
     std::string reason;
     // Set when the location's stored reply settings can't be read (there is
     // no row, or a part lacks a field), in the reader's own words. A save is
-    // checked and a link copies complete settings, so it is a fault to raise
+    // checked and discovery writes complete settings, so it is a fault to raise
     // and not a state a location can be in.
     std::optional<std::string> settings_error;
 };
 
-// Nothing, with the reason, for a location that is not linked to a client
-// with an industry profile or whose reply settings can't be read.
+// Nothing, with the reason, for a location without an industry profile or
+// whose reply settings can't be read. Whether it is switched on is its
+// callers' to ask: this is what it would run with.
 std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, std::int64_t location_id);
 // The same for a caller that has read the AI settings in this transaction
 // already (one row for every location), so that they are not read again.

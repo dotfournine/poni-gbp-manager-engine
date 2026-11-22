@@ -434,7 +434,6 @@ TEST_F(Reports, TheSummaryIsWrittenFromTheFiguresWithoutReviewTextOrNames) {
     const auto& request = llm_.requests.back();
     EXPECT_EQ(request.task, "summary");
     EXPECT_EQ(request.provider, "dashscope");
-    EXPECT_EQ(request.client_id, spa_client_);
     for (const auto& message : request.messages) {
         EXPECT_THAT(message.content, Not(HasSubstr("SECRET-WORDS-OF-THE-REVIEW")));
         EXPECT_THAT(message.content, Not(HasSubstr("SECRET-NAME")));

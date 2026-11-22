@@ -74,7 +74,6 @@ struct ChatRequest {
     // For a call that takes longer than the usual limit.
     std::optional<std::chrono::seconds> timeout;
     // What the call is for; recorded, never sent.
-    std::optional<std::int64_t> client_id;
     std::optional<std::int64_t> location_id;
     std::optional<std::int64_t> review_id;
     std::optional<std::int64_t> go_live_run_id;
@@ -97,7 +96,6 @@ struct CallRecord {
     std::string task;
     std::string provider;
     std::string model;
-    std::optional<std::int64_t> client_id;
     std::optional<std::int64_t> location_id;
     std::optional<std::int64_t> review_id;
     std::optional<std::int64_t> go_live_run_id;

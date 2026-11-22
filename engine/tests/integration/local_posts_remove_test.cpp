@@ -350,23 +350,32 @@ TEST_F(LocalPostsRemove, ARequestWhoseJobDiedCanBeMadeAgain) {
     EXPECT_EQ(post(id, "status"), "removed");
 }
 
-TEST_F(LocalPostsRemove, OnlyAPostOfALinkedLocationIsDeleted) {
+// Deleting is the only way to stop a scheduled post, so a removal goes ahead while the location is switched
+// off, and with no client (D-102 point 2). Only a location the engine has lost access to stops it.
+TEST_F(LocalPostsRemove, APostIsDeletedAlsoWhileItsLocationIsSwitchedOffButNotWithoutAccess) {
     const auto id = at_google(kBuffetPosts, 1, "Client left.");
-    exec(std::format("UPDATE locations SET client_id = NULL WHERE id = {}", buffet_));
-    EXPECT_EQ(request(id).error().code, "location_not_synced");
-    exec(std::format("UPDATE locations SET client_id = {}, access_status = 'lost' WHERE id = {}", buffet_client_, buffet_));
-    EXPECT_EQ(request(id).error().code, "location_not_synced") << "nor one the engine has lost access to";
+    exec(std::format("UPDATE locations SET access_status = 'lost' WHERE id = {}", buffet_));
+    EXPECT_EQ(request(id).error().code, "location_not_synced") << "not one the engine has lost access to";
     exec(std::format("UPDATE locations SET access_status = 'active' WHERE id = {}", buffet_));
 
-    // Unlinked between the request and the job.
-    exec(std::format("UPDATE locations SET client_id = {} WHERE id = {}", buffet_client_, buffet_));
+    // Lost between the request and the job.
     ASSERT_TRUE(request(id));
-    exec(std::format("UPDATE clients SET archived = true WHERE id = {}", buffet_client_));
+    exec(std::format("UPDATE locations SET access_status = 'lost' WHERE id = {}", buffet_));
     run_jobs();
     EXPECT_TRUE(google_.deletes.empty());
     EXPECT_EQ(post(id, "status"), "sent");
     EXPECT_EQ(post(id, "removal_requested_at"), "");
     EXPECT_EQ(problems(), 1);
+    exec(std::format("UPDATE locations SET access_status = 'active' WHERE id = {}", buffet_));
+
+    // Switched off, and its client gone, before the request and after it.
+    switch_location(buffet_, false);
+    exec(std::format("UPDATE locations SET client_id = NULL WHERE id = {}", buffet_));
+    clock_.advance(1min);
+    ASSERT_TRUE(request(id));
+    run_jobs();
+    ASSERT_EQ(google_.deletes.size(), 1u);
+    EXPECT_EQ(post(id, "status"), "removed");
 }
 
 TEST_F(LocalPostsRemove, TheDeleteNamesThatPostOfItsOwnLocationAndNothingElse) {

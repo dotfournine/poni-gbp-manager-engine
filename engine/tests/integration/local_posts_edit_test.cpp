@@ -1310,7 +1310,17 @@ TEST_F(LocalPostsEdit, TheSwitchesAreReadAgainInTheClaimAndAnEditNeverGoesOutLat
     EXPECT_TRUE(google_.updates.empty());
     EXPECT_THAT(edit(id, "status_reason"), HasSubstr("for this location"));
 
+    // The location itself, switched off between the approval and the claim (D-102).
     exec(std::format("UPDATE locations SET posting_enabled = true WHERE id = {}", spa_));
+    clock_.advance(1min);
+    ASSERT_TRUE(approve(id));
+    switch_location(spa_, false);
+    run_jobs();
+    EXPECT_TRUE(google_.updates.empty());
+    EXPECT_EQ(edit(id, "status"), "draft");
+    EXPECT_THAT(edit(id, "status_reason"), HasSubstr("switched off"));
+
+    switch_location(spa_, true);
     clock_.advance(1min);
     ASSERT_TRUE(approve(id));
     run_jobs();
@@ -1470,14 +1480,12 @@ TEST_F(LocalPostsEdit, OnlyAPostThatIsAtGoogleCanHaveAnEdit) {
     EXPECT_EQ(approve(999999, standard()).error().kind, repo::Failure::Kind::not_found);
     EXPECT_EQ(discard(999999).error().kind, repo::Failure::Kind::not_found);
 
-    // A post whose location is not linked to an active client, or that the engine has lost access to.
+    // A post whose location is switched off, or that the engine has lost access to. Its client is no matter (D-102).
     const auto id = at_google(kBuffetPosts, 1, "Closed on Mondays.");
-    exec(std::format("UPDATE clients SET archived = true WHERE id = {}", buffet_client_));
+    switch_location(buffet_, false);
     EXPECT_EQ(write(id, standard("Closed on Tuesdays.")).error().code, "location_not_synced");
-    exec(std::format("UPDATE clients SET archived = false WHERE id = {}", buffet_client_));
+    switch_location(buffet_, true);
     exec(std::format("UPDATE locations SET access_status = 'lost' WHERE id = {}", buffet_));
-    EXPECT_EQ(write(id, standard("Closed on Tuesdays.")).error().code, "location_not_synced");
-    exec(std::format("UPDATE locations SET access_status = 'active', client_id = NULL WHERE id = {}", buffet_));
     EXPECT_EQ(write(id, standard("Closed on Tuesdays.")).error().code, "location_not_synced");
     EXPECT_EQ(count("local_post_edits"), 0);
     EXPECT_EQ(count("audit_log WHERE action LIKE 'local_post.edit%'"), 0) << "a refused request leaves no entry";

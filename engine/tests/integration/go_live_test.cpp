@@ -585,6 +585,7 @@ TEST_F(GoLive, TheCasesAreRoutedWithTheWidestPolicyAmongTheLocationsThePassWillC
     gbp_.add_location("9003", "LU DREAM SPA - Midtown");
     discover();
     const auto midtown = link("9003", spa_client_);
+    become_test_client(spa_client_, "wellness");  // the same business, with the same settings (D-102: a link copies none)
     set_policy(spa_, R"({"auto_post_min_stars": 5, "auto_post_rating_only": false})");
     ASSERT_EQ(fingerprint(midtown), fingerprint(spa_)) << "the policy is not part of the fingerprint";
     review(kSpa, "four", "FOUR", praise("Great facial"));
@@ -821,7 +822,6 @@ TEST_F(GoLive, ATestAsksTheModelsExactlyWhatThePipelineAsks) {
                 if (request.review_id != asked.review_id || request.task != asked.task) continue;
                 ++in_the_test;
                 EXPECT_EQ(sent(request), sent(asked));
-                EXPECT_EQ(request.client_id, asked.client_id);
                 EXPECT_EQ(request.location_id, asked.location_id);
             }
             EXPECT_EQ(in_the_test, static_cast<std::size_t>(domain::kGoLiveRepeats)) << asked.task;
@@ -885,7 +885,7 @@ TEST_F(GoLive, StartingIsRefusedWhenItCannotRun) {
     EXPECT_THAT(no_judge.error().message, HasSubstr("judge's model provider 'anthropic' is not configured"));
     EXPECT_EQ(start(999999).error().kind, repo::Failure::Kind::not_found);
 
-    exec(std::format("UPDATE clients SET industry_key = NULL WHERE id = {}", buffet_client_));
+    exec(std::format("UPDATE locations SET industry_key = NULL WHERE client_id = {}", buffet_client_));
     EXPECT_THAT(start(buffet_client_).error().message, HasSubstr("no industry profile"));
     const auto unlinked = make_client("No Locations Yet");
     EXPECT_THAT(start(unlinked).error().message, HasSubstr("no linked location"));
@@ -905,6 +905,7 @@ TEST_F(GoLive, LocationsThatShareAConfigurationShareATestAndOthersGetTheirOwn) {
     gbp_.add_location("9003", "LU DREAM SPA - Midtown");
     discover();
     const auto midtown = link("9003", spa_client_);
+    become_test_client(spa_client_, "wellness");  // the same business, with the same settings (D-102: a link copies none)
     EXPECT_EQ(fingerprint(midtown), fingerprint(spa_));
     EXPECT_NE(fingerprint(buffet_), fingerprint(spa_)) << "two clients never share one: the business is named in the prompts";
 

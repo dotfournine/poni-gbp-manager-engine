@@ -35,13 +35,9 @@ std::string trimmed(std::string_view s) {
 
 std::string client_select() {
     return std::format(R"sql(
-        SELECT c.id, c.name, c.notes, c.audience, c.archived, c.industry_key, to_char(c.analyze_from, 'YYYY-MM-DD') AS analyze_from,
+        SELECT c.id, c.name, c.notes, c.archived,
                (SELECT count(*) FROM locations l WHERE l.client_id = c.id) AS location_count,
-               -- Settings are compared as values. A linked location without a row is one of its own.
-               (SELECT count(DISTINCT jsonb_build_array(r.voice, r.localization, r.policy)) FILTER (WHERE r.location_id IS NOT NULL)
-                       + count(*) FILTER (WHERE r.location_id IS NULL)
-                  FROM locations l LEFT JOIN reply_settings r ON r.location_id = l.id
-                 WHERE l.client_id = c.id) AS reply_settings_variants,
+               (SELECT coalesce(jsonb_agg(l.id ORDER BY l.id), '[]') FROM locations l WHERE l.client_id = c.id) AS location_ids,
                {} AS created_at, {} AS updated_at
           FROM clients c)sql",
                        iso("c.created_at"), iso("c.updated_at"));
@@ -51,26 +47,18 @@ bool client_name_taken(pqxx::transaction_base& tx, const std::string& name, std:
     return !tx.exec("SELECT 1 FROM clients WHERE lower(name) = lower($1) AND id <> $2", pqxx::params{name, except_id}).empty();
 }
 
-// Google's posts are short; a line is enough to say who reads them.
-constexpr std::size_t kMaxAudienceLength = 500;
-constexpr std::string_view kClientLimits =
-    "A client needs a name of 1 to 200 characters; notes may be up to 5000 characters and \"audience\" up to 500.";
+constexpr std::string_view kClientLimits = "A client needs a name of 1 to 200 characters; notes may be up to 5000 characters.";
 
-boost::json::object client_json(const std::string& name, const std::string& notes, const std::string& audience, bool archived,
-                                const OptString& industry_key = std::nullopt, const OptString& analyze_from = std::nullopt) {
-    return {{"name", name},
-            {"notes", notes},
-            {"audience", audience},
-            {"archived", archived},
-            {"industry_key", industry_key ? boost::json::value(*industry_key) : boost::json::value(nullptr)},
-            {"analyze_from", analyze_from ? boost::json::value(*analyze_from) : boost::json::value(nullptr)}};
+boost::json::object client_json(const std::string& name, const std::string& notes, bool archived) {
+    return {{"name", name}, {"notes", notes}, {"archived", archived}};
 }
 
 // ---- locations -------------------------------------------------------------
 
 std::string location_select() {
     return std::format(R"sql(
-        SELECT l.id, l.gbp_location_id, l.gbp_account_id, l.client_id, c.name AS client_name, l.title, l.store_code,
+        SELECT l.id, l.gbp_location_id, l.gbp_account_id, l.client_id, c.name AS client_name, l.enabled, l.industry_key,
+               to_char(l.analyze_from, 'YYYY-MM-DD') AS analyze_from, l.audience, l.title, l.store_code,
                l.primary_category, l.address, l.locality, l.administrative_area, l.postal_code, l.region_code,
                l.phone, l.website_uri, l.maps_uri, l.access_status, {} AS access_lost_at, {} AS first_seen_at, {} AS last_seen_at,
                l.review_poll_interval_s,
@@ -109,6 +97,9 @@ bool is_day_or_none(const OptString& day) { return !day || domain::parse_report_
 
 OptString non_empty(std::string s) { return s.empty() ? std::nullopt : OptString(std::move(s)); }
 
+// Google's posts are short; a line is enough to say who reads them.
+constexpr std::size_t kMaxAudienceLength = 500;
+
 }  // namespace
 
 // ---- clients -------------------------------------------------------------------
@@ -125,64 +116,41 @@ std::optional<model::Client> get_client(pqxx::transaction_base& tx, std::int64_t
 }
 
 Result<model::Client> create_client(pqxx::transaction_base& tx, audit::Writer& audit, const NewClient& client) {
-    const auto& analyze_from = client.analyze_from.value();
-    if (!is_day_or_none(analyze_from)) return invalid(std::string(kBadAnalyzeFrom));
     const auto clean = trimmed(client.name);
     const auto notes = client.notes.value_or("");
-    const auto who = trimmed(client.audience.value_or(""));
-    if (clean.empty() || clean.size() > 200 || notes.size() > 5000 || text::length(who) > kMaxAudienceLength) {
-        return invalid(std::string(kClientLimits));
-    }
+    if (clean.empty() || clean.size() > 200 || notes.size() > 5000) return invalid(std::string(kClientLimits));
     if (client_name_taken(tx, clean, 0)) return conflict("name_taken", "Another client already has this name.");
 
     const auto id = tx.query_value<std::int64_t>(
-        "INSERT INTO clients (name, notes, analyze_from, audience, created_at, updated_at) "
-        "VALUES ($1, $2, $4::date, $5, $3::timestamptz, $3::timestamptz) RETURNING id",
-        pqxx::params{clean, notes, to_timestamptz(audit.now()), analyze_from, who});
-    audit.record("client.create", "client", id, {.after = client_json(clean, notes, who, false, std::nullopt, analyze_from)});
+        "INSERT INTO clients (name, notes, created_at, updated_at) VALUES ($1, $2, $3::timestamptz, $3::timestamptz) RETURNING id",
+        pqxx::params{clean, notes, to_timestamptz(audit.now())});
+    audit.record("client.create", "client", id, {.after = client_json(clean, notes, false)});
     return *get_client(tx, id);
 }
 
 Result<model::Client> update_client(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const ClientPatch& patch) {
-    if (!is_day_or_none(patch.analyze_from.value())) return invalid(std::string(kBadAnalyzeFrom));
-    const auto rows = tx.exec("SELECT name, notes, archived, industry_key, to_char(analyze_from, 'YYYY-MM-DD'), audience FROM clients "
-                              "WHERE id = $1 FOR UPDATE",
-                              pqxx::params{id});
+    const auto rows = tx.exec("SELECT name, notes, archived FROM clients WHERE id = $1 FOR UPDATE", pqxx::params{id});
     if (rows.empty()) return not_found("client");
     const auto old_name = rows[0][0].as<std::string>();
     const auto old_notes = rows[0][1].as<std::string>();
     const auto old_archived = rows[0][2].as<bool>();
-    const auto old_industry = rows[0][3].as<OptString>();
-    const auto industry = patch.industry_key.over(old_industry);
-    const auto old_from = rows[0][4].as<OptString>();
-    const auto from = patch.analyze_from.over(old_from);
-    const auto old_audience = rows[0][5].as<std::string>();
-    const auto audience = patch.audience ? trimmed(*patch.audience) : old_audience;
-    // Only an industry the knowledge base supports can be given; one a client already has may stay.
-    if (industry && industry != old_industry && !industry_supported(tx, *industry)) {
-        return invalid("\"industry_key\" must be the key of an industry in the knowledge base, or null.");
-    }
 
     const auto name = patch.name ? trimmed(*patch.name) : old_name;
     const auto notes = patch.notes.value_or(old_notes);
     const auto archived = patch.archived.value_or(old_archived);
-    if (name.empty() || name.size() > 200 || notes.size() > 5000 || text::length(audience) > kMaxAudienceLength) {
-        return invalid(std::string(kClientLimits));
-    }
+    if (name.empty() || name.size() > 200 || notes.size() > 5000) return invalid(std::string(kClientLimits));
     if (name != old_name && client_name_taken(tx, name, id)) return conflict("name_taken", "Another client already has this name.");
 
-    if (name == old_name && notes == old_notes && archived == old_archived && industry == old_industry && from == old_from &&
-        audience == old_audience) {
+    if (name == old_name && notes == old_notes && archived == old_archived) {
         audit.nothing_changed();
         return *get_client(tx, id);
     }
-    tx.exec("UPDATE clients SET name = $2, notes = $3, archived = $4, industry_key = $6, analyze_from = $7::date, "
-            "audience = $8, updated_at = $5::timestamptz WHERE id = $1",
-            pqxx::params{id, name, notes, archived, to_timestamptz(audit.now()), industry, from, audience})
+    // Archiving changes the grouping only: its locations keep everything (D-102).
+    tx.exec("UPDATE clients SET name = $2, notes = $3, archived = $4, updated_at = $5::timestamptz WHERE id = $1",
+            pqxx::params{id, name, notes, archived, to_timestamptz(audit.now())})
         .no_rows();
     audit.record(archived != old_archived ? (archived ? "client.archive" : "client.restore") : "client.update", "client", id,
-                 {.before = client_json(old_name, old_notes, old_audience, old_archived, old_industry, old_from),
-                  .after = client_json(name, notes, audience, archived, industry, from)});
+                 {.before = client_json(old_name, old_notes, old_archived), .after = client_json(name, notes, archived)});
     return *get_client(tx, id);
 }
 
@@ -192,6 +160,7 @@ model::LocationList list_locations(pqxx::transaction_base& tx, const LocationFil
     db::Conditions where;
     if (filter.client_id) where.add(std::format("l.client_id = {}", where.bind(*filter.client_id)));
     if (filter.linked) where.add(*filter.linked ? "l.client_id IS NOT NULL" : "l.client_id IS NULL");
+    if (filter.enabled) where.add(std::format("l.enabled = {}", where.bind(*filter.enabled)));
     if (filter.access_status) where.add(std::format("l.access_status = {}", where.bind(*filter.access_status)));
     if (!filter.q.empty()) where.add(std::format("position(lower({}) in lower(l.title)) > 0", where.bind(filter.q)));
     return db::page<model::Location>(tx, location_select(), where, "lower(l.title), l.id", filter.page);
@@ -203,7 +172,8 @@ std::optional<model::Location> get_location(pqxx::transaction_base& tx, std::int
 
 Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const LocationPatch& patch) {
     const auto rows = tx.exec(
-        "SELECT l.client_id, c.name, l.review_poll_interval_s, l.posting_enabled FROM locations l LEFT JOIN clients c ON c.id = l.client_id "
+        "SELECT l.client_id, c.name, l.review_poll_interval_s, l.posting_enabled, l.enabled, l.access_status, l.industry_key, "
+        "to_char(l.analyze_from, 'YYYY-MM-DD'), l.audience FROM locations l LEFT JOIN clients c ON c.id = l.client_id "
         "WHERE l.id = $1 FOR UPDATE OF l",
         pqxx::params{id});
     if (rows.empty()) return not_found("location");
@@ -211,13 +181,25 @@ Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Write
     const auto old_client_name = rows[0][1].as<OptString>();
     const auto old_interval = rows[0][2].as<int>();
     const auto old_posting = rows[0][3].as<bool>();
+    const auto old_enabled = rows[0][4].as<bool>();
+    const bool accessible = rows[0][5].as<std::string>() == "active";
+    const auto old_industry = rows[0][6].as<OptString>();
+    const auto old_from = rows[0][7].as<OptString>();
+    const auto old_audience = rows[0][8].as<std::string>();
     const auto now = to_timestamptz(audit.now());
 
     // Check everything before writing anything: a refused request changes nothing.
-    const bool new_interval = patch.review_poll_interval_s && *patch.review_poll_interval_s != old_interval;
-    if (new_interval && (*patch.review_poll_interval_s < 60 || *patch.review_poll_interval_s > 86400)) {
-        return invalid("review_poll_interval_s must be between 60 and 86400.");
+    const auto interval = patch.review_poll_interval_s.value_or(old_interval);
+    if (interval != old_interval && (interval < 60 || interval > 86400)) return invalid("review_poll_interval_s must be between 60 and 86400.");
+    const auto industry = patch.industry_key.over(old_industry);
+    // Only an industry the knowledge base supports can be given; one the location already has may stay.
+    if (industry && industry != old_industry && !industry_supported(tx, *industry)) {
+        return invalid("\"industry_key\" must be the key of an industry in the knowledge base, or null.");
     }
+    const auto from = patch.analyze_from.over(old_from);
+    if (!is_day_or_none(from)) return invalid(std::string(kBadAnalyzeFrom));
+    const auto audience = patch.audience ? trimmed(*patch.audience) : old_audience;
+    if (text::length(audience) > kMaxAudienceLength) return invalid("\"audience\" may be up to 500 characters.");
     const auto& client_id = patch.client_id.value();
     const bool new_client = patch.client_id.given() && client_id != old_client;
     OptString new_client_name;
@@ -226,40 +208,59 @@ Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Write
         if (client.empty()) return conflict("client_not_found", "That client doesn't exist or is archived.");
         new_client_name = client[0][0].as<std::string>();
     }
+    const bool new_enabled = patch.enabled && *patch.enabled != old_enabled;
+    if (new_enabled && *patch.enabled && !accessible) {
+        return conflict("location_not_accessible", "The managing account no longer sees this location, so it can't be switched on.");
+    }
 
-    if (new_interval) {
-        tx.exec("UPDATE locations SET review_poll_interval_s = $2, updated_at = $3::timestamptz WHERE id = $1",
-                pqxx::params{id, *patch.review_poll_interval_s, now})
+    // What the location is told about itself, in one entry.
+    boost::json::object before, after;
+    const auto changed = [&](std::string_view name, boost::json::value was, boost::json::value is) {
+        if (was == is) return;
+        before[name] = std::move(was);
+        after[name] = std::move(is);
+    };
+    changed("review_poll_interval_s", old_interval, interval);
+    changed("industry_key", optional_json(old_industry), optional_json(industry));
+    changed("analyze_from", optional_json(old_from), optional_json(from));
+    changed("audience", boost::json::value(old_audience), boost::json::value(audience));
+    const bool new_fields = !after.empty();
+    if (new_fields) {
+        tx.exec("UPDATE locations SET review_poll_interval_s = $2, industry_key = $3, analyze_from = $4::date, audience = $5, "
+                "updated_at = $6::timestamptz WHERE id = $1",
+                pqxx::params{id, interval, industry, from, audience, now})
             .no_rows();
-        audit.record("location.update", "location", id,
-                     {.before = {{"review_poll_interval_s", old_interval}}, .after = {{"review_poll_interval_s", *patch.review_poll_interval_s}}});
+        audit.record("location.update", "location", id, {.before = std::move(before), .after = std::move(after)});
     }
     if (new_client) {
-        // The reply settings belong to the link (D-093): they describe the
-        // client's business, so they go when the client goes, and a location
-        // that gets a client starts with a copy of what that client's other
-        // locations use.
-        auto before = link_json(old_client, old_client_name);
-        auto after = link_json(client_id, new_client_name);
-        // Whatever row there is goes, also one a location without a client should not have had.
-        if (auto removed = remove_reply_settings(tx, id); !removed.is_null()) before["reply_settings"] = std::move(removed);
-        if (client_id) after["reply_settings_from"] = copy_reply_settings_on_link(tx, id, *client_id, audit.now());
-        // A newly linked location is polled at once, and fully synced at once
-        // if it never was.
-        tx.exec(R"sql(
-            UPDATE locations
-               SET client_id = $2, updated_at = $3::timestamptz,
-                   -- A person switched auto-posting on for the client it had. Another
-                   -- client, or none, starts with it off (D-070).
-                   auto_post_enabled = false, auto_post_five_star = false, auto_post_four_star = false,
-                   next_review_poll_at = CASE WHEN $2::bigint IS NULL THEN next_review_poll_at ELSE $3::timestamptz END,
-                   next_full_sync_at = CASE WHEN $2::bigint IS NULL OR reviews_full_synced_at IS NOT NULL
-                                            THEN next_full_sync_at ELSE $3::timestamptz END
-             WHERE id = $1)sql",
-                pqxx::params{id, client_id, now})
+        // Bookkeeping only (D-102): the location keeps its settings, switches, tests and reports.
+        tx.exec("UPDATE locations SET client_id = $2, updated_at = $3::timestamptz WHERE id = $1", pqxx::params{id, client_id, now})
             .no_rows();
         audit.record(client_id ? "location.link" : "location.unlink", "location", id,
-                     {.before = std::move(before), .after = std::move(after)});
+                     {.before = link_json(old_client, old_client_name), .after = link_json(client_id, new_client_name)});
+    }
+    if (new_enabled && *patch.enabled) {
+        // Polled and fully synced at once (D-037 point 2); nothing else is switched on and no pause is lifted.
+        tx.exec("UPDATE locations SET enabled = true, next_review_poll_at = $2::timestamptz, next_full_sync_at = $2::timestamptz, "
+                "updated_at = $2::timestamptz WHERE id = $1",
+                pqxx::params{id, now})
+            .no_rows();
+        audit.record("location.enable", "location", id, {.before = {{"enabled", false}}, .after = {{"enabled", true}}});
+    } else if (new_enabled) {
+        // Auto-posting goes with it, and a person switches it on again (D-070).
+        const auto auto_post = tx.exec("SELECT auto_post_enabled, auto_post_five_star, auto_post_four_star FROM locations WHERE id = $1",
+                                       pqxx::params{id})
+                                   .one_row();
+        tx.exec("UPDATE locations SET enabled = false, auto_post_enabled = false, auto_post_five_star = false, "
+                "auto_post_four_star = false, updated_at = $2::timestamptz WHERE id = $1",
+                pqxx::params{id, now})
+            .no_rows();
+        audit.record("location.disable", "location", id,
+                     {.before = {{"enabled", true},
+                                 {"auto_post_enabled", auto_post[0].as<bool>()},
+                                 {"auto_post_five_star", auto_post[1].as<bool>()},
+                                 {"auto_post_four_star", auto_post[2].as<bool>()}},
+                      .after = {{"enabled", false}, {"auto_post_enabled", false}, {"auto_post_five_star", false}, {"auto_post_four_star", false}}});
     }
 
     const bool new_posting = patch.posting_enabled && *patch.posting_enabled != old_posting;
@@ -272,7 +273,7 @@ Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Write
                      {.before = {{"posting_enabled", old_posting}}, .after = {{"posting_enabled", *patch.posting_enabled}}});
     }
 
-    if (!new_interval && !new_client && !new_posting) audit.nothing_changed();
+    if (!new_fields && !new_client && !new_enabled && !new_posting) audit.nothing_changed();
     return *get_location(tx, id);
 }
 
@@ -330,6 +331,8 @@ DiscoveryOutcome apply_discovery(pqxx::transaction_base& tx, const std::vector<S
                         $16::timestamptz, $16::timestamptz, $16::timestamptz)
                 RETURNING id)sql",
                 fields);
+            // Every location has its reply settings from the start, enabled or not (D-093, D-102).
+            write_default_reply_settings(tx, id, now);
             log.record("location.discovered", "location", id,
                        {.after = {{"title", title}, {"gbp_location_id", *location_id}, {"gbp_account_id", account_id}}});
             ++outcome.created;
@@ -370,7 +373,7 @@ DiscoveryOutcome apply_discovery(pqxx::transaction_base& tx, const std::vector<S
            SET missed_discoveries = missed_discoveries + 1, updated_at = $2::timestamptz
          WHERE access_status = 'active'
            AND gbp_location_id NOT IN (SELECT jsonb_array_elements_text($1::jsonb))
-        RETURNING id, title, missed_discoveries, client_id)sql",
+        RETURNING id, title, missed_discoveries, client_id, enabled)sql",
         pqxx::params{db::json_list(seen_ids), now_text});
     for (const auto& row : missing) {
         if (row[2].as<int>() < 2) continue;
@@ -381,12 +384,12 @@ DiscoveryOutcome apply_discovery(pqxx::transaction_base& tx, const std::vector<S
         log.record("location.access_lost", "location", id,
                    {.before = {{"access_status", "active"}}, .after = {{"access_status", "lost"}, {"title", row[1].as<std::string>()}}});
         // A location we work on that we can no longer reach is a system
-        // problem (FR-7); one we never linked to a client is not.
-        if (const auto client_id = row[3].as<std::optional<std::int64_t>>()) {
+        // problem (FR-7); one that is switched off is not.
+        if (row[4].as<bool>()) {
             emit(tx,
                  {.type = std::string(kEventSystemProblem),
                   .key = std::format("location:{}:access_lost:{}", id, now_text),
-                  .client_id = client_id,
+                  .client_id = row[3].as<std::optional<std::int64_t>>(),
                   .location_id = id,
                   .review_id = std::nullopt,
                   .subject = "Lost access to a location",
@@ -444,8 +447,7 @@ model::SystemStatus system_status(pqxx::transaction_base& tx, core::TimePoint no
     status.locations = db::rows_as<model::LocationSyncStatus>(
         tx, std::format(
                 R"sql(
-        SELECT l.id, l.title, c.name AS client_name, l.access_status,
-               l.access_status = 'active' AND c.id IS NOT NULL AND NOT c.archived AS syncing,
+        SELECT l.id, l.title, c.name AS client_name, l.access_status, l.enabled AND l.access_status = 'active' AS syncing,
                (SELECT count(*) FROM reviews r WHERE r.location_id = l.id AND r.removed_at IS NULL) AS review_count,
                {} AS reviews_polled_at, {} AS reviews_full_synced_at, l.last_sync_error, {} AS last_sync_error_at
           FROM locations l LEFT JOIN clients c ON c.id = l.client_id

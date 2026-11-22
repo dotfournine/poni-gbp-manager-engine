@@ -50,8 +50,9 @@ domain::ModelSetup model_of(const boost::json::value& json, std::optional<double
 }
 
 // The fingerprint of a client's location with these settings, built as
-// repo::go_live_setup builds it: the business is named by the voice or by
-// the client, and the writer is asked with the voice's temperature.
+// repo::go_live_setup builds it: the business is named by the voice or,
+// where its reply_name is empty, by the name the file holds for it, and the
+// writer is asked with the voice's temperature.
 domain::Fingerprint fingerprint_of(const boost::json::value& golden, const boost::json::value& client,
                                    const domain::ResolvedSettings& settings) {
     const auto& told = golden.at("industries").at(client.at("industry_key").as_string());
@@ -80,7 +81,7 @@ TEST(ReplySettingsGolden, TheCapturedSettingsGiveTheCapturedFingerprints) {
         // Complete settings are read as they are: nothing is added, dropped or reordered.
         EXPECT_EQ(boost::json::serialize(boost::json::value_from(*settings)), boost::json::serialize(resolved)) << name;
 
-        // A location without a client is not analyzed and has no configuration to test.
+        // When the file was captured, a location without a client had no configuration to test.
         const auto& location = row_with_id(golden, "locations", captured.at("location_id"));
         if (location.at("client_id").is_null()) {
             EXPECT_TRUE(captured.at("fingerprint").is_null()) << name;

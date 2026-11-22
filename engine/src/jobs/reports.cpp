@@ -92,7 +92,6 @@ asio::awaitable<void> Reporter::summarize(domain::ReportData& data) {
     request.messages = domain::summary_messages(data, domain::make_nonce());
     request.max_tokens = settings.max_output_tokens;
     request.extras = repo::extras_for(settings, settings.summary_provider);
-    request.client_id = data.client_id;
     const auto answer = co_await llm_.chat_json(std::move(request));
     if (!answer) {
         // The client retried what is worth retrying. A report without a summary is still a report.

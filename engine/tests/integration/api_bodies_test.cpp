@@ -157,24 +157,25 @@ TEST_F(Bodies, NullClearsWhatCanBeEmptyAndAMemberLeftOutStays) {
     EXPECT_EQ(json(patch(target, R"({"daily_cap": 7})")).at("time_zone").as_string(), "America/New_York");
     EXPECT_TRUE(json(patch(target, R"({"time_zone": null})")).at("time_zone").is_null());
 
-    // A client's industry and the day its analysis starts from.
-    ASSERT_EQ(patch(client_path(), R"({"industry_key": "wellness", "analyze_from": "2026-06-01"})").status, 200u);
-    const auto renamed = json(patch(client_path(), R"({"notes": "x"})"));
-    EXPECT_EQ(renamed.at("industry_key").as_string(), "wellness");
-    EXPECT_EQ(renamed.at("analyze_from").as_string(), "2026-06-01");
-    const auto cleared = json(patch(client_path(), R"({"industry_key": null, "analyze_from": null})"));
+    // A location's industry and the day its analysis starts from.
+    ASSERT_EQ(patch(spa_path(), R"({"industry_key": "wellness", "analyze_from": "2026-06-01"})").status, 200u);
+    const auto kept = json(patch(spa_path(), R"({"audience": "x"})"));
+    EXPECT_EQ(kept.at("industry_key").as_string(), "wellness");
+    EXPECT_EQ(kept.at("analyze_from").as_string(), "2026-06-01");
+    const auto cleared = json(patch(spa_path(), R"({"industry_key": null, "analyze_from": null})"));
     EXPECT_TRUE(cleared.at("industry_key").is_null());
     EXPECT_TRUE(cleared.at("analyze_from").is_null());
     // What can't be empty can't be cleared.
+    expect_refused(patch(spa_path(), R"({"audience": null})"), "audience", "a location's audience");
+    expect_refused(patch(spa_path(), R"({"enabled": null})"), "enabled", "a location's switch");
     expect_refused(patch(client_path(), R"({"notes": null})"), "notes", "a client's notes");
     expect_refused(patch(client_path(), R"({"archived": null})"), "archived", "a client's archived");
     // A day the calendar lacks is no day.
-    EXPECT_EQ(patch(client_path(), R"({"analyze_from": "2026-02-30"})").status, 400u);
-    EXPECT_EQ(patch(client_path(), R"({"analyze_from": "June"})").status, 400u);
-    EXPECT_EQ(post("/api/clients", R"({"name": "Another", "analyze_from": "2026-13-01"})").status, 400u);
-    const auto created = post("/api/clients", R"({"name": "Another", "analyze_from": null})");
-    ASSERT_EQ(created.status, 201u) << created.body;
-    EXPECT_TRUE(json(created).at("analyze_from").is_null());
+    EXPECT_EQ(patch(spa_path(), R"({"analyze_from": "2026-02-30"})").status, 400u);
+    EXPECT_EQ(patch(spa_path(), R"({"analyze_from": "June"})").status, 400u);
+    // A client has none of these any more (D-102).
+    expect_refused(patch(client_path(), R"({"industry_key": "wellness"})"), "industry_key", "a client's industry");
+    expect_refused(post("/api/clients", R"({"name": "Another", "analyze_from": null})"), "analyze_from", "a client's start day");
 
     // A location's client.
     EXPECT_EQ(json(patch(spa_path(), R"({"review_poll_interval_s": 600})")).at("client_id").as_int64(), spa_client_);

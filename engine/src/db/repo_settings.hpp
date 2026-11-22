@@ -26,10 +26,11 @@ namespace poni::repo {
 
 // ---- reply settings (D-093) ---------------------------------------------------
 //
-// One row per location that is linked to a client, complete: what the
-// location's replies are written with is that row and nothing else. A row
-// is written when the location is linked and deleted when the link goes
-// (repo::update_location), and replaced whole by a person's save.
+// One row per location, complete: what the location's replies are written
+// with is that row and nothing else. A row is written from the knowledge
+// base's defaults when the location is discovered, enabled or not (D-102),
+// and replaced whole by a person's save. Nothing copies settings between
+// locations, and a location's client has nothing to do with them.
 
 // The location's settings as they are stored. Nothing is merged in and
 // nothing is filled in: the error says that there is no row, or which part
@@ -38,25 +39,15 @@ std::expected<domain::ResolvedSettings, std::string> stored_reply_settings(pqxx:
 // That error as a sentence for a person.
 std::string unreadable_reply_settings(std::string_view why);
 
-// The same for the API. A location without a client has none (`location_not_linked`);
-// settings that can't be read are `reply_settings_incomplete`, with the reason.
+// The same for the API; settings that can't be read are `reply_settings_incomplete`, with the reason.
 Result<model::ReplySettings> reply_settings(pqxx::transaction_base& tx, std::int64_t location_id);
 
 // Replaces the location's settings with these, whole. Settings equal to the stored ones change nothing.
 Result<model::ReplySettings> replace_reply_settings(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
                                                     const domain::ResolvedSettings& settings);
 
-// Part of changing a location's client; the caller's audit entry takes what these return.
-//
-// A location that is linked to `client_id` starts with what that client's
-// other locations use: a copy of the settings of the earliest-linked one
-// (the oldest row, the lowest id among equals), or of the knowledge base's
-// defaults when there is none. Returns where the copy came from.
-boost::json::value copy_reply_settings_on_link(pqxx::transaction_base& tx, std::int64_t location_id, std::int64_t client_id,
-                                               core::TimePoint now);
-// A location that leaves its client loses its settings: a voice describes
-// one business. Returns what was removed; null if there was nothing.
-boost::json::value remove_reply_settings(pqxx::transaction_base& tx, std::int64_t location_id);
+// Part of discovering a location: it starts with the knowledge base's defaults, which the engine does not start without.
+void write_default_reply_settings(pqxx::transaction_base& tx, std::int64_t location_id, core::TimePoint now);
 
 // ---- pipeline settings ---------------------------------------------------------
 

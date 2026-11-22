@@ -172,7 +172,9 @@ Result<model::Report> create_report(pqxx::transaction_base& tx, audit::Writer& a
 }
 
 std::optional<ReportWork> load_report_work(pqxx::transaction_base& tx, std::int64_t report_id, core::TimePoint now) {
-    const auto rows = tx.exec("SELECT p.client_id, c.name, c.industry_key, p.period_start::text, p.period_end::text, p.time_zone, "
+    // The industry of the client's first location that has one, until a report is one location's.
+    const auto rows = tx.exec("SELECT p.client_id, c.name, (SELECT l.industry_key FROM locations l WHERE l.client_id = p.client_id "
+                              "AND l.industry_key IS NOT NULL ORDER BY l.id LIMIT 1), p.period_start::text, p.period_end::text, p.time_zone, "
                               "p.auto_send FROM reports p JOIN clients c ON c.id = p.client_id WHERE p.id = $1 AND p.status = 'building'",
                               pqxx::params{report_id});
     if (rows.empty()) return std::nullopt;

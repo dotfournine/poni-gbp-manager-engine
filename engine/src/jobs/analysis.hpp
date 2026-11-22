@@ -1,5 +1,5 @@
 // The analysis and drafting pipeline as jobs (architecture 4.1, steps 2-4):
-// every review of an analyzed client gets an analysis, and
+// every review of an enabled location with an industry gets an analysis, and
 // every review without a reply gets a draft and a route. A draft routed to
 // auto-post is scheduled for posting where a person switched auto-posting
 // on (D-069); every other draft waits for a person.
@@ -51,7 +51,7 @@ inline constexpr std::string_view kAnalyzePendingKind = "reviews.analyze_pending
 // instructions for a draft they have written again. Neither is part of what
 // a test covers, and a draft with instructions never auto-posts.
 
-// What a call is recorded under besides its client and location (llm_calls). Never sent.
+// What a call is recorded under besides its location (llm_calls). Never sent.
 struct AskedFor {
     std::optional<std::int64_t> review_id;
     std::optional<std::int64_t> go_live_run_id;

@@ -114,7 +114,6 @@ OpenedCase open_case_for_flags(pqxx::transaction_base& tx, std::int64_t review_i
 model::EscalationList list_escalations(pqxx::transaction_base& tx, const EscalationFilter& filter) {
     db::Conditions where;
     if (!filter.status.empty()) where.add(std::format("k.status = {}", where.bind(filter.status)));
-    if (filter.client_id) where.add(std::format("l.client_id = {}", where.bind(*filter.client_id)));
     if (filter.location_id) where.add(std::format("r.location_id = {}", where.bind(*filter.location_id)));
     if (filter.assignee_id) where.add(std::format("k.assignee_id = {}", where.bind(*filter.assignee_id)));
     auto page = db::page<model::Escalation>(tx, case_select(), where, "k.opened_at DESC, k.id DESC", filter.page, kReview);
