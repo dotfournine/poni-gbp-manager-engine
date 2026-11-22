@@ -2167,8 +2167,8 @@ paths:
       description: |
         Deletes a post that Google never had: a `draft` or a `rejected`
         draft (D-094). The audit entry keeps its content. Its uploaded
-        photo or video stays for other posts until the bucket's lifecycle
-        rule removes it. Every other status is refused with
+        photos and videos stay for other posts until the bucket's lifecycle
+        rule removes them. Every other status is refused with
         `local_post_not_open`, `failed` included: a send that was given up
         is still adopted when the post turns up at Google. A post that is at
         Google is removed there instead (`POST /api/local-posts/{id}/remove`).
@@ -2244,17 +2244,20 @@ paths:
         400 that names the member. To change those, copy the post and
         remove it.
 
-        `media_id` names an upload. The post's own (`LocalPost.media_id`)
-        keeps the photo or video as it is, another one replaces it, and
-        null takes the post's upload away. A post made at Google has no
-        upload: null leaves what it shows at Google untouched.
+        `media_ids` names uploads, in the order the post shows them. The
+        post's own list (`LocalPost.media_ids`) keeps its photos and videos
+        as they are; any other list, a new order included, replaces all of
+        them at Google, and `[]` takes them away. A post made at Google has
+        no uploads: `[]` leaves what it shows at Google untouched, and a
+        list of uploads replaces everything it shows there, Google's own
+        copies of files included (D-101).
 
         The content is normalized and checked as a draft's is, and the
         checks are stored with the edit: an edit with a failed check is
         saved but can't be approved. Two checks always pass for an edit,
         because an edit does not send what they are about:
         `scheduled_in_future` and `recurrence_end`. `media_usable` looks at
-        an upload only when it is not the post's own.
+        the uploads only when they are not the post's own.
       tags: [local-posts]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -2401,9 +2404,9 @@ paths:
         `status_reason` names each thing: an alert becomes an update, a
         button outside the six a draft has is dropped, a time to publish at
         that has passed is dropped. A post written here keeps its uploaded
-        photo or video (`media_id`). A post made at Google brings no photo
-        and no video: the engine fetches nothing from Google, and the reason
-        says to upload the file again. The checks run on the copy as on any
+        photos and videos (`media_ids`). A post made at Google brings no
+        photo and no video: the engine fetches nothing from Google, and the
+        reason says to upload the files again. The checks run on the copy as on any
         draft.
 
         The copy's `copied_from_id` names the post it was copied from, and
@@ -2554,7 +2557,12 @@ paths:
         on the short side. It puts the bytes, unchanged, into the public
         bucket under a random name (`p/` and 32 random bytes): Google takes
         a post's media only from a public address. The answer's `id` goes
-        into a draft's `media_id`; one upload can serve several posts.
+        into a draft's `media_ids`; one upload can serve several posts.
+
+        One file per request. A post with several photos or videos uploads
+        each of them, in parallel if the client likes, and lists the ids in
+        the order the post shows them. The engine writes the file to its
+        own disk while it reads and checks it, not to memory (D-101).
       tags: [local-posts]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -2600,6 +2608,15 @@ paths:
                 $ref: "#/components/schemas/Error"
         "502":
           description: The file could not be put into the public bucket (`storage_failed`). Nothing was recorded.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: |
+            The engine could not take the file to disk (`no_room`, D-101): no file could be
+            made in its temporary folder, or the one it wrote could not be read. Nothing was
+            stored; the same upload may be sent again.
           content:
             application/json:
               schema:
@@ -7209,7 +7226,7 @@ components:
       enum: [summary, call_to_action, event, offer, media, language_code]
       description: |
         A part of a post that an edit can change, by the name of its member
-        in `LocalPostContent` (`media` for `media_id`).
+        in `LocalPostContent` (`media` for `media_ids`).
     LocalPostEdit:
       type: object
       description: |
@@ -7238,10 +7255,10 @@ components:
           type: array
           description: |
             What the post would show with the edit applied, for the person
-            who approves it: the edit's uploaded photo or video where the
-            edit changes the media (empty where it takes the upload away),
-            and what the post shows now (`LocalPost.media`) where it does
-            not.
+            who approves it: the edit's uploaded photos and videos, in
+            order, where the edit changes the media (empty where it takes
+            them away), and what the post shows now (`LocalPost.media`)
+            where it does not.
           items:
             $ref: "#/components/schemas/LocalPostMediaItem"
         checks:
@@ -7368,7 +7385,7 @@ components:
         number in the text) are checks, reported in `LocalPost.checks`:
         they don't refuse a draft, they block its approval.
       additionalProperties: false
-      required: [topic_type, summary, language_code, call_to_action, event, offer, media_id, scheduled_time]
+      required: [topic_type, summary, language_code, call_to_action, event, offer, media_ids, scheduled_time]
       properties:
         topic_type:
           $ref: "#/components/schemas/LocalPostTopicType"
@@ -7396,10 +7413,18 @@ components:
           oneOf:
             - $ref: "#/components/schemas/LocalPostOffer"
             - type: "null"
-        media_id:
-          type: [integer, "null"]
-          format: int64
-          description: The uploaded photo or video (`POST /api/local-post-media`); null for none. One per post, the API's limit.
+        media_ids:
+          type: array
+          maxItems: 10
+          uniqueItems: true
+          description: |
+            The uploaded photos and videos (`POST /api/local-post-media`),
+            in the order the post shows them; empty for none. At most 10,
+            photos and videos mixed, each at most once (D-101). More, or one
+            twice, is a 400.
+          items:
+            type: integer
+            format: int64
         scheduled_time:
           type: [string, "null"]
           format: date-time
@@ -7441,7 +7466,7 @@ components:
         - call_to_action
         - event
         - offer
-        - media_id
+        - media_ids
         - scheduled_time
         - media
         - checks
@@ -7512,18 +7537,21 @@ components:
           oneOf:
             - $ref: "#/components/schemas/LocalPostOffer"
             - type: "null"
-        media_id:
-          type: [integer, "null"]
-          format: int64
-          description: The uploaded file of a post written here; null for none, and for a post made at Google.
+        media_ids:
+          type: array
+          maxItems: 10
+          description: The uploaded files of a post written here, in order; empty for none, and for a post made at Google.
+          items:
+            type: integer
+            format: int64
         scheduled_time:
           type: [string, "null"]
           format: date-time
         media:
           type: array
           description: |
-            What the post shows. At most one item for a post written here;
-            a post made in Google's interface can have several photos.
+            What the post shows, in order: Google's copies of its files once
+            Google has the post, the uploads before that. Up to 10 items.
           items:
             $ref: "#/components/schemas/LocalPostMediaItem"
         checks:
