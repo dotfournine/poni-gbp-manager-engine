@@ -30,7 +30,7 @@ The engine owns every external integration (D-003). Its API has two clients, eac
 
 ### 2.1 Process and layers
 
-One binary, `poni-gbp-engine`, a daemon with no commands (D-079): API, scheduler, job workers and Pub/Sub subscriber. At start it checks that no migration is pending, a knowledge base is seeded and the database belongs to the Google it is configured for (D-087). Migrations and seeding are `poni-tools` (section 9). A signed-in person connects the managing account and the sending mailbox with the "Connect" buttons of the status page (`http/connect`). One `io_context` thread runs all coroutines and database calls go to the `Database`'s pool, so engine state needs no locks. A rate limiter per external API is shared by every caller of that API, because Google's quotas are per project. The layers (`core`, `db`, `jobs`, `connectors`, `domain`, `http`) are described in CLAUDE.md's "Layout".
+One binary, `poni-gbp-engine`, a daemon with no commands (D-079): API, scheduler, job workers and Pub/Sub subscriber. At start it checks that no migration is pending, a knowledge base is seeded and the database belongs to the Google it is configured for (D-087). Migrations and seeding are `poni-tools` (section 9). A signed-in person connects the managing account and the sending mailbox with the "Connect" buttons of the status page (`http/connect`); each is the Google account that person signs in with, and the status page shows its address (D-100). One `io_context` thread runs all coroutines and database calls go to the `Database`'s pool, so engine state needs no locks. A rate limiter per external API is shared by every caller of that API, because Google's quotas are per project. The layers (`core`, `db`, `jobs`, `connectors`, `domain`, `http`) are described in CLAUDE.md's "Layout".
 
 ### 2.2 Jobs
 
@@ -50,13 +50,13 @@ A job is a row in `jobs` (`run_at`, backoff, idempotency keys, `FOR UPDATE SKIP 
 
 | Service | Used for | Auth |
 | ------- | -------- | ---- |
-| GBP Account Management, Business Information (v1) | Accounts and locations | OAuth of the managing account, `business.manage` |
+| GBP Account Management, Business Information (v1) | Accounts and locations | OAuth of the managing account, `business.manage` (and `openid email` at connection, to learn its address, D-100) |
 | Google My Business API (v4) | Reviews (list, batch get, reply); local posts (list, get, create, delete, and the update of the fields an approved edit names) | Same |
 | Business Profile Performance API (v1) | Daily metrics and monthly search keywords, read for a report or post help | Same |
 | Cloud Pub/Sub (REST) | Review notifications, by pull | Locally gcloud application-default credentials; in production the VM's service account |
 | Cloud Storage (JSON API) | Report pages and post media in one public bucket; uploads only | As Pub/Sub |
 | LLM providers | Analysis, replies, go-live judge, report summaries, post help | An API key per provider |
-| Gmail API | Notifications and reports | OAuth of the sending mailbox, `gmail.send` only (D-066) |
+| Gmail API | Notifications and reports | OAuth of the sending mailbox, `gmail.send` (and `openid email` at connection, D-100) (D-066) |
 | Apple Push Notification service | Push to the phone app, over HTTP/2: one POST per device (D-097) | A provider token (ES256 JWT) signed with the APNs auth key from `PONI_APNS_KEY` |
 | Google OpenID Connect | Sign-in, dashboard and app | The engine's OAuth client |
 
@@ -65,7 +65,7 @@ A job is a row in `jobs` (`run_at`, backoff, idempotency keys, `FOR UPDATE SKIP 
 - **Pub/Sub over REST**, not `google-cloud-cpp`, which brings gRPC, Protobuf and Abseil for two calls (D-012). It runs only where a subscription is configured.
 - **IDs.** v4 review names include the account ID; account and location IDs are stored apart, so a new managing account only rebinds the account.
 - **LLM.** `llm::Client` speaks OpenAI-compatible and Anthropic's Messages API, per provider (D-010, D-059). Five tasks, each with its provider and model: `analyzer`, `writer`, `judge`, `summary`, `posts`. Prices come from the knowledge base.
-- **Email** through Gmail (D-026); the sender is `PONI_EMAIL_FROM`.
+- **Email** through Gmail (D-026); the sender is the mailbox connected on the status page, at the address its sign-in named (D-100).
 
 ## 4. Key flows
 
