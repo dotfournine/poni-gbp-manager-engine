@@ -210,7 +210,7 @@ PONI runs Google Business Profiles (GBP) for its clients. The system automates r
 - PONI staff only. Clients never sign in: they get emails and report links. Nothing should rule out a client-facing product later.
 - One role: every signed-in user may do everything; every route has a `RouteInfo`, so roles can be added without touching handlers.
 - Google sign-in only, for Workspace accounts on `xvisionmediaus.com` and `xvisionus.com` (D-033, D-053); no passwords stored. A user is created on first sign-in (D-040) and disabled in Google Workspace.
-- Every change is audited: who (a person, or the system and its component), what, which object, when, before and after.
+- Every change is audited: who (a person, or the system and its component), what, which object and its location (D-103), when, before and after.
 
 ### 12.2 Scale and markets
 

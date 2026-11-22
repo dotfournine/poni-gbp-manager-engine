@@ -298,12 +298,15 @@ struct AuditEntry {
     std::string action;
     std::string object_type;
     std::string object_id;
+    std::optional<std::int64_t> location_id;  // D-103
+    std::optional<std::string> location_title;
     boost::json::value before;
     boost::json::value after;
     std::optional<std::string> ip;
 };
 BOOST_DESCRIBE_STRUCT(AuditEntry, (),
-                      (id, occurred_at, actor_type, actor, action, object_type, object_id, before, after, ip))
+                      (id, occurred_at, actor_type, actor, action, object_type, object_id, location_id, location_title, before,
+                       after, ip))
 
 using AuditList = Paged<AuditEntry>;
 

@@ -50,15 +50,23 @@ struct Entry {
     std::string object_id;
     boost::json::value before = nullptr;
     boost::json::value after = nullptr;
+    // The location the entry is about (D-103). Left out, record() reads it from
+    // the object as it is now; name it only where the object is already gone (a delete).
+    std::optional<std::int64_t> location_id = std::nullopt;
 };
 
 // The values before and after, for the short form of Writer::record.
 struct Change {
     boost::json::value before = nullptr;
     boost::json::value after = nullptr;
+    std::optional<std::int64_t> location_id = std::nullopt;  // as in Entry
 };
 
-// Inserts one entry on `tx`.
+// Inserts one entry on `tx`, with the location of the object it is about
+// (D-103): a `location` is its own, and a review, draft, escalation, local
+// post, report, share link, schedule, go-live run or notification rule names
+// its location; anything else has none. A check on the table refuses an entry
+// of the first kinds without one.
 void record(pqxx::transaction_base& tx, const Actor& actor, const Entry& entry, core::TimePoint now);
 
 class Writer {
@@ -75,7 +83,8 @@ public:
                 .object_type = std::move(object_type),
                 .object_id = std::to_string(id),
                 .before = std::move(change.before),
-                .after = std::move(change.after)});
+                .after = std::move(change.after),
+                .location_id = change.location_id});
     }
     // The request turned out to change nothing (not found, same values), so no entry is due.
     void nothing_changed() { nothing_changed_ = true; }

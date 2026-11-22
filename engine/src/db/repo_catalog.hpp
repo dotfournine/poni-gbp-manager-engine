@@ -128,6 +128,7 @@ struct AuditFilter {
     std::string object_type;
     std::string object_id;
     std::string actor;  // part of the actor label
+    std::optional<std::int64_t> location_id;
     db::Page page;
 };
 

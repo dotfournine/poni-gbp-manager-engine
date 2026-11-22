@@ -155,6 +155,7 @@ void add_api_routes(Router& router, db::Database& db, const core::Clock& clock, 
                    filter.object_type = query.get("object_type").value_or("");
                    filter.object_id = query.get("object_id").value_or("");
                    filter.actor = query.get("actor").value_or("");
+                   filter.location_id = query.integer("location_id", bad);
                    if (!read_page(query, filter.page, bad)) co_return bad_query();
                    co_return ok(co_await api.query([filter](pqxx::work& tx) { return repo::list_audit(tx, filter); }));
                });

@@ -4,23 +4,6 @@ The engine's backlog: what is not built or not done yet, by area, the most urgen
 
 An item is removed when it ships. A change of direction is proposed to the owner and recorded as a new entry in [decisions.md](decisions.md); this file then follows it. Each item says what and why, what done looks like, and which rules in `CLAUDE.md` and which decisions it touches. "The owner's" marks an item only the owner can do or decide.
 
-## Next: the audit log
-
-### The audit log names its location
-
-**What and why.** D-103. Staff read the log of one store; an entry says which location it is about, and the log is filtered by it. The contract is changed (`AuditEntry.location_id`, `location_title`, the `location_id` filter); the engine does not serve them yet. D-102 gave reports, schedules and go-live runs one location each.
-
-**What to build** (D-103):
-
-- **Migration 0009.** `audit_log.location_id bigint NULL REFERENCES locations`, an index on `(location_id, occurred_at DESC, id DESC)`, and a check that an entry whose `object_type` is `review`, `draft`, `escalation`, `local_post`, `report`, `report_share_link`, `report_schedule` or `go_live_run`, or `location` with an `object_id`, names a location. Existing rows are not touched (the append-only trigger stays), so the check is added `NOT VALID`.
-- **Engine.** `audit::Entry` and the short form of `audit::Writer::record` take the location, and every place that writes an entry passes it; `audit::record` inserts it. `repo::list_audit` reads `location_id` and the title through a `LEFT JOIN locations`, and filters by `location_id` (`repo::AuditFilter`, the route in `http/api.cpp`). `model::AuditEntry` gains both members.
-- **Tests.** An integration test per kind of object in the list above that its entries name the object's location, and one for the filter.
-- **The other side.** Once merged, a message to the web app's builder and to the phone app's side: the two new members of `AuditEntry` and the new filter.
-
-**Done when:** every entry about a location written after the migration names it, the log can be read for one location, and the macOS tests, the Linux container build and the contract check pass.
-
-**Touches:** D-103, D-102, D-039; the API rules in `CLAUDE.md`.
-
 ## Next: the phone app
 
 The app's requests are in the app repository (`poni-gbp-manager-ios/docs/design/engine-requests-app-v1.md`). Sign-in with a one-time code and PKCE, the bearer token, the developer sign-in that returns a token, and sign-out of a token are built (D-095, migration `0002_app_sign_in.sql`). Copying a post, deleting a draft and the list filters are built in the form D-094 settled; replacing a post in one step was declined there. The second round's list order, `google_state=none` and the link from a copy to its source are built (D-098), and so are a location's time zone and the time of its last failed read of posts, a report's average rating and response rate, an escalation's deliveries by its id, and the contract's account of what a push says (D-098 points 6 to 9). The app's sign-in answers the attempt limit with a redirect to the app (D-098 point 10). Push is settled by D-097. Editing a post at Google in place is built (D-099, migration `0005_local_post_edits.sql`), from Google's documentation and without a trial: the first real edits are watched (see "The first real local posts").

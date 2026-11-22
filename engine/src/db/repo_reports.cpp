@@ -470,7 +470,7 @@ Result<void> delete_schedule(pqxx::transaction_base& tx, audit::Writer& audit, s
     if (!before) return not_found("report schedule");
     // Its reports stay; they only forget which schedule asked for them.
     tx.exec("DELETE FROM report_schedules WHERE id = $1", pqxx::params{id});
-    audit.record("report_schedule.delete", "report_schedule", id, {.before = schedule_json(*before)});
+    audit.record("report_schedule.delete", "report_schedule", id, {.before = schedule_json(*before), .location_id = before->location_id});  // the row is gone
     return {};
 }
 

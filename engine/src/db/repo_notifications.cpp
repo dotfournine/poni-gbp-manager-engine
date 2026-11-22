@@ -266,7 +266,7 @@ Result<void> delete_rule(pqxx::transaction_base& tx, audit::Writer& audit, std::
     const auto before = get_rule(tx, id);
     if (!before) return not_found("notification rule");
     tx.exec("DELETE FROM notification_rules WHERE id = $1", pqxx::params{id}).no_rows();
-    audit.record("notification_rule.delete", "notification_rule", id, {.before = rule_json(*before)});
+    audit.record("notification_rule.delete", "notification_rule", id, {.before = rule_json(*before), .location_id = before->location_id});  // the row is gone
     return {};
 }
 
