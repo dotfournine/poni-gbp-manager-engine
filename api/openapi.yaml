@@ -627,6 +627,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+    delete:
+      operationId: deleteClient
+      summary: Delete a client
+      description: |
+        Removes the client, archived or not (D-102). Its locations are
+        unlinked (`client_id` becomes null) and nothing else about them
+        changes: whether they are enabled, their reply settings, switches,
+        go-live tests and reports stay as they are. The audit log keeps the
+        client's name, notes and `location_ids`, and an unlink entry for
+        each location.
+      tags: [clients]
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "204":
+          description: The client is gone.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 
   /api/locations:
     get:

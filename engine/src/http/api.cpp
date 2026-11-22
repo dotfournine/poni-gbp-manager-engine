@@ -55,6 +55,15 @@ void add_api_routes(Router& router, db::Database& db, const core::Clock& clock, 
                    }));
                });
 
+    router.add(verb::delete_, "/api/clients/{id}", {Access::user, "clients.delete"},
+               [api](const Request& request) -> asio::awaitable<Response> {
+                   const auto id = path_id(request);
+                   if (!id) co_return not_found("client");
+                   co_return respond(co_await api.change(request, [id = *id](pqxx::work& tx, audit::Writer& audit) {
+                       return repo::delete_client(tx, audit, id);
+                   }), Response::no_content());
+               });
+
     // ---- locations ---------------------------------------------------------------
 
     router.add(verb::get, "/api/locations", {Access::user, "locations.list"},

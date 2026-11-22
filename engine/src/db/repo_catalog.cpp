@@ -12,6 +12,7 @@
 #include "jobs/queue.hpp"
 
 #include <boost/json/serialize.hpp>
+#include <boost/json/value_from.hpp>
 
 #include <format>
 
@@ -152,6 +153,22 @@ Result<model::Client> update_client(pqxx::transaction_base& tx, audit::Writer& a
     audit.record(archived != old_archived ? (archived ? "client.archive" : "client.restore") : "client.update", "client", id,
                  {.before = client_json(old_name, old_notes, old_archived), .after = client_json(name, notes, archived)});
     return *get_client(tx, id);
+}
+
+Result<void> delete_client(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id) {
+    // The client's row is the lock: a location can't be linked to it while it goes.
+    if (tx.exec("SELECT 1 FROM clients WHERE id = $1 FOR UPDATE", pqxx::params{id}).empty()) return not_found("client");
+    const auto client = *get_client(tx, id);
+    for (const auto location : client.location_ids) {
+        if (auto unlinked = update_location(tx, audit, location, {.client_id = std::nullopt}); !unlinked) return std::unexpected(unlinked.error());
+    }
+    tx.exec("DELETE FROM clients WHERE id = $1", pqxx::params{id}).no_rows();
+    audit.record("client.delete", "client", id,
+                 {.before = {{"name", client.name},
+                             {"notes", client.notes},
+                             {"archived", client.archived},
+                             {"location_ids", boost::json::value_from(client.location_ids)}}});
+    return {};
 }
 
 // ---- locations -----------------------------------------------------------------

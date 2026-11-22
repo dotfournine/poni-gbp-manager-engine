@@ -47,6 +47,10 @@ model::ClientList list_clients(pqxx::transaction_base& tx, const ClientFilter& f
 std::optional<model::Client> get_client(pqxx::transaction_base& tx, std::int64_t id);
 Result<model::Client> create_client(pqxx::transaction_base& tx, audit::Writer& audit, const NewClient& client);
 Result<model::Client> update_client(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const ClientPatch& patch);
+// Removes a client, archived or not. Its locations are unlinked through
+// update_location and nothing else about them changes (D-102); the entry
+// keeps what the client was.
+Result<void> delete_client(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id);
 
 // ---- locations -----------------------------------------------------------------
 

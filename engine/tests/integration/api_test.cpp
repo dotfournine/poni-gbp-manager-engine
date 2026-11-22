@@ -89,9 +89,55 @@ TEST_F(Api, ClientRequestsAreValidated) {
     EXPECT_EQ(get("/api/clients?page=0", browser_).status, 400u);
     EXPECT_EQ(get("/api/clients?per_page=101", browser_).status, 400u);
     EXPECT_EQ(get("/api/clients?archived=maybe", browser_).status, 400u);
-    EXPECT_EQ(del("/api/clients/1").status, 405u) << "nothing can be deleted through the API";
+    EXPECT_EQ(del("/api/clients/999").status, 404u);
+    EXPECT_EQ(del("/api/clients/abc").status, 404u);
     EXPECT_EQ(count("clients"), 1);
     EXPECT_EQ(count("audit_log WHERE object_type = 'client'"), 1);
+}
+
+// A client is bookkeeping: deleting it unlinks its locations and changes nothing else about them (D-102).
+TEST_F(Api, DeletingAClientUnlinksItsLocationsAndChangesNothingElse) {
+    discover_spa_and_buffet();
+    const auto client = json(post("/api/clients", R"({"name": "LU DREAM SPA", "notes": "Two shops"})")).at("id").as_int64();
+    const auto spa = location_id("9001");
+    const auto buffet = location_id("9002");
+    ASSERT_EQ(patch(std::format("/api/locations/{}", spa), std::format(R"({{"client_id": {}, "enabled": true, "industry_key": "wellness"}})", client))
+                  .status,
+              200u);
+    ASSERT_EQ(patch(std::format("/api/locations/{}", buffet), std::format(R"({{"client_id": {}}})", client)).status, 200u);
+    ASSERT_EQ(save_settings(spa, "voice", R"({"reply_name": "Willow Moon Head Spa"})").status, 200u);
+    // The location and its settings, without the client they name.
+    const auto without_the_client = [&](std::int64_t location) {
+        boost::json::object out{{"location", read(std::format("/api/locations/{}", location))}, {"settings", read(settings_path(location))}};
+        for (auto& [part, value] : out) {
+            value.as_object().erase("client_id");
+            value.as_object().erase("client_name");
+        }
+        return out;
+    };
+    const auto spa_before = without_the_client(spa);
+    const auto buffet_before = without_the_client(buffet);
+    const auto target = std::format("/api/clients/{}", client);
+    EXPECT_EQ(call(verb::delete_, target, {.cookie = browser_.cookie, .csrf = ""}).status, 403u) << "a change needs the CSRF token";
+
+    const auto deleted = del(target);
+    EXPECT_EQ(deleted.status, 204u);
+    EXPECT_TRUE(deleted.body.empty());
+    EXPECT_EQ(count("clients"), 0);
+    EXPECT_EQ(count("locations WHERE client_id IS NOT NULL"), 0);
+    EXPECT_EQ(without_the_client(spa), spa_before);
+    EXPECT_EQ(without_the_client(buffet), buffet_before);
+    EXPECT_TRUE(read(std::format("/api/locations/{}", spa)).at("enabled").as_bool());
+    const auto entry = read("/api/audit-log?action=client.delete").at("items").at(0);
+    EXPECT_EQ(entry.at("object_id").as_string(), std::to_string(client));
+    EXPECT_EQ(entry.at("actor").as_string(), "staff@xvisionmediaus.com");
+    EXPECT_EQ(entry.at("before").at("name").as_string(), "LU DREAM SPA");
+    EXPECT_EQ(entry.at("before").at("notes").as_string(), "Two shops");
+    EXPECT_EQ(boost::json::serialize(entry.at("before").at("location_ids")), std::format("[{},{}]", spa, buffet));
+    EXPECT_EQ(read("/api/audit-log?action=location.unlink").at("total").as_int64(), 2) << "one unlink per location";
+
+    EXPECT_EQ(get(target, browser_).status, 404u);
+    EXPECT_EQ(del(target).status, 404u);
 }
 
 // ---- locations -------------------------------------------------------------------

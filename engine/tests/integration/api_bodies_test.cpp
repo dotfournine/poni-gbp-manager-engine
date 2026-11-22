@@ -91,6 +91,7 @@ const std::vector<std::string> kRoutesWithoutBody = {
     "POST /api/local-post-media",  // the body is the file
     "POST /api/locations/{id}/local-posts/refresh",
     "POST /api/locations/{id}/local-post-ideas",
+    "DELETE /api/clients/{id}",
     "DELETE /api/notification-rules/{id}",
     "DELETE /api/devices/{id}",
     "DELETE /api/report-schedules/{id}",
