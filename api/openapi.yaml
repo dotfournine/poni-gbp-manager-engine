@@ -3309,6 +3309,15 @@ paths:
           description: Part of the actor (an email address, or `system:`).
           schema:
             type: string
+        - name: location_id
+          in: query
+          description: |
+            Only the entries about this location (`AuditEntry.location_id`).
+            Entries written before the engine recorded a location have none
+            and are not found by this filter.
+          schema:
+            type: integer
+            format: int64
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PerPage"
       responses:
@@ -4225,7 +4234,7 @@ components:
     AuditEntry:
       type: object
       additionalProperties: false
-      required: [id, occurred_at, actor_type, actor, action, object_type, object_id, before, after, ip]
+      required: [id, occurred_at, actor_type, actor, action, object_type, object_id, location_id, location_title, before, after, ip]
       properties:
         id:
           type: integer
@@ -4261,6 +4270,24 @@ components:
             like the actions do.
         object_id:
           type: string
+        location_id:
+          type: [integer, "null"]
+          format: int64
+          description: |
+            The location the entry is about, recorded when the entry was
+            written (D-103), so it stays when the object is deleted later.
+            For a `location` it is that location; for a `review`, `draft`,
+            `escalation`, `local_post`, `report`, `report_share_link`,
+            `report_schedule` and `go_live_run` it is the object's location;
+            for a `notification_rule` it is the rule's location, or null for
+            a rule of every location. Null for an entry about no one
+            location (a `client`, `system_settings`, `ai_settings`, a
+            `user`, a `device`, a `credential`, a `local_post_media`, a
+            `notification_delivery`, `location.discovery_requested`), and for
+            entries written before the engine recorded a location.
+        location_title:
+          type: [string, "null"]
+          description: The location's title as it is now, for display; null when `location_id` is.
         before:
           description: The values before the change; null when there are none.
         after:
