@@ -2,7 +2,7 @@
 
 Automates Google Business Profile (GBP) review replies, client reports and local posts for PONI, a marketing agency. One developer (the owner) builds it with AI help.
 
-This repository (`dotfournine/poni-gbp-manager-engine`) holds the engine, its tools, the knowledge base, the API contract and the deployment files. Two clients of the API live in repositories of their own: the React-admin dashboard and the iOS app (`poni-gbp-manager-ios`).
+This repository (`dotfournine/poni-gbp-manager-engine`) holds the engine, its tools, the knowledge base, the API contract and the deployment files. Two clients of the API are built outside this repository: the web app (the dashboard; its builder fetches `api/openapi.yaml` from `main`, and the old React-admin dashboard repository is no longer maintained) and the iOS app (`poni-gbp-manager-ios`).
 
 `docs/` is the source of truth: `architecture.md` (the system, with the requirements FR-1 onward), `decisions.md` (the decisions in force, D-001 onward), `work-items.md` (what is left to build) and `runbook-google-mock.md`. Read the relevant part before designing anything. A change of direction is proposed to the owner first and then recorded as a new entry in `docs/decisions.md`; a superseded entry becomes a one-line pointer to the one that replaced it. A work item is removed from `work-items.md` when it ships. C++23 with Boost is settled (D-001, D-002).
 
@@ -119,7 +119,7 @@ Before calling work done: the macOS tests and the Linux container build (`linux-
 
 1. Change `api/openapi.yaml`; `npm run lint` in `api/`.
 2. Implement in the engine. Response structs use Boost.Describe and must match the schema.
-3. The dashboard, in its own repository, generates its client from this file (`npm run generate:api` there); the phone app reads it too. Tell their side about the change.
+3. The web app's builder and the phone app read this file from `main`. Once the change is merged, tell both sides what changed in a message they can act on: the members renamed, added or removed, the new answers, and what the client must do.
 4. `npm run check:contract` against the running engine.
 
 **Responses stay compatible with the phone app (D-095 point 8).** From the app's first release, removing or renaming a member of a response, or narrowing an enum a response carries, is a breaking change: it is proposed to the owner and told to the app's side before it ships. Adding a member or an enum value is not, and the app ignores what it does not know. A request body is the other way round (D-092: a member the engine does not know is a 400), so the engine is released before the app version that sends a new request member. There is no API version route. `X-CSRF-Token` is an optional parameter in the spec because a bearer token needs none; a cookie session without it is still a 403.
@@ -176,7 +176,7 @@ Every route is added with a `RouteInfo`: who may call it (`Access::user` unless 
 
 ## Clients of the API
 
-- The dashboard and the phone app are in repositories of their own. What the engine relies on from them: the dashboard always sends `X-CSRF-Token` with a changing request; an approval sends the content exactly as the client got it from the engine; a photo or video is sent as the file the person picked. Review text, a post's text and what a model wrote are rendered as plain text by both.
+- The web app (the dashboard) and the phone app are built outside this repository, from `api/openapi.yaml`. What the engine relies on from them: the dashboard always sends `X-CSRF-Token` with a changing request; an approval sends the content exactly as the client got it from the engine; a photo or video is sent as the file the person picked. Review text, a post's text and what a model wrote are rendered as plain text by both.
 
 ## Git
 
