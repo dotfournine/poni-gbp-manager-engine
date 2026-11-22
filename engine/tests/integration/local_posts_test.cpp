@@ -88,10 +88,11 @@ TEST_F(LocalPosts, ADraftIsShownWithItsContentAndItsAuthor) {
     EXPECT_EQ(post.at("language_code").as_string(), "en");
     EXPECT_EQ(post.at("created_by").as_string(), "staff@xvisionmediaus.com");
     for (const auto* nothing : {"status_reason", "google_state", "google_name", "search_url", "call_to_action", "event", "offer",
-                                "media_id", "scheduled_time", "edit", "edited_by", "decided_by", "decided_at", "sent_at",
+                                "scheduled_time", "edit", "edited_by", "decided_by", "decided_at", "sent_at",
                                 "removal_requested_by", "removal_requested_at", "removed_at", "google_created_at", "synced_at"}) {
         EXPECT_TRUE(post.at(nothing).is_null()) << nothing;
     }
+    EXPECT_TRUE(post.at("media_ids").as_array().empty());
     EXPECT_TRUE(post.at("media").as_array().empty());
     EXPECT_TRUE(post.at("checks").as_array().empty());
 
@@ -152,17 +153,17 @@ TEST_F(LocalPosts, APostMadeAtGoogleShowsWhatGoogleHasIncludingSeveralPhotos) {
     EXPECT_TRUE(post.at("call_to_action").at("url").is_null());
     ASSERT_EQ(post.at("media").as_array().size(), 3u) << "Google's own interface allows several photos";
     EXPECT_EQ(post.at("media").as_array()[2].at("url").as_string(), "https://lh3.googleusercontent.com/p/c");
-    EXPECT_TRUE(post.at("media_id").is_null());
+    EXPECT_TRUE(post.at("media_ids").as_array().empty());
     EXPECT_FALSE(post.as_object().contains("raw")) << "the payload stays in the database";
 }
 
 TEST_F(LocalPosts, ADraftsUploadedPhotoIsShownFromThePublicBucket) {
     const auto media = insert_upload({});
     auto content = test::standard("New room.");
-    content.media_id = media;
+    content.media_ids = {media};
     const auto id = insert_local_post(spa_, "origin, status, content", "'system', 'draft', " + test::content_sql(content));
     const auto post = read("/api/local-posts/" + std::to_string(id));
-    EXPECT_EQ(post.at("media_id").as_int64(), media);
+    EXPECT_EQ(post.at("media_ids"), boost::json::value(boost::json::array{media}));
     ASSERT_EQ(post.at("media").as_array().size(), 1u);
     EXPECT_EQ(post.at("media").as_array()[0].at("format").as_string(), "photo");
     EXPECT_EQ(post.at("media").as_array()[0].at("url").as_string(), "https://storage.googleapis.com/poni-public-test/p/abc123.jpg");
@@ -206,12 +207,12 @@ namespace {
 
 constexpr const char* kStandard = R"({"topic_type": "standard", "summary": "Fall specials start Monday.", "language_code": "en",
     "call_to_action": {"action_type": "learn_more", "url": "https://example.com/fall"}, "event": null, "offer": null,
-    "media_id": null, "scheduled_time": "2026-12-19T17:00:00Z"})";
+    "media_ids": [], "scheduled_time": "2026-12-19T17:00:00Z"})";
 
 // The content fields of a post as the API returned it: what a person approves.
 std::string content_of(const boost::json::value& post) {
     boost::json::object content;
-    for (const auto* field : {"topic_type", "summary", "language_code", "call_to_action", "event", "offer", "media_id", "scheduled_time"}) {
+    for (const auto* field : {"topic_type", "summary", "language_code", "call_to_action", "event", "offer", "media_ids", "scheduled_time"}) {
         content[field] = post.at(field);
     }
     return boost::json::serialize(content);
@@ -303,7 +304,12 @@ TEST_F(LocalPosts, WhatIsNotAPostIsRefusedWithAMessageThatSaysWhy) {
     EXPECT_THAT(with(R"({"topic_type": "alert"})"), testing::HasSubstr("topic_type"));
     EXPECT_THAT(with(R"({"topic_type": "event", "event": {"title": "No dates"}})"), testing::HasSubstr("event.schedule"));
     EXPECT_THAT(with(R"({"scheduled_time": "next Friday"})"), testing::HasSubstr("scheduled_time"));
-    EXPECT_THAT(with(R"({"media_id": 42})"), testing::HasSubstr("media_id"));
+    EXPECT_THAT(with(R"({"media_ids": [42]})"), testing::HasSubstr("media_ids"));
+    // At most ten photos and videos, each once (D-101).
+    const auto one = insert_upload({});
+    EXPECT_THAT(with(std::format(R"({{"media_ids": [{0}, {0}]}})", one)), testing::HasSubstr("twice"));
+    EXPECT_THAT(with(R"({"media_ids": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]})"), testing::HasSubstr("at most 10"));
+    EXPECT_THAT(with(R"({"media_ids": null})"), testing::HasSubstr("media_ids")) << "none is an empty list";
     EXPECT_EQ(count("local_posts"), 0);
 
     EXPECT_EQ(post("/api/locations/999999/local-posts", kStandard).status, 404u);
@@ -388,7 +394,8 @@ TEST_F(LocalPostMedia, APhotoGoesIntoThePublicBucketExactlyAsItWasUploaded) {
     ASSERT_EQ(store_.objects.size(), 1u);
     const auto& [name, object] = *store_.objects.begin();
     EXPECT_THAT(name, testing::MatchesRegex("p/[A-Za-z0-9_-]{43}\\.png")) << "32 random bytes: a name nobody can guess";
-    EXPECT_EQ(object.body, bytes) << "nothing is resized, converted or stripped";
+    EXPECT_EQ(object.bytes(), bytes) << "nothing is resized, converted or stripped";
+    EXPECT_TRUE(object.body.empty()) << "the file goes to the bucket from disk";
     EXPECT_EQ(object.content_type, "image/png");
     EXPECT_EQ(media.at("url").as_string(), "https://storage.googleapis.com/poni-public-test/" + name);
     EXPECT_EQ(count("local_post_media"), 1);
@@ -401,7 +408,7 @@ TEST_F(LocalPostMedia, APhotoGoesIntoThePublicBucketExactlyAsItWasUploaded) {
 
     // A draft takes the upload by its id, and shows it from the bucket.
     auto content = boost::json::parse(kStandard).as_object();
-    content["media_id"] = media.at("id");
+    content["media_ids"] = boost::json::array{media.at("id")};
     const auto created = post(std::format("/api/locations/{}/local-posts", spa_), boost::json::serialize(content));
     ASSERT_EQ(created.status, 201u) << created.body;
     EXPECT_EQ(json(created).at("media").as_array()[0].at("url"), media.at("url"));
@@ -450,7 +457,7 @@ TEST_F(LocalPostMedia, AVideoGoesIntoThePublicBucketExactlyAsItWasUploaded) {
     ASSERT_EQ(store_.objects.size(), 1u);
     const auto& [name, object] = *store_.objects.begin();
     EXPECT_THAT(name, testing::MatchesRegex("p/[A-Za-z0-9_-]{43}\\.mp4"));
-    EXPECT_EQ(object.body, bytes) << "nothing is converted, cut or stripped";
+    EXPECT_EQ(object.bytes(), bytes) << "nothing is converted, cut or stripped";
     EXPECT_EQ(object.content_type, "video/mp4");
     EXPECT_EQ(value<std::string>("SELECT format || ' ' || duration_ms FROM local_post_media"), "video 12500");
     EXPECT_EQ(value<std::string>("SELECT after->>'duration_ms' FROM audit_log WHERE action = 'local_post_media.upload'"), "12500");
@@ -466,7 +473,7 @@ TEST_F(LocalPostMedia, AVideoGoesIntoThePublicBucketExactlyAsItWasUploaded) {
 
     // A draft takes the video by its id, as it takes a photo, and shows it as a video.
     auto content = boost::json::parse(kStandard).as_object();
-    content["media_id"] = media.at("id");
+    content["media_ids"] = boost::json::array{media.at("id")};
     const auto created = post(std::format("/api/locations/{}/local-posts", spa_), boost::json::serialize(content));
     ASSERT_EQ(created.status, 201u) << created.body;
     EXPECT_EQ(json(created).at("media").as_array()[0].at("format").as_string(), "video");
@@ -671,10 +678,6 @@ TEST_F(LocalPosts, TheTableKeepsAPostsPartsTogether) {
     respelled = event;
     respelled.event->recurrence->until = "2027-01-31T00:00:60.000000Z";
     EXPECT_FALSE(accepted(base, "'system', 'draft', " + test::content_sql(respelled))) << "and a time that exists";
-    auto with_photo = test::standard("Hello.");
-    with_photo.media_id = 424242;
-    EXPECT_THROW(insert_local_post(spa_, base, "'system', 'draft', " + test::content_sql(with_photo)), pqxx::foreign_key_violation)
-        << "a photo is an upload the table has";
     EXPECT_FALSE(accepted("origin, status, content", "'google', 'sent', " + test::content_sql(test::standard("Hi."))))
         << "a post made at Google has Google's name";
     EXPECT_FALSE(accepted("origin, status, content, google_name",
@@ -726,7 +729,7 @@ TEST_F(LocalPosts, ACopyOfAPostWrittenHereIsANewDraftOfTheCallerWithItsUpload) {
     const auto media = insert_upload({});
     auto content = test::standard("Fall specials start Monday.");
     content.call_to_action = domain::LocalPostCallToAction{.action_type = "book", .url = "https://example.com/book"};
-    content.media_id = media;
+    content.media_ids = {media};
     content.scheduled_time = "2026-12-19T17:00:00.000000Z";
     // Sent long ago by someone else: the copy is the caller's.
     const auto source = insert_local_post(spa_, "origin, status, content, google_name, google_state, sent_at, google_media",
@@ -746,7 +749,7 @@ TEST_F(LocalPosts, ACopyOfAPostWrittenHereIsANewDraftOfTheCallerWithItsUpload) {
     EXPECT_EQ(copy.at("summary").as_string(), "Fall specials start Monday.");
     EXPECT_EQ(copy.at("call_to_action").at("url").as_string(), "https://example.com/book");
     EXPECT_EQ(copy.at("scheduled_time").as_string(), "2026-12-19T17:00:00.000000Z");
-    EXPECT_EQ(copy.at("media_id").as_int64(), media) << "one upload serves several posts";
+    EXPECT_EQ(copy.at("media_ids"), boost::json::value(boost::json::array{media})) << "one upload serves several posts";
     ASSERT_EQ(copy.at("media").as_array().size(), 1u);
     EXPECT_EQ(copy.at("media").as_array()[0].at("url").as_string(), "https://storage.googleapis.com/poni-public-test/p/abc123.jpg");
     EXPECT_TRUE(std::ranges::all_of(copy.at("checks").as_array(), [](const auto& check) { return check.at("passed").as_bool(); }));
@@ -773,7 +776,7 @@ TEST_F(LocalPosts, ACopyOfAPostMadeAtGoogleBringsNoPhotoOrVideoAndSaysToUploadIt
         const auto copy = json(copied);
         EXPECT_EQ(copy.at("location_id").as_int64(), buffet_);
         EXPECT_EQ(copy.at("origin").as_string(), "system");
-        EXPECT_TRUE(copy.at("media_id").is_null()) << format;
+        EXPECT_TRUE(copy.at("media_ids").as_array().empty()) << format;
         EXPECT_TRUE(copy.at("media").as_array().empty()) << "Google's copy of the file is not shown as the draft's";
         EXPECT_THAT(std::string(copy.at("status_reason").as_string()), testing::HasSubstr("upload the " + format + " again"));
     }
@@ -867,7 +870,7 @@ TEST_F(LocalPosts, ACopyIsRefusedWhereWritingADraftIsRefused) {
 TEST_F(LocalPosts, ADraftOrARejectedPostIsDeletedAndTheAuditLogKeepsWhatItSaid) {
     const auto media = insert_upload({});
     auto content = test::standard("Never sent.");
-    content.media_id = media;
+    content.media_ids = {media};
     const auto a_draft = insert_local_post(spa_, "origin, status, content, created_by",
                                            std::format("'system', 'draft', {}, {}", test::content_sql(content), user_));
     const auto deleted = del(std::format("/api/local-posts/{}", a_draft));
@@ -884,7 +887,7 @@ TEST_F(LocalPosts, ADraftOrARejectedPostIsDeletedAndTheAuditLogKeepsWhatItSaid) 
     EXPECT_EQ(before.at("location_id").as_int64(), spa_);
     EXPECT_EQ(before.at("created_by_user_id").as_int64(), user_);
     EXPECT_EQ(before.at("content").at("summary").as_string(), "Never sent.");
-    EXPECT_EQ(before.at("content").at("media_id").as_int64(), media);
+    EXPECT_EQ(before.at("content").at("media_ids"), boost::json::value(boost::json::array{media}));
     EXPECT_TRUE(before.at("copied_from_id").is_null()) << "a draft written new was copied from nothing";
     EXPECT_EQ(del(std::format("/api/local-posts/{}", a_draft)).status, 404u) << "deleting again finds nothing";
 
@@ -1250,7 +1253,7 @@ TEST_F(LocalPostEdits, WhatAnEditMayNotBeIsRefusedWithAnAnswerThatSaysWhy) {
     EXPECT_THAT(refused(edit_request(id, R"({"summary": null})")), testing::HasSubstr("summary"));
     // What is not a post at all, as for a draft.
     EXPECT_THAT(refused(edit_request(id, R"({"topic_type": "alert"})")), testing::HasSubstr("topic_type"));
-    EXPECT_THAT(refused(edit_request(id, R"({"media_id": 42})")), testing::HasSubstr("media_id"));
+    EXPECT_THAT(refused(edit_request(id, R"({"media_ids": [42]})")), testing::HasSubstr("media_ids"));
     // What an edit does not change: a 400 that names the member.
     EXPECT_THAT(refused(edit_request(id, R"({"scheduled_time": "2026-12-19T17:00:00Z"})")), testing::HasSubstr("\"scheduled_time\""));
     EXPECT_THAT(refused(edit_request(id, R"({"topic_type": "event", "call_to_action": null,
@@ -1345,7 +1348,7 @@ TEST_F(LocalPostEdits, TheAppWritesAndDiscardsAnEditWithItsToken) {
 TEST_F(LocalPostEdits, AnEditShowsThePhotoItBrings) {
     const auto id = at_google();
     const auto media = insert_upload({.object = "p/new.jpg"});
-    const auto written = put(target(id), edit_request(id, std::format(R"({{"media_id": {}}})", media)));
+    const auto written = put(target(id), edit_request(id, std::format(R"({{"media_ids": [{}]}})", media)));
     ASSERT_EQ(written.status, 200u) << written.body;
     const auto shown = json(written);
     EXPECT_EQ(shown.at("edit").at("fields"), boost::json::parse(R"(["media"])"));

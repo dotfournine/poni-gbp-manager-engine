@@ -46,12 +46,15 @@
 // same write in both modes.
 #pragma once
 
+#include "core/mapped_file.hpp"
+
 #include <boost/asio/awaitable.hpp>
 #include <boost/asio/ssl/context.hpp>
 #include <boost/url/url.hpp>
 
 #include <array>
 #include <chrono>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -133,6 +136,10 @@ struct ClientRequest {
     std::vector<std::pair<std::string, std::string>> headers;
     std::string content_type;  // sent when the body is not empty or the method is not GET
     std::string body;
+    // The body as a file on disk instead of `body`, sent from where it lies:
+    // the upload of a post's photo or video to the bucket, which is never
+    // read into memory (D-101). Only a POST carries one, only over HTTP/1.1.
+    std::shared_ptr<const core::MappedFile> file;
     // Applied to each stage (connect, TLS handshake, write, read) separately.
     std::chrono::seconds timeout{30};
 };

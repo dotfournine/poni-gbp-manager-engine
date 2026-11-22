@@ -979,6 +979,25 @@ TEST_F(PerformanceHttp, AnObjectIsUploadedInOnePostWithItsNameTypeAndCacheRule) 
     EXPECT_EQ(store.base_url(), "https://storage.googleapis.com/xvisionmedia-gbp-public/");
 }
 
+TEST_F(PerformanceHttp, AnUploadOnDiskIsTheBodyOfAMediaUpload) {
+    // A post's photo or video is never read into memory (D-101): the file is the request's body, and the
+    // object's name travels in the address. Without metadata, Cloud Storage serves it as a public object.
+    http_.reply(200, R"({"name": "p/abc.jpg"})");
+    storage::GcsStore store(api_, "xvisionmedia-gbp-public");
+    const auto stored = test::run(io_, store.put({.name = "p/abc.jpg", .content_type = "image/jpeg", .file = test::mapped("JPEG bytes")}));
+    ASSERT_TRUE(stored) << stored.error().message;
+    ASSERT_EQ(http_.requests.size(), 1u);
+    const auto& request = http_.requests[0];
+    EXPECT_EQ(request.method, http::ClientMethod::post);
+    EXPECT_EQ(std::string(request.url.encoded_path()), "/upload/storage/v1/b/xvisionmedia-gbp-public/o");
+    EXPECT_EQ((*request.url.params().find("uploadType")).value, "media");
+    EXPECT_EQ((*request.url.params().find("name")).value, "p/abc.jpg");
+    EXPECT_EQ(request.content_type, "image/jpeg");
+    EXPECT_TRUE(request.body.empty());
+    ASSERT_TRUE(request.file);
+    EXPECT_EQ(request.file->bytes(), "JPEG bytes");
+}
+
 TEST_F(PerformanceHttp, ARefusedUploadAndABadNameAreErrorsAndNothingElseIsSent) {
     storage::GcsStore store(api_, "xvisionmedia-gbp-public");
     const auto bad = test::run(io_, store.put({.name = "../etc/passwd", .content_type = "text/plain", .body = "x"}));

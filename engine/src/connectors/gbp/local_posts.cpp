@@ -88,13 +88,15 @@ boost::json::object offer_object(const domain::LocalPostOffer& offer) {
     return out;
 }
 
-boost::json::array media_array(const MediaSource& media) {
-    return {boost::json::object{{"mediaFormat", upper(media.format)}, {"sourceUrl", media.url}}};
+boost::json::array media_array(const std::vector<MediaSource>& media) {
+    boost::json::array out;
+    for (const auto& item : media) out.push_back(boost::json::object{{"mediaFormat", upper(item.format)}, {"sourceUrl", item.url}});
+    return out;
 }
 
 }  // namespace
 
-boost::json::object create_body(const domain::LocalPostContent& content, const std::optional<MediaSource>& media) {
+boost::json::object create_body(const domain::LocalPostContent& content, const std::vector<MediaSource>& media) {
     boost::json::object body{{"languageCode", content.language_code}, {"summary", content.summary}, {"topicType", upper(content.topic_type)}};
     if (content.call_to_action) body["callToAction"] = action_object(*content.call_to_action);
     if (content.event) {
@@ -122,13 +124,13 @@ boost::json::object create_body(const domain::LocalPostContent& content, const s
     if (content.offer) {
         if (auto offer = offer_object(*content.offer); !offer.empty()) body["offer"] = std::move(offer);
     }
-    if (media) body["media"] = media_array(*media);
+    if (!media.empty()) body["media"] = media_array(media);
     if (content.scheduled_time) body["scheduledTime"] = *content.scheduled_time;
     return body;
 }
 
 boost::json::object update_body(const LocalPost& at_google, const domain::LocalPostContent& edit, const std::vector<std::string_view>& mask,
-                                const std::optional<MediaSource>& media) {
+                                const std::vector<MediaSource>& media) {
     boost::json::object body;
     for (const auto field : mask) {
         if (field == "summary") {
@@ -167,7 +169,7 @@ boost::json::object update_body(const LocalPost& at_google, const domain::LocalP
             if (!edit.offer) continue;
             if (auto offer = offer_object(*edit.offer); !offer.empty()) body["offer"] = std::move(offer);
         } else if (field == "media") {
-            body["media"] = media ? media_array(*media) : boost::json::array{};
+            body["media"] = media_array(media);
         }
     }
     return body;

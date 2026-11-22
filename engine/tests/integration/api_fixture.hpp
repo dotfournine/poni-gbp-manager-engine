@@ -74,7 +74,12 @@ protected:
         const auto question = target.find('?');
         request.path = target.substr(0, question);
         if (question != std::string::npos) request.query = target.substr(question + 1);
-        request.body = std::move(body);
+        // A route that takes a file gets its body on disk, as from the server.
+        if (router_->body_limit(method, request.path) > http::Router::kDefaultBodyLimit) {
+            request.file = test::mapped(body);
+        } else {
+            request.body = std::move(body);
+        }
         request.remote_ip = "203.0.113.10";
         for (auto& [name, value] : headers) request.headers[name] = std::move(value);
         if (!browser.cookie.empty()) request.headers["cookie"] = browser.cookie;

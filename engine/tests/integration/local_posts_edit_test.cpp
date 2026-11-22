@@ -566,7 +566,7 @@ TEST_F(LocalPostsEdit, APostMadeAtGoogleKeepsItsOwnPhotosWhenAnythingElseIsEdite
                                              {.mediaFormat = "PHOTO", .googleUrl = "https://lh3.googleusercontent.com/p/b"}};
     const auto id = at_google(kBuffetPosts, made);
     ASSERT_EQ(post(id, "origin"), "google") << "a post made in Google's own interface can be edited too";
-    ASSERT_EQ(post(id, "media_id"), "");
+    ASSERT_EQ(post(id, "(content->'media_ids')"), "[]");
 
     edit_and_send(id, [](auto& c) { c.summary = "Now open late on Fridays and Saturdays."; });
     ASSERT_EQ(google_.updates.size(), 1u);
@@ -584,25 +584,25 @@ TEST_F(LocalPostsEdit, APostMadeAtGoogleKeepsItsOwnPhotosWhenAnythingElseIsEdite
 
     // A person may give such a post an upload of the engine's: then, and only then, the media is named.
     const auto photo = upload("p/new.jpg");
-    edit_and_send(id, [&](auto& c) { c.media_id = photo; });
+    edit_and_send(id, [&](auto& c) { c.media_ids = {photo}; });
     ASSERT_EQ(google_.updates.size(), 2u);
     EXPECT_THAT(google_.updates[1].mask, ElementsAre("media"));
     EXPECT_EQ(google_.updates[1].body.at("media"),
               boost::json::parse(R"([{"mediaFormat": "PHOTO", "sourceUrl": "https://storage.googleapis.com/poni-public-test/p/new.jpg"}])"));
-    EXPECT_EQ(post(id, "media_id"), std::to_string(photo));
+    EXPECT_EQ(post(id, "(content->'media_ids')"), std::format("[{}]", photo));
     EXPECT_EQ(post(id, "jsonb_array_length(google_media)"), "1");
 }
 
 TEST_F(LocalPostsEdit, AnotherUploadReplacesThePostsAndTakingItAwayEmptiesTheMedia) {
     auto content = standard("A look at the new room.");
-    content.media_id = upload("p/room.jpg");
+    content.media_ids = {upload("p/room.jpg")};
     const auto id = sent(spa_, content);
 
     // The post's own upload, named again, is no change: the file is at Google already and is not sent.
     edit_and_send(id, [](auto& c) { c.summary = "A look at the new rooms."; });
     ASSERT_EQ(google_.updates.size(), 1u);
     EXPECT_THAT(google_.updates[0].mask, ElementsAre("summary"));
-    EXPECT_EQ(post(id, "media_id"), std::to_string(*content.media_id));
+    EXPECT_EQ(post(id, "(content->'media_ids')"), std::format("[{}]", content.media_ids.front()));
 
     // The person who approves sees what they approve: the edit shows the upload it brings, and where it
     // leaves the media alone, what the post shows now.
@@ -612,44 +612,73 @@ TEST_F(LocalPostsEdit, AnotherUploadReplacesThePostsAndTakingItAwayEmptiesTheMed
     ASSERT_EQ(text_again->edit->media.size(), 1u);
     const auto video = insert_upload({.object = "p/walk.mp4", .format = "video", .content_type = "video/mp4", .bytes = 9000000,
                                       .width = 1080, .height = 1920, .duration_ms = "12500"});
-    const auto with_video = write(id, [&](auto& c) { c.media_id = video; });
+    const auto with_video = write(id, [&](auto& c) { c.media_ids = {video}; });
     ASSERT_TRUE(with_video);
     EXPECT_THAT(with_video->edit->fields, ElementsAre("media"));
     ASSERT_EQ(with_video->edit->media.size(), 1u);
     EXPECT_EQ(with_video->edit->media[0].format, "video");
     EXPECT_EQ(with_video->edit->media[0].url, "https://storage.googleapis.com/poni-public-test/p/walk.mp4");
     EXPECT_THAT(with_video->media[0].url, HasSubstr("googleusercontent.com")) << "the post itself still shows what Google has";
-    const auto without = write(id, [](auto& c) { c.media_id.reset(); });
+    const auto without = write(id, [](auto& c) { c.media_ids.clear(); });
     ASSERT_TRUE(without);
     EXPECT_THAT(without->edit->fields, ElementsAre("media"));
     EXPECT_TRUE(without->edit->media.empty()) << "the upload taken away: the post would show nothing";
 
-    edit_and_send(id, [&](auto& c) { c.media_id = video; });
+    edit_and_send(id, [&](auto& c) { c.media_ids = {video}; });
     ASSERT_EQ(google_.updates.size(), 2u);
     EXPECT_THAT(google_.updates[1].mask, ElementsAre("media"));
     EXPECT_EQ(google_.updates[1].body,
               boost::json::parse(R"({"media": [{"mediaFormat": "VIDEO", "sourceUrl": "https://storage.googleapis.com/poni-public-test/p/walk.mp4"}]})")
                   .as_object());
-    EXPECT_EQ(post(id, "media_id"), std::to_string(video)) << "which upload the post carries now";
+    EXPECT_EQ(post(id, "(content->'media_ids')"), std::format("[{}]", video)) << "which upload the post carries now";
     EXPECT_THAT(post(id, "google_media->0->>'url'"), HasSubstr("googleusercontent.com"));
 
-    edit_and_send(id, [](auto& c) { c.media_id.reset(); });
+    edit_and_send(id, [](auto& c) { c.media_ids.clear(); });
     ASSERT_EQ(google_.updates.size(), 3u);
     EXPECT_THAT(google_.updates[2].mask, ElementsAre("media"));
     EXPECT_EQ(google_.updates[2].body, boost::json::parse(R"({"media": []})").as_object());
-    EXPECT_EQ(post(id, "media_id"), "");
+    EXPECT_EQ(post(id, "(content->'media_ids')"), "[]");
     EXPECT_EQ(post(id, "jsonb_array_length(google_media)"), "0");
 
     // An upload that does not exist is refused where the edit is written.
-    const auto missing = write(id, [](auto& c) { c.media_id = 999999; });
+    const auto missing = write(id, [](auto& c) { c.media_ids = {999999}; });
     ASSERT_FALSE(missing);
     EXPECT_EQ(missing.error().kind, repo::Failure::Kind::invalid);
-    EXPECT_THAT(missing.error().message, HasSubstr("media_id"));
+    EXPECT_THAT(missing.error().message, HasSubstr("media_ids"));
+}
+
+TEST_F(LocalPostsEdit, SeveralUploadsAreSentWholeAndTheirOrderIsAnEdit) {
+    // Google replaces a post's media whole (D-101): a new order sends every file again, in that order.
+    auto content = standard("Three rooms.");
+    content.media_ids = {upload("p/a.jpg"), upload("p/b.jpg"), upload("p/c.jpg")};
+    const auto id = sent(spa_, content);
+    const auto a = content.media_ids[0], b = content.media_ids[1], c = content.media_ids[2];
+
+    const auto shown = write(id, [&](auto& edit) { edit.media_ids = {c, a, b}; });
+    ASSERT_TRUE(shown);
+    EXPECT_THAT(shown->edit->fields, ElementsAre("media"));
+    ASSERT_EQ(shown->edit->media.size(), 3u);
+    EXPECT_EQ(shown->edit->media[0].url, "https://storage.googleapis.com/poni-public-test/p/c.jpg") << "what the approver sees, in order";
+
+    edit_and_send(id, [&](auto& edit) { edit.media_ids = {c, a, b}; });
+    ASSERT_EQ(google_.updates.size(), 1u);
+    EXPECT_THAT(google_.updates[0].mask, ElementsAre("media"));
+    EXPECT_EQ(google_.updates[0].body.at("media"), boost::json::parse(R"([
+        {"mediaFormat": "PHOTO", "sourceUrl": "https://storage.googleapis.com/poni-public-test/p/c.jpg"},
+        {"mediaFormat": "PHOTO", "sourceUrl": "https://storage.googleapis.com/poni-public-test/p/a.jpg"},
+        {"mediaFormat": "PHOTO", "sourceUrl": "https://storage.googleapis.com/poni-public-test/p/b.jpg"}])"));
+    EXPECT_EQ(post(id, "(content->'media_ids')"), std::format("[{}, {}, {}]", c, a, b));
+
+    // One taken out: the two that are left are sent, and the post carries those.
+    edit_and_send(id, [&](auto& edit) { edit.media_ids = {c, b}; });
+    ASSERT_EQ(google_.updates.size(), 2u);
+    EXPECT_EQ(google_.updates[1].body.at("media").as_array().size(), 2u);
+    EXPECT_EQ(post(id, "(content->'media_ids')"), std::format("[{}, {}]", c, b));
 }
 
 TEST_F(LocalPostsEdit, AnUploadIsLookedAtOnlyWhenItIsNotThePostsOwn) {
     auto content = standard("A look at the new room.");
-    content.media_id = upload("p/room.jpg");
+    content.media_ids = {upload("p/room.jpg")};
     const auto id = sent(spa_, content);
     // A year on, the bucket has removed the file. It is at Google all the same, and a change of the text does not send it.
     exec("UPDATE local_post_media SET created_at = created_at - interval '400 days'");
@@ -662,7 +691,7 @@ TEST_F(LocalPostsEdit, AnUploadIsLookedAtOnlyWhenItIsNotThePostsOwn) {
 
     // Another upload that old could not be fetched by Google, and blocks the approval as for a draft.
     const auto old = upload("p/old.jpg", "361 days");
-    const auto with_old = write(id, [&](auto& c) { c.media_id = old; });
+    const auto with_old = write(id, [&](auto& c) { c.media_ids = {old}; });
     ASSERT_TRUE(with_old) << "stored, with its failed check";
     EXPECT_FALSE(with_old->edit->checks.back().passed);
     EXPECT_EQ(with_old->edit->checks.back().name, "media_usable");
@@ -1175,7 +1204,7 @@ TEST_F(LocalPostsEdit, ContentThatIsNotTheContentApprovedIsNotSent) {
     for (const auto* change : {R"(jsonb_set(content, '{summary}', '"Something nobody approved."'))",
                                R"(jsonb_set(content, '{call_to_action,url}', '"https://example.com/b"'))",
                                R"(jsonb_set(content, '{call_to_action,action_type}', '"book"'))", R"(jsonb_set(content, '{language_code}', '"es"'))",
-                               R"(jsonb_set(content, '{media_id}', 'null') || '{"call_to_action": null}')"}) {
+                               R"(jsonb_set(content, '{media_ids}', '[]') || '{"call_to_action": null}')"}) {
         auto made = make_local_post("111", kSpaPosts, std::to_string(++n), "With a button.");
         made.callToAction = gbp::CallToAction{.actionType = "LEARN_MORE", .url = "https://example.com/a"};
         const auto id = at_google(kSpaPosts, made);
@@ -1312,7 +1341,7 @@ TEST_F(LocalPostsEdit, ApprovalIsForTheExactEditThePersonRead) {
              [](auto& c) { c.call_to_action->url = "https://example.com/other"; },
              [](auto& c) { c.call_to_action.reset(); },
              [](auto& c) { c.language_code = "es"; },
-             [&](auto& c) { c.media_id = photo; },
+             [&](auto& c) { c.media_ids = {photo}; },
              [](auto& c) { c.summary = "Holiday hours: open until nine."; },
          }) {
         auto other = stored;
@@ -1370,7 +1399,7 @@ TEST_F(LocalPostsEdit, AFailedCheckIsStoredWithTheEditAndBlocksItsApproval) {
 TEST_F(LocalPostsEdit, TheChecksRunAgainWhenTheEditIsClaimed) {
     const auto id = at_google(kSpaPosts, 1, "A look at the new room.");
     const auto photo = upload("p/room.jpg");
-    approved_edit(id, [&](auto& c) { c.media_id = photo; });
+    approved_edit(id, [&](auto& c) { c.media_ids = {photo}; });
     // The file is gone from the bucket's point of view before the job runs.
     exec("UPDATE local_post_media SET created_at = created_at - interval '400 days'");
     const auto reads = google_.get_calls;

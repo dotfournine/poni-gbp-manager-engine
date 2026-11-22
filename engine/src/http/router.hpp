@@ -7,6 +7,7 @@
 // that aren't allowed, and is the one place where roles will be added later.
 #pragma once
 
+#include "core/mapped_file.hpp"
 #include "domain/session.hpp"
 
 #include <boost/asio/awaitable.hpp>
@@ -16,6 +17,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -42,6 +44,10 @@ struct Request {
     std::string path;   // decoded, without the query string
     std::string query;  // still percent-encoded; read it with QueryParams
     std::string body;
+    // The body of a route that takes a file (RouteInfo::max_body_bytes), as
+    // the server got it: on disk and mapped, with `body` empty (D-101).
+    // Nothing for every other route.
+    std::shared_ptr<const core::MappedFile> file;
     // Header names in lower case.
     std::map<std::string, std::string, std::less<>> headers;
     // The visitor's address. The server fills in the peer's address as the

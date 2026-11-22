@@ -46,36 +46,39 @@ domain::LocalPostContent read_content(const boost::json::value& json) {
 std::string local_post_select(std::string_view base) {
     const auto at = [](std::string_view column) { return std::format("{} AS {}", iso(std::format("p.{}", column)), column); };
     const auto by = [](std::string_view column) { return std::format("(SELECT u.email FROM users u WHERE u.id = p.{0}) AS {0}", column); };
-    // media: what Google shows once it has the post; before that, the uploaded file.
+    // The uploads a list of ids names, in its order, as the API shows media; none without the bucket.
+    const auto uploads = [&](std::string_view ids) {
+        return std::format(R"sql(CASE WHEN {0}::text = '' THEN '[]'::jsonb ELSE coalesce((
+                    SELECT jsonb_agg(jsonb_build_object('format', m.format, 'url', {0}::text || m.object_name) ORDER BY u.ord)
+                      FROM jsonb_array_elements_text({1}) WITH ORDINALITY AS u(id, ord)
+                      JOIN local_post_media m ON m.id = u.id::bigint), '[]'::jsonb) END)sql",
+                           base, ids);
+    };
+    // media: what Google shows once it has the post; before that, the uploaded files.
     // copies: the posts copied from this one, newest first (D-098).
-    const auto post_media = std::format(R"sql(CASE WHEN jsonb_array_length(p.google_media) > 0 THEN p.google_media
-                    WHEN m.id IS NOT NULL AND {0}::text <> '' THEN
-                        jsonb_build_array(jsonb_build_object('format', m.format, 'url', {0}::text || m.object_name))
-                    ELSE '[]'::jsonb END)sql",
-                                        base);
+    const auto post_media = std::format("CASE WHEN jsonb_array_length(p.google_media) > 0 THEN p.google_media ELSE {} END",
+                                        uploads("p.content->'media_ids'"));
     // edit: the open edit of a post that is at Google, as model::LocalPostEdit (D-099). Its content is the
     // post as it would say with the edit applied now: the post's content, and over it the members the edit
     // changes (domain::local_post_with_edit says the same in code, and an approval compares with that).
-    // Its media is what the post would show then: the edit's own upload where it changes the media
-    // (nothing where it takes the upload away), and what the post shows now where it does not.
+    // Its media is what the post would show then: the edit's own uploads where it changes the media
+    // (nothing where it takes them away), and what the post shows now where it does not.
     const auto edit = std::format(
         "(SELECT jsonb_build_object('content', p.content || coalesce((SELECT jsonb_object_agg(k.member, e.content->k.member) "
         "FROM jsonb_array_elements_text(e.fields) AS f(name) "
-        "CROSS JOIN LATERAL (SELECT CASE f.name WHEN 'media' THEN 'media_id' ELSE f.name END AS member) k), '{{}}'::jsonb), 'fields', e.fields, "
-        "'media', CASE WHEN NOT e.fields @> '[\"media\"]'::jsonb THEN {3} "
-        "WHEN em.id IS NOT NULL AND {2}::text <> '' THEN jsonb_build_array(jsonb_build_object('format', em.format, 'url', {2}::text || em.object_name)) "
-        "ELSE '[]'::jsonb END, "
+        "CROSS JOIN LATERAL (SELECT CASE f.name WHEN 'media' THEN 'media_ids' ELSE f.name END AS member) k), '{{}}'::jsonb), 'fields', e.fields, "
+        "'media', CASE WHEN NOT e.fields @> '[\"media\"]'::jsonb THEN {2} ELSE {3} END, "
         "'checks', e.checks, 'status', e.status, 'status_reason', e.status_reason, "
         "'written_by', (SELECT u.email FROM users u WHERE u.id = e.written_by), 'written_at', {0}, "
         "'decided_by', (SELECT u.email FROM users u WHERE u.id = e.decided_by), 'decided_at', {1}) "
-        "FROM local_post_edits e LEFT JOIN local_post_media em ON em.id = e.media_id WHERE e.local_post_id = p.id) AS edit",
-        iso("e.written_at"), iso("e.decided_at"), base, post_media);
+        "FROM local_post_edits e WHERE e.local_post_id = p.id) AS edit",
+        iso("e.written_at"), iso("e.decided_at"), post_media, uploads("e.content->'media_ids'"));
     return std::format(R"sql(
         SELECT p.id, p.location_id, l.title AS location_title, l.client_id, c.name AS client_name, p.origin, p.status,
                p.status_reason, p.google_state, p.google_name, p.search_url,
                p.content->>'topic_type' AS topic_type, p.content->>'summary' AS summary,
                p.content->>'language_code' AS language_code, p.content->'call_to_action' AS call_to_action,
-               p.content->'event' AS event, p.content->'offer' AS offer, p.media_id,
+               p.content->'event' AS event, p.content->'offer' AS offer, p.content->'media_ids' AS media_ids,
                p.content->>'scheduled_time' AS scheduled_time,
                {15} AS media,
                p.checks, p.copied_from_id,
@@ -85,8 +88,7 @@ std::string local_post_select(std::string_view base) {
                {1}, {2}, {3}, {4}, {5}, {6}, {7}, {8}, {9}, {10}, {11}, {12}, {13}
           FROM local_posts p
           JOIN locations l ON l.id = p.location_id
-          LEFT JOIN clients c ON c.id = l.client_id
-          LEFT JOIN local_post_media m ON m.id = p.media_id)sql",
+          LEFT JOIN clients c ON c.id = l.client_id)sql",
                        base, by("created_by"), by("edited_by"), at("edited_at"), by("decided_by"), at("decided_at"), at("sent_at"),
                        by("removal_requested_by"), at("removal_requested_at"), at("removed_at"), at("google_created_at"),
                        at("synced_at"), at("created_at"), at("updated_at"), edit, post_media);
@@ -130,7 +132,7 @@ void notify(pqxx::transaction_base& tx, std::int64_t id, std::string key, std::s
 // How long an uploaded file is used. The bucket removes it after 365 days.
 constexpr auto kMediaUsableFor = std::chrono::hours(24) * 360;
 
-// The uploaded file a post names.
+// An uploaded file a post names.
 struct MediaState {
     bool exists = false;
     std::string format;
@@ -140,40 +142,82 @@ struct MediaState {
 };
 
 struct Upload {
-    std::string object_name;
+    OptString object_name;  // none: no such upload
     std::string format;
     bool old = false;  // uploaded longer ago than kMediaUsableFor
 };
 BOOST_DESCRIBE_STRUCT(Upload, (), (object_name, format, old))
 
-MediaState media_state(pqxx::transaction_base& tx, std::int64_t media_id, core::TimePoint now, std::string_view media_base) {
-    const auto file = db::row_as<Upload>(tx, "SELECT object_name, format, created_at <= $2::timestamptz AS old FROM local_post_media WHERE id = $1",
-                                         pqxx::params{media_id, to_timestamptz(now - kMediaUsableFor)});
-    if (!file) return {.exists = false, .format = {}, .url = {}, .problem = "the uploaded file no longer exists"};
-    MediaState state{.exists = true, .format = file->format, .url = std::string(media_base) + file->object_name, .problem = std::nullopt};
-    if (!media_base.starts_with("https://")) {
-        // Without the bucket, or with a folder standing in for it, Google has no address to fetch the file from.
-        state.problem = "the engine has no public bucket, so Google cannot fetch the file";
-    } else if (file->old) {
-        state.problem = "the file was uploaded more than 360 days ago and may be gone: upload it again";
+// The uploads a list names, in its order, in one query.
+std::vector<MediaState> media_states(pqxx::transaction_base& tx, const std::vector<std::int64_t>& ids, core::TimePoint now,
+                                     std::string_view media_base) {
+    std::vector<MediaState> out;
+    if (ids.empty()) return out;
+    const auto files = db::rows_as<Upload>(
+        tx,
+        "SELECT m.object_name, coalesce(m.format, '') AS format, coalesce(m.created_at <= $2::timestamptz, false) AS old "
+        "FROM jsonb_array_elements_text($1::jsonb) WITH ORDINALITY AS u(id, ord) LEFT JOIN local_post_media m ON m.id = u.id::bigint "
+        "ORDER BY u.ord",
+        pqxx::params{db::json_list(ids), to_timestamptz(now - kMediaUsableFor)});
+    for (const auto& file : files) {
+        if (!file.object_name) {
+            out.push_back({.exists = false, .format = {}, .url = {}, .problem = "the uploaded file no longer exists"});
+            continue;
+        }
+        MediaState state{.exists = true, .format = file.format, .url = std::string(media_base) + *file.object_name, .problem = std::nullopt};
+        if (!media_base.starts_with("https://")) {
+            // Without the bucket, or with a folder standing in for it, Google has no address to fetch the file from.
+            state.problem = "the engine has no public bucket, so Google cannot fetch the file";
+        } else if (file.old) {
+            state.problem = "the file was uploaded more than 360 days ago and may be gone: upload it again";
+        }
+        out.push_back(std::move(state));
     }
-    return state;
+    return out;
+}
+
+// Why one of the uploads can't be given to Google, if one can't, naming it by its place when there are several.
+OptString media_problem(pqxx::transaction_base& tx, const std::vector<std::int64_t>& ids, core::TimePoint now, std::string_view media_base) {
+    const auto files = media_states(tx, ids, now, media_base);
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        if (!files[i].problem) continue;
+        if (files.size() == 1) return files[i].problem;
+        return std::format("file {} of {}{}: {}", i + 1, files.size(), files[i].format.empty() ? "" : std::format(" (the {})", files[i].format),
+                           *files[i].problem);
+    }
+    return std::nullopt;
+}
+
+// Why a content's list cannot be stored: it names a file that was never uploaded.
+OptString missing_upload(pqxx::transaction_base& tx, const std::vector<std::int64_t>& ids, core::TimePoint now, std::string_view media_base) {
+    const auto files = media_states(tx, ids, now, media_base);
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        if (!files[i].exists) return std::format("\"media_ids\" names no uploaded file: {}.", ids[i]);
+    }
+    return std::nullopt;
+}
+
+// The uploads as Google takes them, in their order. The checks have passed, so each one exists.
+std::vector<gbp::MediaSource> media_sources(pqxx::transaction_base& tx, const std::vector<std::int64_t>& ids, core::TimePoint now,
+                                            std::string_view media_base) {
+    std::vector<gbp::MediaSource> out;
+    for (auto& file : media_states(tx, ids, now, media_base)) out.push_back({.format = std::move(file.format), .url = std::move(file.url)});
+    return out;
 }
 
 domain::CheckReport checks_for(pqxx::transaction_base& tx, const domain::LocalPostContent& content, core::TimePoint now,
                                std::string_view media_base) {
-    domain::LocalPostCheckContext context{.now = now, .media_problem = std::nullopt, .edit_at_google = false};
-    if (content.media_id) context.media_problem = media_state(tx, *content.media_id, now, media_base).problem;
+    domain::LocalPostCheckContext context{.now = now, .media_problem = media_problem(tx, content.media_ids, now, media_base), .edit_at_google = false};
     return domain::run_local_post_checks(content, context);
 }
 
 // The checks of an edit of a post that is at Google (D-099). `base` is the post's content the edit was
-// written against. An upload is looked at only when it is not the post's own: that one is at Google
-// already and is not sent.
+// written against. The uploads are looked at only when the edit changes the media: then Google fetches
+// every one of them again, as the field is sent whole; otherwise they are at Google already and are not sent.
 domain::CheckReport edit_checks_for(pqxx::transaction_base& tx, const domain::LocalPostContent& base, const domain::LocalPostContent& edit,
                                     core::TimePoint now, std::string_view media_base) {
     domain::LocalPostCheckContext context{.now = now, .media_problem = std::nullopt, .edit_at_google = true};
-    if (edit.media_id && edit.media_id != base.media_id) context.media_problem = media_state(tx, *edit.media_id, now, media_base).problem;
+    if (edit.media_ids != base.media_ids) context.media_problem = media_problem(tx, edit.media_ids, now, media_base);
     return domain::run_local_post_checks(edit, context);
 }
 
@@ -317,9 +361,7 @@ Result<std::int64_t> insert_draft(pqxx::transaction_base& tx, audit::Writer& aud
     const auto location = sending_state(tx, location_id);
     if (!location) return not_found("location");
     if (!location->synced) return conflict("location_not_synced", std::string(kNotSynced));
-    if (normalized.media_id && !media_state(tx, *normalized.media_id, audit.now(), media_base).exists) {
-        return invalid("\"media_id\" names no uploaded file.");
-    }
+    if (auto missing = missing_upload(tx, normalized.media_ids, audit.now(), media_base)) return invalid(std::move(*missing));
     const auto report = checks_for(tx, normalized, audit.now(), media_base);
     return tx.query_value<std::int64_t>(
         "INSERT INTO local_posts (location_id, origin, status, status_reason, content, checks, created_by, created_at, updated_at, "
@@ -339,8 +381,8 @@ std::string joined(const std::vector<std::string>& parts) {
 struct CopySource {
     std::int64_t location_id = 0;
     boost::json::value content;
-    // The format of the first file the post shows at Google, if any.
-    OptString media_at_google;
+    // The format of each file the post shows at Google, in order.
+    std::vector<std::string> media_at_google;
 };
 BOOST_DESCRIBE_STRUCT(CopySource, (), (location_id, content, media_at_google))
 
@@ -388,7 +430,8 @@ Result<model::LocalPost> copy_local_post(pqxx::transaction_base& tx, audit::Writ
     // The copy names its source by a foreign key: the lock makes a delete of the source wait for the
     // copy (and then clear the link) or, if the delete came first, makes the copy find nothing (a 404).
     const auto source = db::row_as<CopySource>(tx,
-                                               "SELECT location_id, content, google_media->0->>'format' AS media_at_google "
+                                               "SELECT location_id, content, coalesce((SELECT jsonb_agg(g->>'format') FROM jsonb_array_elements(google_media) g), "
+                                               "'[]'::jsonb) AS media_at_google "
                                                "FROM local_posts WHERE id = $1 FOR KEY SHARE",
                                                pqxx::params{id});
     if (!source) return not_found("local post");
@@ -438,9 +481,7 @@ Result<model::LocalPost> edit_local_post(pqxx::transaction_base& tx, audit::Writ
     }
     const auto normalized = domain::normalize_local_post(content);
     if (!normalized) return invalid(normalized.error());
-    if (normalized->media_id && !media_state(tx, *normalized->media_id, audit.now(), media_base).exists) {
-        return invalid("\"media_id\" names no uploaded file.");
-    }
+    if (auto missing = missing_upload(tx, normalized->media_ids, audit.now(), media_base)) return invalid(std::move(*missing));
     const auto before = read_content(state->content);
     if (*normalized == before) {
         audit.nothing_changed();
@@ -566,11 +607,7 @@ LocalPostSendClaim claim_local_post_send(pqxx::transaction_base& tx, std::int64_
         return {.outcome = Outcome::not_approved, .detail = why};
     }
 
-    std::optional<gbp::MediaSource> media;
-    if (content.media_id) {
-        const auto file = media_state(tx, *content.media_id, now, media_base);
-        media = gbp::MediaSource{.format = file.format, .url = file.url};
-    }
+    const auto media = media_sources(tx, content.media_ids, now, media_base);
     tx.exec("UPDATE local_posts SET status = 'sending', status_reason = NULL, send_started_at = $2::timestamptz, "
             "updated_at = $2::timestamptz WHERE id = $1",
             pqxx::params{id, to_timestamptz(now)})
@@ -767,11 +804,11 @@ std::optional<domain::LocalPostContent> with_edit(const EditState& edit, const d
     return std::move(*said);
 }
 
-// Which upload the post carries is the engine's to know (apply_local_post keeps it): after an edit
-// that changed the media, it is the edit's.
-void set_post_upload(pqxx::transaction_base& tx, std::int64_t id, const std::optional<std::int64_t>& media_id) {
-    tx.exec("UPDATE local_posts SET content = jsonb_set(content, '{media_id}', $2::jsonb) WHERE id = $1 AND status <> 'removed'",
-            pqxx::params{id, json_text(media_id)})
+// Which uploads the post carries is the engine's to know (apply_local_post keeps them): after an edit
+// that changed the media, they are the edit's.
+void set_post_uploads(pqxx::transaction_base& tx, std::int64_t id, const std::vector<std::int64_t>& media_ids) {
+    tx.exec("UPDATE local_posts SET content = jsonb_set(content, '{media_ids}', $2::jsonb) WHERE id = $1 AND status <> 'removed'",
+            pqxx::params{id, json_text(media_ids)})
         .no_rows();
 }
 
@@ -817,9 +854,9 @@ Result<model::LocalPost> write_local_post_edit(pqxx::transaction_base& tx, audit
         return conflict("local_post_changed", "The post changed after it was shown. Load it again and write the edit from the post as it is now.");
     }
     if (!changes) return invalid(changes.error().message);
-    // The post's own upload is on its row; another one must be a file that was uploaded.
-    if (normalized->media_id && normalized->media_id != base.media_id && !media_state(tx, *normalized->media_id, audit.now(), media_base).exists) {
-        return invalid("\"media_id\" names no uploaded file.");
+    // The post's own uploads are on its row; another list must name files that were uploaded.
+    if (normalized->media_ids != base.media_ids) {
+        if (auto missing = missing_upload(tx, normalized->media_ids, audit.now(), media_base)) return invalid(std::move(*missing));
     }
     const auto report = edit_checks_for(tx, base, *normalized, audit.now(), media_base);
     // Every save rewrites the edit whole, also one that says what the edit already said: its writer, its
@@ -1082,11 +1119,8 @@ LocalPostEditRequest prepare_local_post_edit(pqxx::transaction_base& tx, std::in
                       now);
         return settled("Google has this content already");
     }
-    std::optional<gbp::MediaSource> media;
-    if (content.media_id && std::ranges::contains(*mask, std::string_view("media"))) {
-        const auto file = media_state(tx, *content.media_id, now, media_base);
-        media = gbp::MediaSource{.format = file.format, .url = file.url};
-    }
+    const auto media = std::ranges::contains(*mask, std::string_view("media")) ? media_sources(tx, content.media_ids, now, media_base)
+                                                                               : std::vector<gbp::MediaSource>{};
     return {.outcome = Outcome::send,
             .mask = *mask,
             .body = gbp::update_body(read, content, *mask, media),
@@ -1103,7 +1137,7 @@ void local_post_edit_accepted(pqxx::transaction_base& tx, std::int64_t id, core:
     const auto before = content_of_post(tx, id);
     // Google's answer is the post now: content, state and times, as the sync stores them.
     apply_local_post(tx, post.location_id, updated, now);
-    if (std::ranges::contains(mask, std::string_view("media"))) set_post_upload(tx, id, sent.media_id);
+    if (std::ranges::contains(mask, std::string_view("media"))) set_post_uploads(tx, id, sent.media_ids);
     finish_edit(tx, id, edit, now);
     const auto after = content_of_post(tx, id);
 
@@ -1424,7 +1458,7 @@ AppliedLocalPost apply_local_post(pqxx::transaction_base& tx, std::int64_t locat
     // By its name, or as the post of this location with that id: a location that moved to another
     // account keeps its posts, and Google then names them under the new account.
     const auto parsed = gbp::parse_local_post_name(post.name);
-    const auto existing = tx.exec("SELECT id, status, google_state, media_id FROM local_posts WHERE google_name = $1 "
+    const auto existing = tx.exec("SELECT id, status, google_state FROM local_posts WHERE google_name = $1 "
                                   "OR (location_id = $2 AND google_name IS NOT NULL AND split_part(google_name, '/', 6) = $3) "
                                   "ORDER BY (google_name = $1) DESC, id LIMIT 1 FOR UPDATE",
                                   pqxx::params{post.name, location_id, parsed ? parsed->post_id : std::string{}});
@@ -1444,12 +1478,12 @@ AppliedLocalPost apply_local_post(pqxx::transaction_base& tx, std::int64_t locat
 
     // The content is Google's from now on, so a change made at Google shows.
     // What was approved stays in approved_content and in the audit log. Which
-    // upload the post carries stays too: that is ours to know, Google's post does not say.
-    content.media_id = existing[0][3].as<std::optional<std::int64_t>>();
+    // uploads the post carries stay too (the UPDATE keeps the row's own): that is ours to know, Google's post does not say.
     tx.exec("UPDATE local_posts SET google_name = $9, google_state = $2, search_url = $3, google_media = $4::jsonb, "
             "google_created_at = $5::timestamptz, google_updated_at = $6::timestamptz, "
             "updated_at = CASE WHEN raw IS DISTINCT FROM $7::jsonb THEN $8::timestamptz ELSE updated_at END, "
-            "raw = $7::jsonb, synced_at = $8::timestamptz, content = $10::jsonb WHERE id = $1",
+            "raw = $7::jsonb, synced_at = $8::timestamptz, "
+            "content = jsonb_set($10::jsonb, '{media_ids}', coalesce(content->'media_ids', '[]'::jsonb)) WHERE id = $1",
             pqxx::params{id, state, post.searchUrl, boost::json::serialize(media), created, updated, raw, now_text, post.name,
                          json_text(content)})
         .no_rows();

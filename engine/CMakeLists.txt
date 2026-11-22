@@ -53,6 +53,7 @@ add_library(poni_engine STATIC
   src/core/config.cpp
   src/core/crypto.cpp
   src/core/log.cpp
+  src/core/mapped_file.cpp
   src/core/rate_limiter.cpp
   src/core/text.cpp
   src/core/tls.cpp

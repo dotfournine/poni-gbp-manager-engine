@@ -133,7 +133,7 @@ TEST_F(LocalPostsConnector, GooglesPostsAreReadIntoTheEnginesContent) {
     EXPECT_FALSE(offer.offer->redeem_online_url);
     EXPECT_EQ(offer.offer->terms_conditions, "Dine-in only. One per table.");
     EXPECT_EQ(offer.scheduled_time, "2026-12-19T17:00:00.000000Z");
-    EXPECT_FALSE(offer.media_id) << "Google knows nothing of the engine's uploads";
+    EXPECT_TRUE(offer.media_ids.empty()) << "Google knows nothing of the engine's uploads";
     EXPECT_EQ(gbp::to_google_state(read(0)), "scheduled");
 
     const auto recurring = gbp::to_content(read(1));
@@ -191,7 +191,7 @@ TEST_F(LocalPostsConnector, TheCreateBodySpellsTheContentGooglesWay) {
     auto content = standard();
     content.call_to_action = domain::LocalPostCallToAction{.action_type = "learn_more", .url = "https://example.com/fall"};
     content.scheduled_time = "2026-12-19T17:00:00.000000Z";
-    EXPECT_EQ(gbp::create_body(content, gbp::MediaSource{"photo", "https://storage.googleapis.com/poni-public/p/abc.jpg"}),
+    EXPECT_EQ(gbp::create_body(content, std::vector<gbp::MediaSource>{{"photo", "https://storage.googleapis.com/poni-public/p/abc.jpg"}}),
               boost::json::parse(R"({
                   "languageCode": "en", "summary": "Fall specials start Monday.", "topicType": "STANDARD",
                   "callToAction": {"actionType": "LEARN_MORE", "url": "https://example.com/fall"},
@@ -199,10 +199,19 @@ TEST_F(LocalPostsConnector, TheCreateBodySpellsTheContentGooglesWay) {
                   "scheduledTime": "2026-12-19T17:00:00.000000Z"})")
                   .as_object());
 
+    // Several photos and a video go in the order the post shows them (D-101).
+    EXPECT_EQ(gbp::create_body(standard(), {{"photo", "https://storage.googleapis.com/poni-public/p/b.jpg"},
+                                            {"video", "https://storage.googleapis.com/poni-public/p/c.mp4"},
+                                            {"photo", "https://storage.googleapis.com/poni-public/p/a.png"}})
+                  .at("media"),
+              boost::json::parse(R"([{"mediaFormat": "PHOTO", "sourceUrl": "https://storage.googleapis.com/poni-public/p/b.jpg"},
+                                     {"mediaFormat": "VIDEO", "sourceUrl": "https://storage.googleapis.com/poni-public/p/c.mp4"},
+                                     {"mediaFormat": "PHOTO", "sourceUrl": "https://storage.googleapis.com/poni-public/p/a.png"}])"));
+
     // The call button has no address; a post without media, button or time has none of those members.
     auto call = standard();
     call.call_to_action = domain::LocalPostCallToAction{.action_type = "call", .url = std::nullopt};
-    EXPECT_EQ(gbp::create_body(call, std::nullopt),
+    EXPECT_EQ(gbp::create_body(call, {}),
               boost::json::parse(R"({"languageCode": "en", "summary": "Fall specials start Monday.", "topicType": "STANDARD",
                                      "callToAction": {"actionType": "CALL"}})")
                   .as_object());
@@ -213,7 +222,7 @@ TEST_F(LocalPostsConnector, TheCreateBodySpellsTheContentGooglesWay) {
                                          .schedule = {"2026-12-19", "11:00", "2026-12-26", "15:30"},
                                          .recurrence = domain::LocalPostRecurrence{"weekly", "2027-01-31T00:00:00.000000Z"}};
     offer.offer = domain::LocalPostOffer{.coupon_code = "LUNCH10", .redeem_online_url = std::nullopt, .terms_conditions = "Dine-in only."};
-    EXPECT_EQ(gbp::create_body(offer, std::nullopt),
+    EXPECT_EQ(gbp::create_body(offer, {}),
               boost::json::parse(R"({
                   "languageCode": "en", "summary": "Ten percent off lunch.", "topicType": "OFFER",
                   "event": {"title": "Lunch week",
@@ -225,13 +234,13 @@ TEST_F(LocalPostsConnector, TheCreateBodySpellsTheContentGooglesWay) {
 
     // Daily, and monthly on the day the event starts on.
     offer.event->recurrence->frequency = "daily";
-    EXPECT_EQ(gbp::create_body(offer, std::nullopt).at("event").at("recurrenceInfo").at("dailyPattern"), boost::json::object{});
+    EXPECT_EQ(gbp::create_body(offer, {}).at("event").at("recurrenceInfo").at("dailyPattern"), boost::json::object{});
     offer.event->recurrence->frequency = "monthly";
-    EXPECT_EQ(gbp::create_body(offer, std::nullopt).at("event").at("recurrenceInfo").at("monthlyPattern"),
+    EXPECT_EQ(gbp::create_body(offer, {}).at("event").at("recurrenceInfo").at("monthlyPattern"),
               boost::json::parse(R"({"dayOfMonth": 19})"));
     // An offer with none of its fields set has no offer object, as at Google.
     offer.offer = domain::LocalPostOffer{};
-    EXPECT_FALSE(gbp::create_body(offer, std::nullopt).contains("offer"));
+    EXPECT_FALSE(gbp::create_body(offer, {}).contains("offer"));
 }
 
 TEST_F(LocalPostsConnector, WhatIsSentIsWhatIsReadBack) {
@@ -241,7 +250,7 @@ TEST_F(LocalPostsConnector, WhatIsSentIsWhatIsReadBack) {
                                          .schedule = {"2026-12-19", "18:00", "2026-12-19", "20:00"},
                                          .recurrence = domain::LocalPostRecurrence{"weekly", "2027-01-31T00:00:00.000000Z"}};
     event.scheduled_time = "2026-12-19T17:00:00.000000Z";
-    auto echoed = boost::json::value(gbp::create_body(event, std::nullopt));
+    auto echoed = boost::json::value(gbp::create_body(event, {}));
     echoed.as_object()["name"] = "accounts/111/locations/9001/localPosts/1";
     EXPECT_EQ(gbp::to_content(*core::from_json<gbp::LocalPost>(echoed)), event);
 }
@@ -268,7 +277,7 @@ TEST_F(LocalPostsConnector, APostsNameHasThreePlainIds) {
 TEST_F(LocalPostsConnector, ACreateIsOnePostToTheLocationsPosts) {
     http_.reply(200, std::string(kTokenOk));
     http_.reply(200, test::fixture("local-post-created.json"));
-    const auto body = gbp::create_body(standard(), std::nullopt);
+    const auto body = gbp::create_body(standard(), {});
     const auto created = await(writer_.create_local_post("111", "9001", body));
     ASSERT_TRUE(created) << created.error().message;
     EXPECT_EQ(created->name, "accounts/111/locations/9001/localPosts/7001");
@@ -287,7 +296,7 @@ TEST_F(LocalPostsConnector, ACreateIsOnePostToTheLocationsPosts) {
 TEST_F(LocalPostsConnector, AValidationErrorNamesTheFieldAndTheLimitAndNotTheText) {
     http_.reply(200, std::string(kTokenOk));
     http_.reply(400, error_fixture("summary_too_long"));
-    const auto too_long = await(writer_.create_local_post("111", "9001", gbp::create_body(standard(), std::nullopt)));
+    const auto too_long = await(writer_.create_local_post("111", "9001", gbp::create_body(standard(), {})));
     ASSERT_FALSE(too_long);
     EXPECT_EQ(too_long.error().kind, ApiError::Kind::other) << "a refusal: nothing was created";
     EXPECT_THAT(too_long.error().message, HasSubstr("summary: Must be at most 1500 characters"));
@@ -348,19 +357,19 @@ TEST_F(LocalPostsConnector, ACreateOrADeleteWhoseAnswerNeverComesThrows) {
     http_.reply(200, std::string(kTokenOk));
     // Not an ApiError: jobs/local_posts.cpp takes a throw for "the outcome is unknown" and never sends the create again.
     http_.fail();
-    EXPECT_THROW(await(writer_.create_local_post("111", "9001", gbp::create_body(standard(), std::nullopt))), boost::system::system_error);
+    EXPECT_THROW(await(writer_.create_local_post("111", "9001", gbp::create_body(standard(), {}))), boost::system::system_error);
     EXPECT_EQ(posts_sent(), 1);
     // After a refused token the second create is the one in doubt, and there is no third.
     http_.reply(401, "{}");
     http_.reply(200, R"({"access_token": "token-2", "expires_in": 3600})");
     http_.fail();
-    EXPECT_THROW(await(writer_.create_local_post("111", "9001", gbp::create_body(standard(), std::nullopt))), boost::system::system_error);
+    EXPECT_THROW(await(writer_.create_local_post("111", "9001", gbp::create_body(standard(), {}))), boost::system::system_error);
     EXPECT_EQ(posts_sent(), 3);
     // Twice refused for its token: Google did nothing, and the caller is told so with the status it decides from.
     http_.reply(401, "{}");
     http_.reply(200, R"({"access_token": "token-3", "expires_in": 3600})");
     http_.reply(401, "{}");
-    const auto refused = await(writer_.create_local_post("111", "9001", gbp::create_body(standard(), std::nullopt)));
+    const auto refused = await(writer_.create_local_post("111", "9001", gbp::create_body(standard(), {})));
     ASSERT_FALSE(refused);
     EXPECT_EQ(refused.error().http_status, 401u);
     EXPECT_EQ(posts_sent(), 5);
@@ -434,7 +443,7 @@ domain::LocalPostContent edit_of(const gbp::LocalPost& post, const std::function
     return domain::normalize_local_post(content).value();
 }
 
-boost::json::object body_for(const gbp::LocalPost& post, const domain::LocalPostContent& edit, const std::optional<gbp::MediaSource>& media = {}) {
+boost::json::object body_for(const gbp::LocalPost& post, const domain::LocalPostContent& edit, const std::vector<gbp::MediaSource>& media = {}) {
     return gbp::update_body(post, edit, domain::local_post_edit_mask(gbp::to_content(post), edit).value(), media);
 }
 
@@ -486,11 +495,18 @@ TEST_F(LocalPostsConnector, TheUpdateBodyHoldsTheFieldsTheMaskNamesAndNoOther) {
 
     // An upload replaces what the post shows; taking the post's own upload away sends the media empty.
     auto with_upload = gbp::to_content(post);
-    with_upload.media_id = 7;
-    EXPECT_EQ(gbp::update_body(post, with_upload, {"media"}, gbp::MediaSource{"photo", "https://storage.googleapis.com/poni-public/p/abc.jpg"}),
+    with_upload.media_ids = {7};
+    EXPECT_EQ(gbp::update_body(post, with_upload, {"media"}, std::vector<gbp::MediaSource>{{"photo", "https://storage.googleapis.com/poni-public/p/abc.jpg"}}),
               boost::json::parse(R"({"media": [{"mediaFormat": "PHOTO", "sourceUrl": "https://storage.googleapis.com/poni-public/p/abc.jpg"}]})")
                   .as_object());
-    EXPECT_EQ(gbp::update_body(post, gbp::to_content(post), {"media"}, std::nullopt), boost::json::parse(R"({"media": []})").as_object());
+    EXPECT_EQ(gbp::update_body(post, gbp::to_content(post), {"media"}, {}), boost::json::parse(R"({"media": []})").as_object());
+    // Several uploads replace what the post shows, all of it, in their order.
+    with_upload.media_ids = {7, 8};
+    EXPECT_EQ(gbp::update_body(post, with_upload, {"media"},
+                               {{"video", "https://storage.googleapis.com/poni-public/p/b.mp4"}, {"photo", "https://storage.googleapis.com/poni-public/p/a.jpg"}}),
+              boost::json::parse(R"({"media": [{"mediaFormat": "VIDEO", "sourceUrl": "https://storage.googleapis.com/poni-public/p/b.mp4"},
+                                              {"mediaFormat": "PHOTO", "sourceUrl": "https://storage.googleapis.com/poni-public/p/a.jpg"}]})")
+                  .as_object());
 
     // Two fields at once, and an empty mask sends nothing at all.
     EXPECT_EQ(body_for(post, edit_of(post, [](auto& c) {
@@ -498,7 +514,7 @@ TEST_F(LocalPostsConnector, TheUpdateBodyHoldsTheFieldsTheMaskNamesAndNoOther) {
                   c.language_code = "es";
               })),
               boost::json::parse(R"({"summary": "Now open late every day.", "languageCode": "es"})").as_object());
-    EXPECT_TRUE(gbp::update_body(post, gbp::to_content(post), {}, std::nullopt).empty());
+    EXPECT_TRUE(gbp::update_body(post, gbp::to_content(post), {}, {}).empty());
 }
 
 TEST_F(LocalPostsConnector, AnEventGoesBackWithItsRepeatAndItsUnchangedTimesAsGoogleHoldsThem) {
@@ -646,14 +662,14 @@ TEST_F(LocalPostsConnector, TheFakeHoldsANewPostInProcessingAsGoogleDoes) {
     test::FakeLocalPosts google;
     auto scheduled = standard("Opening soon.");
     scheduled.scheduled_time = "2026-12-19T17:00:00.000000Z";
-    const auto created = await(google.create_local_post("111", "9001", gbp::create_body(scheduled, gbp::MediaSource{"photo", "https://example.com/p/a.jpg"})));
+    const auto created = await(google.create_local_post("111", "9001", gbp::create_body(scheduled, std::vector<gbp::MediaSource>{{"photo", "https://example.com/p/a.jpg"}})));
     ASSERT_TRUE(created);
     EXPECT_EQ(created->name, "accounts/111/locations/9001/localPosts/7001");
     EXPECT_EQ(created->state, "PROCESSING");
     EXPECT_EQ(created->createTime, google.now);
     ASSERT_TRUE(created->media);
     EXPECT_THAT(created->media->at(0).googleUrl.value(), HasSubstr("googleusercontent.com")) << "Google serves the file from its own address";
-    ASSERT_TRUE(await(google.create_local_post("111", "9001", gbp::create_body(standard("Now."), std::nullopt))));
+    ASSERT_TRUE(await(google.create_local_post("111", "9001", gbp::create_body(standard("Now."), {}))));
 
     // Listed and readable while it is processing, newest first.
     auto page = await(google.list_local_posts("111", "9001", std::nullopt));
@@ -689,10 +705,10 @@ TEST_F(LocalPostsConnector, TheFakeHoldsANewPostInProcessingAsGoogleDoes) {
     EXPECT_FALSE(await(google.create_local_post("111", "9001", {})));
     google.fail_create.reset();
     google.create_times_out = true;
-    EXPECT_THROW(await(google.create_local_post("111", "9001", gbp::create_body(standard("Lost."), std::nullopt))), boost::system::system_error);
+    EXPECT_THROW(await(google.create_local_post("111", "9001", gbp::create_body(standard("Lost."), {}))), boost::system::system_error);
     EXPECT_EQ(google.posts["9001"].size(), 1u);
     google.timeout_after_storing = true;
-    EXPECT_THROW(await(google.create_local_post("111", "9001", gbp::create_body(standard("Arrived."), std::nullopt))), boost::system::system_error);
+    EXPECT_THROW(await(google.create_local_post("111", "9001", gbp::create_body(standard("Arrived."), {}))), boost::system::system_error);
     EXPECT_EQ(google.posts["9001"].size(), 2u);
     EXPECT_EQ(google.creates.size(), 5u) << "every create that reached Google is counted, whatever became of it";
 }
@@ -701,7 +717,7 @@ TEST_F(LocalPostsConnector, TheFakeChangesTheFieldsAnUpdateNamesAndNoOther) {
     test::FakeLocalPosts google;
     auto content = standard("Open late on Fridays.");
     content.call_to_action = domain::LocalPostCallToAction{.action_type = "book", .url = "https://example.com/book"};
-    ASSERT_TRUE(await(google.create_local_post("111", "9001", gbp::create_body(content, gbp::MediaSource{"photo", "https://example.com/p/a.jpg"}))));
+    ASSERT_TRUE(await(google.create_local_post("111", "9001", gbp::create_body(content, std::vector<gbp::MediaSource>{{"photo", "https://example.com/p/a.jpg"}}))));
     google.finish_processing();
     const gbp::LocalPostName name{"111", "9001", "7001"};
 

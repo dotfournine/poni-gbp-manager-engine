@@ -104,7 +104,7 @@ TEST_F(LocalPostsPublish, AnApprovedPostIsSentOnceWithItsTimeAndRepeatAndGoogleS
     run_jobs();
     ASSERT_EQ(google_.creates.size(), 1u);
     EXPECT_EQ(google_.creates[0].location_id, kSpaPosts);
-    EXPECT_EQ(google_.creates[0].body, gbp::create_body(shown(id), std::nullopt)) << "the content that was approved, field for field";
+    EXPECT_EQ(google_.creates[0].body, gbp::create_body(shown(id), {})) << "the content that was approved, field for field";
     EXPECT_EQ(google_.creates[0].body.at("scheduledTime").as_string(), "2026-12-19T17:00:00.000000Z");
     EXPECT_TRUE(google_.creates[0].body.at("event").at("recurrenceInfo").as_object().contains("weeklyPattern"));
     EXPECT_EQ(post(id, "status"), "sent");
@@ -134,7 +134,7 @@ TEST_F(LocalPostsPublish, AnApprovedPostIsSentOnceWithItsTimeAndRepeatAndGoogleS
 
 TEST_F(LocalPostsPublish, APostsPhotoIsGivenToGoogleByItsPublicAddress) {
     auto content = standard("A look at the new room.");
-    content.media_id = upload();
+    content.media_ids = {upload()};
     const auto id = draft(spa_, content);
     EXPECT_EQ(failed_checks(id), "");
     approve_and_send(id);
@@ -142,13 +142,13 @@ TEST_F(LocalPostsPublish, APostsPhotoIsGivenToGoogleByItsPublicAddress) {
     EXPECT_EQ(google_.creates[0].body.at("media"),
               boost::json::parse(R"([{"mediaFormat": "PHOTO", "sourceUrl": "https://storage.googleapis.com/poni-public-test/p/abc123.jpg"}])"));
     EXPECT_THAT(post(id, "google_media->0->>'url'"), HasSubstr("googleusercontent.com")) << "from then on the post shows Google's copy";
-    EXPECT_EQ(post(id, "media_id"), std::to_string(*content.media_id)) << "which upload it was stays on the row";
+    EXPECT_EQ(post(id, "(content->'media_ids')"), std::format("[{}]", content.media_ids.front())) << "which upload it was stays on the row";
 }
 
 TEST_F(LocalPostsPublish, APostsVideoIsGivenToGoogleAsAVideo) {
     auto content = standard("A walk through the new room.");
-    content.media_id = insert_upload({.object = "p/walk.mp4", .format = "video", .content_type = "video/mp4", .bytes = 9000000,
-                                      .width = 1080, .height = 1920, .duration_ms = "12500"});
+    content.media_ids = {insert_upload({.object = "p/walk.mp4", .format = "video", .content_type = "video/mp4", .bytes = 9000000,
+                                      .width = 1080, .height = 1920, .duration_ms = "12500"})};
     const auto id = draft(spa_, content);
     EXPECT_EQ(failed_checks(id), "");
     approve_and_send(id);
@@ -156,6 +156,34 @@ TEST_F(LocalPostsPublish, APostsVideoIsGivenToGoogleAsAVideo) {
     EXPECT_EQ(google_.creates[0].body.at("media"),
               boost::json::parse(R"([{"mediaFormat": "VIDEO", "sourceUrl": "https://storage.googleapis.com/poni-public-test/p/walk.mp4"}])"));
     EXPECT_EQ(post(id, "status"), "sent");
+}
+
+TEST_F(LocalPostsPublish, SeveralPhotosAndAVideoAreGivenToGoogleInTheirOrder) {
+    // Up to ten files, photos and videos mixed, in the order the person put them (D-101).
+    auto content = standard("The new rooms, and a walk through them.");
+    const auto walk = insert_upload({.object = "p/walk.mp4", .format = "video", .content_type = "video/mp4", .bytes = 9000000,
+                                     .width = 1080, .height = 1920, .duration_ms = "12500"});
+    content.media_ids = {upload("p/b.jpg"), walk, upload("p/a.jpg")};
+    const auto id = draft(spa_, content);
+    EXPECT_EQ(failed_checks(id), "");
+    approve_and_send(id);
+    ASSERT_EQ(google_.creates.size(), 1u);
+    EXPECT_EQ(google_.creates[0].body.at("media"), boost::json::parse(R"([
+        {"mediaFormat": "PHOTO", "sourceUrl": "https://storage.googleapis.com/poni-public-test/p/b.jpg"},
+        {"mediaFormat": "VIDEO", "sourceUrl": "https://storage.googleapis.com/poni-public-test/p/walk.mp4"},
+        {"mediaFormat": "PHOTO", "sourceUrl": "https://storage.googleapis.com/poni-public-test/p/a.jpg"}])"));
+    EXPECT_EQ(post(id, "(content->'media_ids')"), std::format("[{}, {}, {}]", content.media_ids[0], content.media_ids[1], content.media_ids[2]));
+}
+
+TEST_F(LocalPostsPublish, OneFileGoogleCouldNotFetchBlocksTheApprovalAndIsNamed) {
+    auto content = standard("Three rooms.");
+    content.media_ids = {upload("p/a.jpg"), upload("p/old.jpg", "361 days"), upload("p/c.jpg")};
+    const auto id = draft(spa_, content);
+    EXPECT_EQ(failed_checks(id), "media_usable");
+    EXPECT_THAT(post(id, "(SELECT c->>'detail' FROM jsonb_array_elements(checks) c WHERE c->>'name' = 'media_usable')"),
+                HasSubstr("file 2 of 3 (the photo)"));
+    EXPECT_EQ(approve(id).error().code, "checks_failed");
+    EXPECT_TRUE(google_.creates.empty());
 }
 
 // ---- never twice -----------------------------------------------------------------------------
@@ -318,7 +346,7 @@ TEST_F(LocalPostsPublish, ApprovalIsForTheExactContentThePersonRead) {
              [](auto& c) { c.call_to_action->url = "https://example.com/other"; },
              [](auto& c) { c.call_to_action.reset(); },
              [](auto& c) { c.language_code = "es"; },
-             [&](auto& c) { c.media_id = upload("p/other.jpg"); },
+             [&](auto& c) { c.media_ids = {upload("p/other.jpg")}; },
          }) {
         auto other = edited;
         change(other);
@@ -452,7 +480,7 @@ TEST_F(LocalPostsPublish, WhatIsNotAPostAtAllIsRefusedOutright) {
     auto leap_day = standard();
     leap_day.scheduled_time = "2028-02-29T23:59:59.999999Z";
     EXPECT_TRUE(domain::normalize_local_post(leap_day)) << "a day the calendar has, to its last microsecond";
-    EXPECT_TRUE(refuses([](auto& c) { c.media_id = 999999; })) << "an upload that does not exist";
+    EXPECT_TRUE(refuses([](auto& c) { c.media_ids = {999999}; })) << "an upload that does not exist";
     EXPECT_TRUE(refuses([](auto& c) { c.summary = std::string(6001, 'a'); }));
     EXPECT_EQ(count("local_posts"), 0);
 
@@ -480,13 +508,13 @@ TEST_F(LocalPostsPublish, TheTimeToPublishAtIsCheckedAgainWhenTheSendIsClaimed) 
 
 TEST_F(LocalPostsPublish, APhotoThatGoogleCouldNotFetchBlocksTheApproval) {
     auto content = standard("With a picture.");
-    content.media_id = upload("p/old.jpg", "361 days");
+    content.media_ids = {upload("p/old.jpg", "361 days")};
     const auto old = draft(spa_, content);
     EXPECT_EQ(failed_checks(old), "media_usable") << "the bucket removes a file after a year";
     EXPECT_EQ(approve(old).error().code, "checks_failed");
 
     // Without a public bucket (or with a folder standing in for it) there is no address Google can read.
-    content.media_id = upload("p/new.jpg");
+    content.media_ids = {upload("p/new.jpg")};
     const auto created = as_staff_without_ip([&](pqxx::work& tx, audit::Writer& audit) {
         return repo::create_local_post(tx, audit, spa_, content, "file:///tmp/public/");
     });

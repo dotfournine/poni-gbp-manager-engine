@@ -4,9 +4,11 @@
 // its video, and a request body limit that belongs to the route, with the
 // question of who is calling asked before a large body is read.
 
+#include "core/crypto.hpp"
 #include "core/tls.hpp"
 #include "domain/image_info.hpp"
 #include "domain/video_info.hpp"
+#include "fakes.hpp"
 #include "http/client.hpp"
 #include "loopback.hpp"
 #include "video_bytes.hpp"
@@ -237,11 +239,29 @@ TEST(VideoInfo, GooglesRequirementsForAPostsVideo) {
 
 namespace {
 
+// The body wherever the server put it.
+std::string_view body_of(const http::Request& request) { return request.file ? request.file->bytes() : std::string_view(request.body); }
+
+// Upload files in the temporary folder that still have a name: none, as the server removes the name as soon as it opens one.
+std::int64_t named_uploads() {
+    std::int64_t n = 0;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(std::filesystem::temp_directory_path(), ec)) {
+        if (entry.path().filename().string().starts_with("poni-upload-")) ++n;
+    }
+    return n;
+}
+
 class BodyLimit : public ::testing::Test {
 protected:
     BodyLimit() : tls_(core::make_tls_client_context()), client_(tls_.ctx) {
+        // What arrived, and where: on disk (a route that takes a file, D-101) or in memory.
         const auto size = [](const http::Request& request) -> asio::awaitable<http::Response> {
-            co_return http::Response::json(200, boost::json::object{{"bytes", request.body.size()}});
+            co_return http::Response::json(200, boost::json::object{{"bytes", body_of(request).size()},
+                                                                    {"on_disk", request.file != nullptr},
+                                                                    {"in_memory", request.body.size()},
+                                                                    {"sha256", core::sha256_hex(body_of(request))},
+                                                                    {"named_uploads", named_uploads()}});
         };
         router_.add(verb::post, "/small", {http::Access::anonymous, "test.small"}, size);
         router_.add(verb::post, "/files", {http::Access::anonymous, "test.files", 3 * 1024 * 1024}, size);
@@ -311,6 +331,61 @@ TEST_F(BodyLimit, TheServerTakesALargeBodyOnlyWhereTheRouteAllowsIt) {
     EXPECT_THAT(announce("/files", 200ull * 1024 * 1024 * 1024), testing::StartsWith("HTTP/1.1 413"));
 }
 
+TEST_F(BodyLimit, ARoutesFileGoesToDiskAndEveryOtherBodyToMemory) {
+    // A file is written to a file that has no name and read through a mapping (D-101): the engine holds
+    // none of it in memory of its own, and nothing is left behind, whatever becomes of the request.
+    const std::string bytes(2 * 1024 * 1024, 'x');
+    const auto file = post("/files", bytes.size());
+    ASSERT_EQ(file.status, 200u) << file.body;
+    const auto got = boost::json::parse(file.body).as_object();
+    EXPECT_TRUE(got.at("on_disk").as_bool());
+    EXPECT_EQ(got.at("in_memory").as_int64(), 0);
+    EXPECT_EQ(got.at("bytes").as_int64(), 2 * 1024 * 1024);
+    EXPECT_EQ(got.at("sha256").as_string(), core::sha256_hex(bytes)) << "the same bytes, in order";
+    EXPECT_EQ(got.at("named_uploads").as_int64(), 0) << "the file has no name while the request is carried out";
+
+    const auto small = boost::json::parse(post("/small", 1024).body).as_object();
+    EXPECT_FALSE(small.at("on_disk").as_bool());
+    EXPECT_EQ(small.at("in_memory").as_int64(), 1024);
+    const auto empty = boost::json::parse(post("/files", 0).body).as_object();
+    EXPECT_TRUE(empty.at("on_disk").as_bool()) << "an empty file is a file too";
+    EXPECT_EQ(empty.at("bytes").as_int64(), 0);
+    EXPECT_EQ(named_uploads(), 0);
+}
+
+TEST_F(BodyLimit, TheClientSendsAFileFromWhereItLies) {
+    // What an upload to the bucket sends: the file, from its mapping, as the body.
+    const std::string content(1024 * 1024 + 7, 'v');
+    const auto answer = test::with_server(io_, router_, [&](std::uint16_t port) {
+        http::ClientRequest request;
+        request.method = http::ClientMethod::post;
+        request.url = boost::urls::url(std::format("http://127.0.0.1:{}/files", port));
+        request.content_type = "video/mp4";
+        request.file = test::mapped(content);
+        return client_.send(std::move(request));
+    });
+    ASSERT_EQ(answer.status, 200u) << answer.body;
+    const auto got = boost::json::parse(answer.body).as_object();
+    EXPECT_EQ(got.at("bytes").as_int64(), static_cast<std::int64_t>(content.size()));
+    EXPECT_EQ(got.at("sha256").as_string(), core::sha256_hex(content));
+
+    // A file goes only in a POST, and never over HTTP/2.
+    http::ClientRequest put;
+    put.method = http::ClientMethod::put;
+    put.url = boost::urls::url("https://mybusiness.googleapis.com/v4/accounts/1/locations/2/reviews/3/reply");
+    put.file = test::mapped("x");
+    EXPECT_EQ(http::why_refused(put), "the outbound client sends a file only in a POST");
+}
+
+TEST(MappedFile, ANamelessFileIsReadThroughItsMappingAndLeavesNothingBehind) {
+    const auto before = named_uploads();
+    const auto file = test::mapped("a photo's bytes");
+    EXPECT_EQ(file->bytes(), "a photo's bytes");
+    EXPECT_EQ(file->size(), 15u);
+    EXPECT_EQ(named_uploads(), before) << "nothing to clean up";
+    EXPECT_TRUE(test::mapped("")->bytes().empty());
+}
+
 TEST_F(BodyLimit, WhoIsCallingIsAskedBeforeALargeBodyIsRead) {
     // Without a hook a route for signed-in people is closed. The answer comes on the head alone:
     // the announced body is never sent, and the server does not wait for it.
@@ -325,7 +400,7 @@ TEST_F(BodyLimit, WhoIsCallingIsAskedBeforeALargeBodyIsRead) {
     router_.set_auth_hook([&](http::Request& request, const http::RouteInfo& info) -> asio::awaitable<std::optional<http::Response>> {
         if (info.action != "test.staff_files") co_return std::nullopt;
         ++asked;
-        bodies.push_back(request.body.size());
+        bodies.push_back(body_of(request).size());
         EXPECT_EQ(request.header("content-type"), "application/octet-stream");
         if (!let_in) co_return http::Response::error(403, "forbidden", "Not for you.");
         co_return std::nullopt;
@@ -354,7 +429,7 @@ TEST_F(BodyLimit, ARefusalReachesACallerWhoIsAlreadySendingTheFile) {
     // and not a reset connection.
     std::size_t seen = 0;
     router_.set_auth_hook([&](http::Request& request, const http::RouteInfo&) -> asio::awaitable<std::optional<http::Response>> {
-        seen += request.body.size();
+        seen += body_of(request).size();
         co_return http::Response::error(403, "forbidden", "Not for you.");
     });
     const auto refused = post("/staff-files", 3 * 1024 * 1024);
