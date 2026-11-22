@@ -633,10 +633,13 @@ try {
   check("GET /api/notification-deliveries?escalation_id=1", "/api/notification-deliveries", "GET", await call("GET", "/api/notification-deliveries?escalation_id=1"));
   expectStatus("GET /api/notification-deliveries?escalation_id=x", await call("GET", "/api/notification-deliveries?escalation_id=x"), 400, "invalid_request");
 
-  // Phase 5: reports, a location's (D-102): the seeded location's. Its account
-  // does not exist and the check configures no model, so building its report
-  // asks neither Google nor the model for anything. Nothing is sent: sending
-  // needs the switch, recipients and a public bucket, and the check sets up none.
+  // Phase 5: reports, a location's (D-102): the seeded location's. What keeps
+  // the model out is the period, not the engine's settings (a local engine may
+  // have a model): January 2026 holds none of its reviews, and its made-up
+  // account has no visibility figures, so the summary stops at "nothing to
+  // summarize". A period with reviews would start a model call. Nothing is
+  // sent: sending needs the switch, recipients and a public bucket, and the
+  // check sets up none.
   check("GET /api/reports?status=draft", "/api/reports", "GET", await call("GET", "/api/reports?status=draft&per_page=5"));
   expectStatus("GET /api/reports?location_id=x", await call("GET", "/api/reports?location_id=x"), 400, "invalid_request");
   if (seededLocation) {
