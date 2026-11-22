@@ -74,7 +74,9 @@ tags:
     description: |
       Connecting the two Google accounts the engine works with (D-079): the
       GBP managing account, whose token reads reviews and posts replies, and
-      the mailbox notifications are sent from.
+      the mailbox notifications are sent from. Each is the account a person
+      signed in with, one of each at a time, and the system status shows its
+      address (D-100).
   - name: clients
     description: Clients (brands) that PONI works for.
   - name: locations
@@ -322,8 +324,14 @@ paths:
         `/api/connections/{account}/callback`, which belongs to this attempt
         for 10 minutes and to the browser that started it.
 
+        The account connected is the one the person picks in Google's
+        account chooser, which is always shown: no setting of the engine
+        names it (D-100). There is one connection of each kind at a time,
+        and connecting again, with the same account or another, replaces
+        the stored token and its address.
+
         The client secret, the refresh token and the encryption key never
-        reach the browser. Connecting again replaces the stored token.
+        reach the browser.
       tags: [connections]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -358,10 +366,11 @@ paths:
       summary: Finish connecting a Google account
       description: |
         Where Google sends the browser back. The engine exchanges the code,
-        checks the account (the GBP account sees at least one location; the
-        mailbox is the configured sender and granted permission to send),
-        encrypts the token and stores it, with an audit entry in the name of
-        the person who started. It then redirects to the status page:
+        learns the account's address from Google's answer, checks the
+        account (the GBP account sees at least one location; the mailbox
+        granted permission to send), encrypts the token and stores it with
+        the address, with an audit entry in the name of the person who
+        started. It then redirects to the status page:
         `/#/status?connected=<account>`, or
         `/#/status?account=<account>&connect_error=<code>` with one of:
 
@@ -370,7 +379,7 @@ paths:
         - `refused`: Google did not accept the sign-in
         - `no_refresh_token`: Google returned no refresh token; remove the app's access in the Google account and start again
         - `no_access`: the account can't list Business Profile accounts and locations, or sees no location
-        - `wrong_mailbox`: the account that signed in is not the mailbox notifications are sent from
+        - `no_email`: Google did not name a verified address for the account that signed in
         - `no_send_permission`: the permission to send email was not granted
         - `failed`: anything else
 
@@ -4298,11 +4307,19 @@ components:
       type: object
       description: The GBP managing account's token.
       additionalProperties: false
-      required: [connected, last_ok_at, last_error, last_error_at]
+      required: [connected, account_email, last_ok_at, last_error, last_error_at]
       properties:
         connected:
           type: boolean
           description: A token is stored. Whether Google still accepts it shows in the other fields.
+        account_email:
+          type: [string, "null"]
+          description: |
+            The address of the Google account that is connected, as Google
+            named it when the account was connected (D-100): the account a
+            client invites to manage its Business Profile. Null while
+            nothing is connected, and for a token stored before the engine
+            kept the address, until the account is connected again.
         last_ok_at:
           type: [string, "null"]
           format: date-time
@@ -6788,15 +6805,20 @@ components:
       type: object
       description: The email channel.
       additionalProperties: false
-      required: [sending_enabled, connected, sender, last_ok_at, last_error, last_error_at, pending, failed]
+      required: [sending_enabled, connected, account_email, last_ok_at, last_error, last_error_at, pending, failed]
       properties:
         sending_enabled:
           type: boolean
         connected:
           type: boolean
-          description: The sending account has signed in (`poni-gbp-engine auth --gmail`).
-        sender:
-          type: string
+          description: A token of the sending mailbox is stored (connected on the status page).
+        account_email:
+          type: [string, "null"]
+          description: |
+            The address of the connected mailbox, as Google named it when it
+            was connected (D-100); email is sent from it. Null while nothing
+            is connected, and for a token stored before the engine kept the
+            address: no email is sent until the mailbox is connected again.
         last_ok_at:
           type: [string, "null"]
           format: date-time
