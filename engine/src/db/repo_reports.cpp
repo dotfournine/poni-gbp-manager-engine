@@ -220,21 +220,18 @@ std::optional<std::string> name_report_page(pqxx::transaction_base& tx, std::int
     return rows[0][0].as<std::string>();
 }
 
-BuiltReport store_built_report(pqxx::transaction_base& tx, std::int64_t report_id, const domain::ReportData& data,
-                               std::string_view link_base, core::TimePoint now) {
+std::optional<ReportMail> store_built_report(pqxx::transaction_base& tx, std::int64_t report_id, const domain::ReportData& data,
+                                             std::string_view link_base, core::TimePoint now) {
     const auto rows = tx.exec("UPDATE reports SET status = 'ready', data = $2::jsonb, error = NULL, built_at = $3::timestamptz, "
                               "updated_at = $3::timestamptz WHERE id = $1 AND status = 'building' RETURNING auto_send_status",
                               pqxx::params{report_id, boost::json::serialize(boost::json::value_from(data)), to_timestamptz(now)});
-    if (rows.empty()) return {};
-    BuiltReport out{.built = true};
-    if (rows[0][0].as<std::string>() != "pending") return out;
+    if (rows.empty() || rows[0][0].as<std::string>() != "pending") return std::nullopt;
     // Checked here, so that `done` is written before any email and in the one run that made the report ready:
     // a schedule's send happens at most once, and nothing is checked again between `done` and the send.
     auto mail = prepare_report_send(tx, report_id, std::nullopt, link_base);
-    if (!mail) return out;  // pending: a person can send it, and the 409 they would get says why
+    if (!mail) return std::nullopt;  // pending: a person can send it, and the 409 they would get says why
     tx.exec("UPDATE reports SET auto_send_status = 'done' WHERE id = $1", pqxx::params{report_id}).no_rows();
-    out.to_send = std::move(*mail);
-    return out;
+    return std::move(*mail);
 }
 
 void fail_report(pqxx::transaction_base& tx, std::int64_t report_id, const std::string& error, core::TimePoint now) {

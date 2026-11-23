@@ -139,17 +139,17 @@ asio::awaitable<void> Reporter::build_once(std::int64_t report_id, bool last_att
                                              status != 0 ? std::format(" (HTTP {})", status) : std::string{}));
     }
 
-    auto built = co_await db_.tx(
+    auto mail = co_await db_.tx(
         [&, base = link_base(), now = clock_.now()](pqxx::work& tx) { return repo::store_built_report(tx, report_id, data, base, now); });
     log::info("report built", {{"report_id", report_id}, {"location_id", data.location_id}, {"summary", data.summary.has_value()}});
-    if (!built.to_send) co_return;
+    if (!mail) co_return;
 
     // Its schedule sends it, once: `done` is stored already, so a failure here is logged and never tried again,
     // and the report the job stored stands. Only the last transaction of a send can throw.
     std::optional<std::string> failure;
     try {
-        const auto sent = co_await deliver(report_id, std::move(*built.to_send), audit::Actor::system("report-schedule"));
-        if (sent) log::info("report sent by its schedule", {{"report_id", report_id}, {"deliveries", std::ssize(sent->deliveries)}});
+        // What came of each address is in the rows, and the counts in the audit entry `report.send`.
+        static_cast<void>(co_await deliver(report_id, std::move(*mail), audit::Actor::system("report-schedule")));
     } catch (const std::exception& e) {
         failure = e.what();
     }

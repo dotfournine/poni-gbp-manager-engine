@@ -667,11 +667,16 @@ try {
         fail(`GET ${path}`, `a ready report has its page's address and nothing else: ${report.text.slice(0, 300)}`);
       }
       check(`GET /api/reports?location_id=${locationId}`, "/api/reports", "GET", await call("GET", `/api/reports?location_id=${locationId}`));
-      // Sending is switched off in the bare engine, and the location has no recipients: both are a declared 409, and no email leaves (D-104).
-      for (const [name, body] of [[`POST ${path}/send`, undefined], [`POST ${path}/send (some recipients)`, { recipients: ["contract-check@example.com"] }]]) {
-        const sent = await call("POST", `${path}/send`, { body });
-        check(name, "/api/reports/{id}/send", "POST", sent);
-        if (sent.status !== 409) fail(name, `expected a refusal, got ${sent.status}: ${sent.text.slice(0, 300)}`);
+      // Only while sending is off, as in the bare engine: then both are a declared 409 and no email leaves (D-104).
+      // With sending on, a rule of this location would get the report: the check sends no email.
+      if (switches.json?.email_sending_enabled === false) {
+        for (const [name, body] of [[`POST ${path}/send`, undefined], [`POST ${path}/send (some recipients)`, { recipients: ["contract-check@example.com"] }]]) {
+          const sent = await call("POST", `${path}/send`, { body });
+          check(name, "/api/reports/{id}/send", "POST", sent);
+          if (sent.status !== 409) fail(name, `expected a refusal, got ${sent.status}: ${sent.text.slice(0, 300)}`);
+        }
+      } else {
+        console.log(`skip  POST ${path}/send: email sending is switched on in this database, and the check sends no email`);
       }
       check(`GET /api/notification-deliveries?report_id=${made.json.id}`, "/api/notification-deliveries", "GET", await call("GET", `/api/notification-deliveries?report_id=${made.json.id}`));
     }

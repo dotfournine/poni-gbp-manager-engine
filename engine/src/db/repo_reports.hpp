@@ -105,15 +105,13 @@ Result<model::Report> record_report_send(pqxx::transaction_base& tx, audit::Writ
                                          const std::vector<ReportDelivery>& outcomes, std::string_view event_key,
                                          std::string_view link_base);
 
-struct BuiltReport {
-    bool built = false;                 // this call took the report from building to ready
-    std::optional<ReportMail> to_send;  // its schedule sends by itself and the checks passed: auto_send_status is now done
-};
 // building -> ready, with the numbers. A report whose schedule sends it by itself ("pending") is
 // checked as a send in the same transaction: if the checks pass it becomes "done" and the mail is
-// returned for the caller to send, once; if not, it stays "pending" for a person to send.
-BuiltReport store_built_report(pqxx::transaction_base& tx, std::int64_t report_id, const domain::ReportData& data,
-                               std::string_view link_base, core::TimePoint now);
+// returned for the caller to send, once. Nothing is returned when the report was no longer
+// building, when its schedule does not send it by itself, and when the send's checks refused
+// (it stays "pending" for a person to send).
+std::optional<ReportMail> store_built_report(pqxx::transaction_base& tx, std::int64_t report_id, const domain::ReportData& data,
+                                             std::string_view link_base, core::TimePoint now);
 // building -> failed.
 void fail_report(pqxx::transaction_base& tx, std::int64_t report_id, const std::string& error, core::TimePoint now);
 
