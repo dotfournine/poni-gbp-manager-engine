@@ -17,7 +17,7 @@ std::optional<std::int64_t> row_id(const std::string& object_id) {
     std::int64_t id = 0;
     const auto* end = object_id.data() + object_id.size();
     const auto [ptr, ec] = std::from_chars(object_id.data(), end, id);
-    if (object_id.empty() || ec != std::errc{} || ptr != end || id <= 0) return std::nullopt;
+    if (ec != std::errc{} || ptr != end) return std::nullopt;
     return id;
 }
 
@@ -27,15 +27,15 @@ void record(pqxx::transaction_base& tx, const Actor& actor, const Entry& entry, 
     const auto json = [](const boost::json::value& v) -> std::optional<std::string> {
         return v.is_null() ? std::nullopt : std::optional(boost::json::serialize(v));
     };
-    // The list of kinds is the one in AuditEntry.location_id (api/openapi.yaml)
-    // and in the check of 0009_audit_location.sql.
+    // The kinds are those of AuditEntry.location_id (api/openapi.yaml) and of
+    // the check in 0009_audit_location.sql.
     tx.exec(
           R"sql(
         INSERT INTO audit_log (occurred_at, actor_type, actor_user_id, actor, action, object_type, object_id,
                                before, after, ip, location_id)
         VALUES ($1::timestamptz, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10,
                 COALESCE($11::bigint, CASE $6
-                    WHEN 'location' THEN (SELECT id FROM locations WHERE id = $12::bigint)
+                    WHEN 'location' THEN $12::bigint
                     WHEN 'review' THEN (SELECT location_id FROM reviews WHERE id = $12::bigint)
                     WHEN 'draft' THEN (SELECT r.location_id FROM reply_drafts d JOIN reviews r ON r.id = d.review_id
                                         WHERE d.id = $12::bigint)

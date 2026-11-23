@@ -141,7 +141,7 @@ TEST_F(AuditLocation, AnEntryOfADeleteKeepsTheLocationOfWhatWasDeleted) {
 TEST_F(AuditLocation, AnEntryAboutALocationsObjectWithoutALocationIsRefused) {
     // A review that does not exist: no location can be read, and the table refuses the entry.
     EXPECT_THROW(recorded("review", "424242"), pqxx::check_violation);
-    EXPECT_THROW(recorded("location", "424242"), pqxx::check_violation);
+    EXPECT_THROW(recorded("location", "424242"), pqxx::foreign_key_violation);
 }
 
 TEST_F(AuditLocation, TheLogIsReadForOneLocationWithItsTitle) {

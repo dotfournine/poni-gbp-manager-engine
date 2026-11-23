@@ -62,11 +62,7 @@ struct Change {
     std::optional<std::int64_t> location_id = std::nullopt;  // as in Entry
 };
 
-// Inserts one entry on `tx`, with the location of the object it is about
-// (D-103): a `location` is its own, and a review, draft, escalation, local
-// post, report, share link, schedule, go-live run or notification rule names
-// its location; anything else has none. A check on the table refuses an entry
-// of the first kinds without one.
+// Inserts one entry on `tx`, with the location of the object it is about (D-103).
 void record(pqxx::transaction_base& tx, const Actor& actor, const Entry& entry, core::TimePoint now);
 
 class Writer {
