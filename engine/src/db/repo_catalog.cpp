@@ -429,10 +429,12 @@ model::AuditList list_audit(pqxx::transaction_base& tx, const AuditFilter& filte
     if (!filter.object_type.empty()) where.add(std::format("a.object_type = {}", where.bind(filter.object_type)));
     if (!filter.object_id.empty()) where.add(std::format("a.object_id = {}", where.bind(filter.object_id)));
     if (!filter.actor.empty()) where.add(std::format("position(lower({}) in lower(a.actor)) > 0", where.bind(filter.actor)));
+    if (filter.location_id) where.add(std::format("a.location_id = {}", where.bind(*filter.location_id)));
     return db::page<model::AuditEntry>(
         tx,
         std::format("SELECT a.id, {} AS occurred_at, a.actor_type, a.actor, a.action, a.object_type, a.object_id, "
-                    "a.before, a.after, a.ip FROM audit_log a",
+                    "a.location_id, l.title AS location_title, a.before, a.after, a.ip "
+                    "FROM audit_log a LEFT JOIN locations l ON l.id = a.location_id",
                     iso("a.occurred_at")),
         where, "a.occurred_at DESC, a.id DESC", filter.page);
 }

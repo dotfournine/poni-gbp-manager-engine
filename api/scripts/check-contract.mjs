@@ -702,6 +702,15 @@ try {
 
   check("POST /api/locations/discover", "/api/locations/discover", "POST", await call("POST", "/api/locations/discover"));
   check("GET /api/audit-log?action=client.create", "/api/audit-log", "GET", await call("GET", "/api/audit-log?action=client.create"));
+  expectStatus("GET /api/audit-log?location_id=x", await call("GET", "/api/audit-log?location_id=x"), 400, "invalid_request");
+  if (seededLocation) {
+    // The location's own entries (its switch, its report), each naming it (D-103).
+    const located = await call("GET", `/api/audit-log?location_id=${seededLocation.id}`);
+    check("GET /api/audit-log?location_id={id}", "/api/audit-log", "GET", located);
+    const items = located.json?.items ?? [];
+    if (items.length === 0 && requireData) fail("GET /api/audit-log?location_id={id}", "no entry names the seeded location");
+    if (items.some((entry) => entry.location_id !== seededLocation.id)) fail("GET /api/audit-log?location_id={id}", "an entry of another location");
+  }
 
   // 4. Errors.
   expectStatus("POST /api/clients without the CSRF token", await call("POST", "/api/clients", { body: { name: "x" }, csrf: false }), 403, "csrf_token_invalid");

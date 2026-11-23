@@ -470,7 +470,8 @@ Result<void> delete_local_post(pqxx::transaction_base& tx, audit::Writer& audit,
                              {"created_by_user_id", boost::json::value_from(gone[1].as<std::optional<std::int64_t>>())},
                              // Which post a deleted copy was a correction of (D-098).
                              {"copied_from_id", boost::json::value_from(gone[2].as<std::optional<std::int64_t>>())},
-                             {"content", state->content}}});
+                             {"content", state->content}},
+                  .location_id = state->location_id});  // the row is gone
     return {};
 }
 

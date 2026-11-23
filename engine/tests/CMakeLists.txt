@@ -56,6 +56,7 @@ add_executable(poni_integration_tests
   integration/api_replies_test.cpp
   integration/api_test.cpp
   integration/app_sign_in_test.cpp
+  integration/audit_location_test.cpp
   integration/auth_test.cpp
   integration/auto_posting_test.cpp
   integration/connect_test.cpp

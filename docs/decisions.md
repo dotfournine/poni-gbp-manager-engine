@@ -58,6 +58,10 @@ Why: notifications lag about 15 minutes, a reply added elsewhere does not move `
 
 ### D-038 · Superseded by D-102
 
+### D-103 · An audit entry names its location
+The owner's decision of 2026-11-22. `audit_log.location_id` names the location an entry is about, or none, and the API serves it with the location's current title and filters by it (`GET /api/audit-log?location_id=`). It is recorded when the entry is written, never derived when the log is read: a draft or rejected local post, a schedule and a notification rule are deleted later, and their entries keep their location. `audit::record` reads it from the object in the statement that inserts the entry, so no caller can forget it; a caller names it only where the object is already gone (the three deletes). Which kinds of object have a location is listed in `AuditEntry.location_id`; a check on `audit_log` holds that those always name one. Entries written before are not filled in, because nothing changes an audit entry (the trigger of `0001_baseline.sql`), and nothing was deployed.
+Why: after D-102 everything the engine does is a location's, and staff read the log of one store.
+
 ### D-039 · What the sync notices goes to `review_events`
 Not to the audit log, which holds what people do and what the engine does to its own objects. Mirroring reviews would bury the audit log.
 
