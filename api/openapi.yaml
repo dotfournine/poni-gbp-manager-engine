@@ -1739,7 +1739,11 @@ paths:
     get:
       operationId: listReports
       summary: List reports
-      description: Newest first. A report's page is not in the answer; `url` is its address.
+      description: |
+        Newest first. A report's page is not in the answer; `url` is its
+        address. A report in the list has empty `recipients` and
+        `deliveries`: `GET /api/reports/{id}` and the answer of a send carry
+        them.
       tags: [reports]
       parameters:
         - name: location_id
@@ -1825,6 +1829,66 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /api/reports/{id}/send:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: sendReport
+      summary: Send a report by email
+      description: |
+        Sends a `ready` report to the location's recipients (D-104), as often
+        as a person likes. Each address gets its own email with the report's
+        link: one `To:` and no copy. Without a body, or without
+        `recipients`, it goes to every address in `Report.recipients`; with
+        `recipients`, to those, each of which must be one of
+        `Report.recipients` (compared after trimming and lower-casing).
+
+        The request blocks until every address was tried, one after
+        another: a few seconds for ten addresses, and minutes when Gmail
+        limits the mailbox. A client shows that it is waiting; one that gave
+        up waiting reads the report again.
+
+        The answer is 200 whatever came of each address, and
+        `Report.deliveries` carries this send's rows, one per address,
+        `sent` or `failed`. `sent` means Gmail accepted the message, not
+        that it arrived; a `failed` row after a network error or a timeout
+        may be a message Gmail did accept. What was read when the send began
+        decides: sending switched off, the location switched off or an
+        address taken out of the rule while a send is under way does not
+        stop the emails still to come.
+
+        The engine does not check earlier sends: a second send to an
+        address that has a `sent` row is a second email. The client reads
+        `deliveries` and asks the person before sending again. Nothing about
+        the report changes. A report can be discarded while a send is on its
+        way; the emails still to come then carry a link that no longer works.
+      tags: [reports]
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReportSendRequest"
+      responses:
+        "200":
+          description: The report, with this send's rows first in `deliveries`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Report"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/ReportConflict"
 
   /api/report-schedules:
     get:
@@ -2993,6 +3057,13 @@ paths:
           schema:
             type: integer
             format: int64
+        - name: report_id
+          in: query
+          description: Only the deliveries of this report's sends (`NotificationDelivery.report_id`).
+          schema:
+            type: integer
+            format: int64
+            minimum: 1
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PerPage"
       responses:
@@ -3347,14 +3418,15 @@ components:
             $ref: "#/components/schemas/Error"
     ReportConflict:
       description: |
-        `report_not_ready`: the report is not in the state the request needs
-        (not `ready`). `sending_off`: email
-        sending is switched off, so a report would reach nobody.
-        `no_recipients`: no enabled `location_report` rule names an address
-        for the location. `location_not_enabled`: the location is switched
-        off.
+        `report_not_ready`: the report is not `ready`, so it cannot be sent.
+        `location_not_enabled`: the location is switched off, so its
+        reports are not sent. `sending_off`: email sending is switched off,
+        or no sending mailbox is connected, so a report would reach nobody.
         `no_public_bucket`: the engine has no public bucket
-        (`PONI_PUBLIC_BUCKET`), so a report's page has nowhere to go.
+        (`PONI_PUBLIC_BUCKET`): a report is not created without one, and
+        one cannot be sent after the bucket was taken away, because its
+        page has no address. `no_recipients`: no enabled `location_report`
+        rule names an address for the location.
       content:
         application/json:
           schema:
@@ -5817,10 +5889,12 @@ components:
         Subject: `Approval needed: <location title>`. Email
         only; its ids are the review and the location.
 
-        `location_report`: a location's report was sent (D-102). It is the
-        report's email to the location's recipients: subject `Your Google
-        reviews and visibility report, <period>`. Email only, and a rule for
-        it names one location. It carries the location's id.
+        `location_report`: a location's report was sent (D-102, D-104). It
+        is the report's email to the location's recipients: subject `Your
+        Google reviews and visibility report, <period>`. Email only, and a
+        rule for it names one location. Its deliveries are written by a send
+        of a report, one per address, already `sent` or `failed`, with
+        `report_id` and `requested_by`. It carries the location's id.
 
         `test`: a test message; no rule can name it.
 
@@ -6088,6 +6162,8 @@ components:
         - location_id
         - review_id
         - escalation_id
+        - report_id
+        - requested_by
         - channel
         - recipient
         - subject
@@ -6113,6 +6189,15 @@ components:
           type: [integer, "null"]
           format: int64
           description: The escalation the event was about; set for an `escalation` event and null for every other one.
+        report_id:
+          type: [integer, "null"]
+          format: int64
+          description: The report this email carried; null for any other delivery.
+        requested_by:
+          type: [string, "null"]
+          description: |
+            The email of the person who asked for a report's send; null when
+            its schedule sent it, and for any other delivery.
         channel:
           type: string
         recipient:
@@ -6794,6 +6879,8 @@ components:
         - summary
         - summary_note
         - created_at
+        - recipients
+        - deliveries
       properties:
         id:
           type: integer
@@ -6875,6 +6962,22 @@ components:
         created_at:
           type: string
           format: date-time
+        recipients:
+          type: array
+          items:
+            type: string
+          description: |
+            The addresses a send can go to now: those of the location's
+            enabled `location_report` rule, sorted, each once. Empty in a
+            list of reports.
+        deliveries:
+          type: array
+          items:
+            $ref: "#/components/schemas/NotificationDelivery"
+          description: |
+            The report's rows of the delivery log, newest first: one per
+            address of every send, by a person or by its schedule. Empty in
+            a list of reports.
     ReportList:
       type: object
       additionalProperties: false
@@ -6903,6 +7006,19 @@ components:
           type: string
           maxLength: 64
           description: An IANA name. Without one, the location's time zone, else UTC.
+    ReportSendRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        recipients:
+          type: array
+          minItems: 1
+          items:
+            type: string
+          description: |
+            Some of `Report.recipients`, compared after trimming and
+            lower-casing; an address that is not one of them is a 400. Left
+            out: every one of them.
     ReportFrequency:
       type: string
       enum: [daily, weekly, monthly]
@@ -6957,10 +7073,12 @@ components:
         auto_send:
           type: boolean
           description: |
-            Off (the default): a report this schedule builds waits for a
-            person. On: it is sent as soon as it is built, if email sending
-            is on and the location has recipients; otherwise it waits, with
-            the reason.
+            Off (the default): a report this schedule builds is `ready` and
+            nothing is sent (`auto_send_status` `off`). On: it is sent once,
+            to the location's recipients, when it is built, if the checks of
+            a send pass then (`auto_send_status` `done`); otherwise it stays
+            `pending` for a person to send. No reason is stored: a person's
+            send says why it is refused.
         enabled:
           type: boolean
         last_run_on:
