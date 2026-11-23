@@ -184,6 +184,7 @@ asio::awaitable<Result<void>> FolderStore::remove(std::string name) {
 }
 
 std::string FolderStore::base_url() const {
+    if (!served_at_.empty()) return served_at_ + "/";
     std::error_code ec;
     const auto absolute = std::filesystem::absolute(folder_, ec);
     return "file://" + (ec ? folder_ : absolute).generic_string() + "/";

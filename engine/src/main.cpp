@@ -230,7 +230,7 @@ int run(const core::Config& config) {
     // local posts. A folder stands in for it on a developer's machine.
     std::unique_ptr<storage::ObjectStore> public_store;
     if (storage::is_folder_setting(config.public_bucket)) {
-        public_store = std::make_unique<storage::FolderStore>(config.public_bucket);
+        public_store = std::make_unique<storage::FolderStore>(config.public_bucket, config.public_folder_url);
     } else if (!config.public_bucket.empty()) {
         public_store = std::make_unique<storage::GcsStore>(google::Api{http_client, service_tokens, limiter}, config.public_bucket);
     } else {

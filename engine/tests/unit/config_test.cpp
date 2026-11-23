@@ -344,6 +344,45 @@ TEST(Config, TheGoogleMockMustBeOnThisMachine) {
     }
 }
 
+// ---- the server of the public folder, in development (D-105) -----------------------------
+
+TEST(Config, APublicFolderMayBeServedOnThisMachine) {
+    const auto unserved = load_config(env_of({{"PONI_PUBLIC_BUCKET", "/tmp/poni-public"}}), std::nullopt);
+    ASSERT_TRUE(unserved);
+    EXPECT_TRUE(unserved->public_folder_url.empty());
+    for (const auto& [given, kept] : std::map<std::string, std::string>{{"http://127.0.0.1:8088", "http://127.0.0.1:8088"},
+                                                                        {"http://localhost:8088/", "http://localhost:8088"}}) {
+        const auto c = load_config(env_of({{"PONI_PUBLIC_BUCKET", "/tmp/poni-public"}, {"PONI_PUBLIC_FOLDER_URL", given}}), std::nullopt);
+        ASSERT_TRUE(c) << given << ": " << c.error();
+        EXPECT_EQ(c->public_folder_url, kept);
+    }
+}
+
+TEST(Config, APublicFolderIsServedOnlyFromAFolderOnThisMachineInDevelopment) {
+    const auto refused = [](Environment values) {
+        const auto c = load_config(env_of(std::move(values)), std::nullopt);
+        if (c) return std::string("accepted");
+        return c.error();
+    };
+    const std::string served = "http://127.0.0.1:8088";
+    EXPECT_THAT(refused({{"PONI_PUBLIC_BUCKET", "xvisionmedia-gbp-public"}, {"PONI_PUBLIC_FOLDER_URL", served}}),
+                HasSubstr("PONI_PUBLIC_FOLDER_URL"));
+    EXPECT_THAT(refused({{"PONI_PUBLIC_FOLDER_URL", served}}), HasSubstr("PONI_PUBLIC_FOLDER_URL"));
+    for (const auto* bad : {"https://127.0.0.1:8088", "http://10.0.0.5:8088", "http://files.example:8088", "http://127.0.0.1",
+                            "http://127.0.0.1:8088/public", "http://127.0.0.1:8088?x=1"}) {
+        EXPECT_THAT(refused({{"PONI_PUBLIC_BUCKET", "/tmp/poni-public"}, {"PONI_PUBLIC_FOLDER_URL", bad}}),
+                    HasSubstr("PONI_PUBLIC_FOLDER_URL"))
+            << bad;
+    }
+    EXPECT_THAT(refused({{"PONI_PUBLIC_BUCKET", "/tmp/poni-public"},
+                         {"PONI_PUBLIC_FOLDER_URL", served},
+                         {"PONI_PUBLIC_URL", "https://gbp.example.com"}}),
+                HasSubstr("PONI_PUBLIC_FOLDER_URL"));
+    // The same folder and public address are fine without the server.
+    EXPECT_TRUE(load_config(env_of({{"PONI_PUBLIC_BUCKET", "/tmp/poni-public"}, {"PONI_PUBLIC_URL", "https://gbp.example.com"}}),
+                            std::nullopt));
+}
+
 TEST(Config, AgainstTheGoogleMockNothingMayReachARealGoogleService) {
     const Environment mock{{"PONI_GOOGLE_MOCK_URL", "http://127.0.0.1:8090"}};
     const auto with = [&](std::string key, std::string value) {

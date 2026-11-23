@@ -82,15 +82,15 @@ std::expected<std::vector<std::string>, std::string> parse_domains(std::string_v
     return domains;
 }
 
-// "http://127.0.0.1:8090" (a trailing slash is dropped); a message if the
-// address is not plain http on a loopback address with a port. The mock is a
-// program on the same machine: anything else could be somebody else's server.
-std::expected<std::string, std::string> parse_mock_url(std::string_view value) {
+// "http://127.0.0.1:8090" (a trailing slash is dropped); a message that names
+// `key` if the address is not plain http on a loopback address with a port.
+// The Google mock and the server of the public folder are programs on the
+// same machine: anything else could be somebody else's server.
+std::expected<std::string, std::string> parse_loopback_url(std::string_view key, std::string_view example, std::string_view value) {
     const auto refuse = [&] {
         return std::unexpected(std::format(
-            "PONI_GOOGLE_MOCK_URL: '{}' is not a local mock's address such as http://127.0.0.1:8090 (http, a loopback "
-            "address and a port, nothing else)",
-            value));
+            "{}: '{}' is not an address on this machine such as {} (http, a loopback address and a port, nothing else)", key,
+            value, example));
     };
     std::string_view rest = value;
     if (rest.ends_with('/')) rest.remove_suffix(1);
@@ -121,6 +121,9 @@ std::optional<std::string> public_url_problem(const Config& c) {
     }
     if (!c.dev_login_email.empty() && https) {
         return "PONI_DEV_LOGIN_EMAIL is for local development: it can't be combined with an https PONI_PUBLIC_URL";
+    }
+    if (!c.public_folder_url.empty() && https) {
+        return "PONI_PUBLIC_FOLDER_URL is for local development: it can't be combined with an https PONI_PUBLIC_URL";
     }
     return std::nullopt;
 }
@@ -279,6 +282,10 @@ void read_apns(Settings& s, Config& c) {
 void check_combinations(Settings& s, const Config& c) {
     if (s.failed()) return;
     if (const auto problem = public_url_problem(c)) return s.fail(*problem);
+    if (!c.public_folder_url.empty() && !c.public_bucket.contains('/')) {
+        return s.fail("PONI_PUBLIC_FOLDER_URL is the address of a local folder: PONI_PUBLIC_BUCKET must be that folder's path "
+                      "(a bucket's address is Cloud Storage's own)");
+    }
     if (c.google_mock()) {
         if (c.pubsub_subscription) {
             return s.fail("PONI_PUBSUB_SUBSCRIPTION must be empty with PONI_GOOGLE_MOCK_URL: the mock has no Pub/Sub, and a real "
@@ -433,7 +440,10 @@ std::expected<Config, std::string> load_config(const Environment& env, const std
     s.seconds("PONI_POST_CONFIRM_WINDOW_S", 600, c.post_confirm_window);
     s.text("PONI_EMAIL_FROM_NAME", c.email_from_name);
     s.text("PONI_PUBLIC_BUCKET", c.public_bucket);
-    s.parsed("PONI_GOOGLE_MOCK_URL", c.google_mock_url, parse_mock_url);
+    s.parsed("PONI_PUBLIC_FOLDER_URL", c.public_folder_url,
+             [](std::string_view v) { return parse_loopback_url("PONI_PUBLIC_FOLDER_URL", "http://127.0.0.1:8088", v); });
+    s.parsed("PONI_GOOGLE_MOCK_URL", c.google_mock_url,
+             [](std::string_view v) { return parse_loopback_url("PONI_GOOGLE_MOCK_URL", "http://127.0.0.1:8090", v); });
     read_apns(s, c);
     check_combinations(s, c);
 
