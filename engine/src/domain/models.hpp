@@ -948,18 +948,7 @@ struct GoLiveOverview {
 };
 BOOST_DESCRIBE_STRUCT(GoLiveOverview, (), (repeats, judge_provider, judge_model, providers_configured, locations))
 
-// ---- reports (FR-8, D-085) ---------------------------------------------------------
-
-// A report's page in the public bucket, under an address nobody can guess.
-struct ReportShareLink {
-    std::int64_t id = 0;
-    std::string url;
-    std::string origin;  // "email" (made when the report was sent) or "manual"
-    std::optional<std::string> created_by;  // nothing: a schedule sent the report
-    std::string created_at;
-    std::optional<std::string> revoked_at;
-};
-BOOST_DESCRIBE_STRUCT(ReportShareLink, (), (id, url, origin, created_by, created_at, revoked_at))
+// ---- reports (FR-8, D-085, D-104) --------------------------------------------------
 
 struct Report {
     std::int64_t id = 0;
@@ -972,11 +961,15 @@ struct Report {
     std::string time_zone;
     std::optional<std::int64_t> schedule_id;
     std::optional<std::string> requested_by;  // nothing: a schedule
-    // "building", "failed", "draft" (waiting for a person), "sent" or "rejected".
+    // "building", "failed", "ready", "discarding", "discarded" or "expired" (D-104).
     std::string status;
     std::optional<std::string> error;
-    // Why its schedule did not send it although it was asked to.
-    std::optional<std::string> hold_reason;
+    // The page in the public bucket while the report is ready: whoever has the address can read it.
+    std::optional<std::string> url;
+    // The archived page once the report is discarded or expired, if an upload of its page was begun. For staff only.
+    std::optional<std::string> archive_url;
+    // "off" (a person's report, or a schedule that does not send by itself), "pending" or "done".
+    std::string auto_send_status;
     // From the built report; nothing while it is building.
     std::optional<std::int64_t> new_reviews;
     // The two headline figures of the built report, as its data holds them (D-085).
@@ -985,15 +978,11 @@ struct Report {
     std::optional<std::string> summary;
     std::optional<std::string> summary_note;
     std::string created_at;
-    std::optional<std::string> sent_at;
-    std::optional<std::string> sent_by;  // nothing with a sent report: its schedule
-    // Filled in when one report is read, not in a list.
-    std::vector<ReportShareLink> share_links;
 };
 BOOST_DESCRIBE_STRUCT(Report, (),
                       (id, location_id, location_title, period_start, period_end, time_zone, schedule_id, requested_by, status, error,
-                       hold_reason, new_reviews, average_rating, response_rate, summary, summary_note, created_at, sent_at, sent_by,
-                       share_links))
+                       url, archive_url, auto_send_status, new_reviews, average_rating, response_rate, summary, summary_note,
+                       created_at))
 
 using ReportList = Paged<Report>;
 

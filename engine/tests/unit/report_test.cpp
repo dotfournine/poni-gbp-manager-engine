@@ -721,13 +721,6 @@ TEST(ReportHtml, TheEmailHasTheHeadlineNumbersAndTheLinkAndNoReviewText) {
     EXPECT_THAT(email, Not(HasSubstr("Reviewer")));
 }
 
-TEST(ReportHtml, TheRevokedPageSaysSoAndIsNotIndexed) {
-    const auto page = render_revoked_page();
-    EXPECT_THAT(page, HasSubstr("no longer available"));
-    EXPECT_THAT(page, HasSubstr("noindex"));
-    EXPECT_THAT(page, Not(HasSubstr("<script")));
-}
-
 // ---- the summary ------------------------------------------------------------------------
 
 TEST(ReportSummary, TheModelIsGivenFiguresAndNeverAReviewOrAReviewersName) {

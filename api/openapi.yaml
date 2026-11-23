@@ -100,10 +100,11 @@ tags:
     description: The go-live test (D-074), which a configuration must pass before anything is auto-posted with it.
   - name: reports
     description: |
-      Location reports (FR-8, D-085, D-102): one location's, built once from
-      its stored reviews and Google's visibility numbers, read by staff here,
-      and shared with its recipients as a page in a public bucket. The engine serves no report to
-      anyone who is not signed in.
+      Location reports (FR-8, D-085, D-102, D-104): one location's, built once from
+      its stored reviews and Google's visibility numbers, read by staff here.
+      Its page is one object in a public bucket, put there when the report is
+      built; that object's address is the report's only link. The engine
+      serves no report to anyone who is not signed in.
   - name: local-posts
     description: |
       The posts a business publishes on its profile (FR-14, D-088): updates,
@@ -1738,7 +1739,7 @@ paths:
     get:
       operationId: listReports
       summary: List reports
-      description: Newest first, without their pages and share links.
+      description: Newest first. A report's page is not in the answer; `url` is its address.
       tags: [reports]
       parameters:
         - name: location_id
@@ -1773,10 +1774,12 @@ paths:
       summary: Generate a report now
       description: |
         Starts a report of the location for any period that is over (D-102).
-        Refused (400) when the location is not enabled. A job
-        builds it: the answer is the report as `building`, and it becomes a
-        `draft` (or `failed`) shortly after. Building sends nothing and
-        shares nothing. It may call the model once, for the summary.
+        Refused (400) when the location is not enabled, and (409
+        `no_public_bucket`) when the engine has no public bucket for the
+        report's page. A job builds it: the answer is the report as
+        `building`, and it becomes `ready` (or `failed`) shortly after.
+        Building puts the page into the public bucket and sends nothing. It
+        may call the model once, for the summary.
       tags: [reports]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -1801,6 +1804,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/ReportConflict"
 
   /api/reports/{id}:
     parameters:
@@ -1808,7 +1813,6 @@ paths:
     get:
       operationId: getReport
       summary: Get a report
-      description: With its share links.
       tags: [reports]
       responses:
         "200":
@@ -1821,153 +1825,6 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "404":
           $ref: "#/components/responses/NotFound"
-
-  /api/reports/{id}/html:
-    parameters:
-      - $ref: "#/components/parameters/Id"
-    get:
-      operationId: getReportPage
-      summary: The report's page
-      description: |
-        The stored page, exactly as a client sees it through a share link:
-        one HTML document without scripts. It holds review text, which is
-        untrusted, so it is sent with a sandboxing content security policy;
-        show it in a sandboxed frame or its own tab.
-      tags: [reports]
-      responses:
-        "200":
-          description: The page.
-          content:
-            text/html:
-              schema:
-                type: string
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "404":
-          $ref: "#/components/responses/NotFound"
-
-  /api/reports/{id}/send:
-    parameters:
-      - $ref: "#/components/parameters/Id"
-    post:
-      operationId: sendReport
-      summary: Send a report to the location's recipients
-      description: |
-        Puts the page into the public bucket under a new share link and
-        emails the location's recipients (the `location_report` rules that
-        name the location) the headline numbers and that link. Only a
-        `draft` can be sent, once. Refused while email sending is switched
-        off or the location has no recipients: a report is never marked sent
-        that reached nobody.
-      tags: [reports]
-      parameters:
-        - $ref: "#/components/parameters/CsrfToken"
-      responses:
-        "200":
-          description: The report, sent.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Report"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/ReportConflict"
-        "502":
-          $ref: "#/components/responses/StorageFailed"
-
-  /api/reports/{id}/reject:
-    parameters:
-      - $ref: "#/components/parameters/Id"
-    post:
-      operationId: rejectReport
-      summary: Reject a report
-      description: A `draft` or `failed` report becomes `rejected`. It stays in the list; nothing is deleted.
-      tags: [reports]
-      parameters:
-        - $ref: "#/components/parameters/CsrfToken"
-      responses:
-        "200":
-          description: The report, rejected.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Report"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/ReportConflict"
-
-  /api/reports/{id}/share-links:
-    parameters:
-      - $ref: "#/components/parameters/Id"
-    post:
-      operationId: createReportShareLink
-      summary: Make a share link
-      description: |
-        Puts a copy of the page into the public bucket under a random name
-        (32 random bytes) and returns its address. Anyone who has the
-        address can read the page, without signing in; nobody can list the
-        bucket. For a `draft` or a `sent` report.
-      tags: [reports]
-      parameters:
-        - $ref: "#/components/parameters/CsrfToken"
-      responses:
-        "201":
-          description: The new link.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ReportShareLink"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/ReportConflict"
-        "502":
-          $ref: "#/components/responses/StorageFailed"
-
-  /api/report-share-links/{id}/revoke:
-    parameters:
-      - $ref: "#/components/parameters/Id"
-    post:
-      operationId: revokeReportShareLink
-      summary: Revoke a share link
-      description: |
-        Replaces the link's page in the bucket with a page that says the
-        report is no longer available, then marks the link revoked. Revoking
-        a revoked link changes nothing.
-      tags: [reports]
-      parameters:
-        - $ref: "#/components/parameters/CsrfToken"
-      responses:
-        "200":
-          description: The link, revoked.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ReportShareLink"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/ReportConflict"
-        "502":
-          $ref: "#/components/responses/StorageFailed"
 
   /api/report-schedules:
     get:
@@ -3491,15 +3348,13 @@ components:
     ReportConflict:
       description: |
         `report_not_ready`: the report is not in the state the request needs
-        (still building, failed, sent or rejected). `sending_off`: email
+        (not `ready`). `sending_off`: email
         sending is switched off, so a report would reach nobody.
         `no_recipients`: no enabled `location_report` rule names an address
         for the location. `location_not_enabled`: the location is switched
         off.
         `no_public_bucket`: the engine has no public bucket
-        (`PONI_PUBLIC_BUCKET`), so nothing can be shared. `report_shared`: a
-        report with share links that work can't be rejected; revoke them
-        first.
+        (`PONI_PUBLIC_BUCKET`), so a report's page has nowhere to go.
       content:
         application/json:
           schema:
@@ -4265,8 +4120,9 @@ components:
             `location`, `system_settings`, `ai_settings`, `review`, `draft`
             (a reply draft), `escalation`, `local_post`, `local_post_media`,
             `notification_rule`, `notification_delivery`, `report`,
-            `report_share_link`, `report_schedule`, `go_live_run`, `user`
-            (signing in and out), `device` and `credential`. The list grows
+            `report_schedule`, `go_live_run`, `user` (signing in and out),
+            `device` and `credential`. Entries about a `report_share_link`
+            are from before D-104, which removed share links. The list grows
             like the actions do.
         object_id:
           type: string
@@ -4277,8 +4133,9 @@ components:
             The location the entry is about, recorded when the entry was
             written (D-103), so it stays when the object is deleted later.
             For a `location` it is that location; for a `review`, `draft`,
-            `escalation`, `local_post`, `report`, `report_share_link`,
-            `report_schedule` and `go_live_run` it is the object's location;
+            `escalation`, `local_post`, `report`, `report_share_link` (an
+            entry from before D-104), `report_schedule` and `go_live_run` it
+            is the object's location;
             for a `notification_rule` it is the rule's location, or null for
             a rule of every location. Null for an entry about no one
             location (a `client`, `system_settings`, `ai_settings`, a
@@ -6901,16 +6758,19 @@ components:
 
     ReportStatus:
       type: string
-      enum: [building, failed, draft, sent, rejected]
+      enum: [building, failed, ready, discarding, discarded, expired]
       description: |
-        `building`: its job has not finished. `failed`: the job gave up.
-        `draft`: built, and waiting for a person to send or reject it.
-        `sent`: emailed to the location's recipients. `rejected`: a person
-        set it aside.
+        (D-104) `building`: its job has not finished. `failed`: it could not
+        be built; `error` says why, and a person generates it again.
+        `ready`: built; its page is at `url`. `discarding`: a discard was
+        begun and has not finished moving the page. `discarded`: withdrawn
+        for good; its page, if it had one, is at `archive_url`. `expired`:
+        the same, by the retention's clean-up; nothing in the engine writes
+        it yet.
     Report:
       type: object
       description: |
-        A location's report (D-085, D-102). Its numbers and its page are made once,
+        A location's report (D-085, D-102, D-104). Its numbers and its page are made once,
         when it is built, and never change; "generate again" makes a new
         report.
       additionalProperties: false
@@ -6925,16 +6785,15 @@ components:
         - requested_by
         - status
         - error
-        - hold_reason
+        - url
+        - archive_url
+        - auto_send_status
         - new_reviews
         - average_rating
         - response_rate
         - summary
         - summary_note
         - created_at
-        - sent_at
-        - sent_by
-        - share_links
       properties:
         id:
           type: integer
@@ -6968,9 +6827,27 @@ components:
         error:
           type: [string, "null"]
           description: Why a failed report failed.
-        hold_reason:
+        url:
           type: [string, "null"]
-          description: Why its schedule did not send it although it was asked to.
+          description: |
+            The address of the report's page in the public bucket while the
+            report is `ready`; null otherwise. The page is public to whoever
+            has the address: the address is the secret.
+        archive_url:
+          type: [string, "null"]
+          description: |
+            The address of the archived page once the report is `discarded`
+            or `expired`, if an upload of its page was ever begun; null
+            otherwise. For staff only. It may answer Cloud Storage's "not
+            found" when the page was never stored (a report whose every
+            upload failed).
+        auto_send_status:
+          type: string
+          enum: ["off", pending, done]
+          description: |
+            `off`: a person's report, or one of a schedule without "send
+            automatically". `pending`: its schedule sends it by itself and
+            has not sent it. `done`: its schedule sent it, once.
         new_reviews:
           type: [integer, "null"]
           format: int64
@@ -6998,17 +6875,6 @@ components:
         created_at:
           type: string
           format: date-time
-        sent_at:
-          type: [string, "null"]
-          format: date-time
-        sent_by:
-          type: [string, "null"]
-          description: The email of the person who sent it; null with a sent report means its schedule did.
-        share_links:
-          type: array
-          description: Filled in when one report is read; empty in a list.
-          items:
-            $ref: "#/components/schemas/ReportShareLink"
     ReportList:
       type: object
       additionalProperties: false
@@ -7037,33 +6903,6 @@ components:
           type: string
           maxLength: 64
           description: An IANA name. Without one, the location's time zone, else UTC.
-    ReportShareLink:
-      type: object
-      description: |
-        A copy of a report's page in the public bucket. The address is the
-        whole secret: it holds 32 random bytes and nothing about the location
-        or the report. Old pages are removed by the bucket's lifecycle rule.
-      additionalProperties: false
-      required: [id, url, origin, created_by, created_at, revoked_at]
-      properties:
-        id:
-          type: integer
-          format: int64
-        url:
-          type: string
-        origin:
-          type: string
-          enum: [email, manual]
-          description: "`email`: made when the report was sent. `manual`: a person made it."
-        created_by:
-          type: [string, "null"]
-          description: The person's email; null when a schedule sent the report.
-        created_at:
-          type: string
-          format: date-time
-        revoked_at:
-          type: [string, "null"]
-          format: date-time
     ReportFrequency:
       type: string
       enum: [daily, weekly, monthly]

@@ -31,7 +31,7 @@ Status: ready to deploy, not deployed. Nothing has been created in Google Cloud.
 4. **Who can reach the dashboard.** It is built to face the internet (Google sign-in limited to `xvisionmediaus.com` and `xvisionus.com`, sessions, attempt limits). Putting it behind Cloudflare Access or Tailscale as well is an optional extra layer (architecture section 8).
 5. **The two Google OAuth clients** below have to be created by someone who can open the Google Cloud console of the project.
 6. **The knowledge bucket**: a name (suggested: `xvisionmedia-gbp-knowledge`). Archives are a few kilobytes each and are never replaced, so no lifecycle rule is needed.
-7. **The public bucket** (D-085, D-091 point 2): for shared report pages and the photos and videos of local posts (suggested: `xvisionmedia-gbp-public`; the owner chose a `-public` name because other public artifacts may follow). A report's numbers are kept in the database, not in a bucket. The bucket needs an exception to the project's domain-restricted sharing, which the owner accepted.
+7. **The public bucket** (D-085, D-091 point 2, D-104): for report pages and the photos and videos of local posts (suggested: `xvisionmedia-gbp-public`; the owner chose a `-public` name because other public artifacts may follow). A report's numbers are kept in the database, not in a bucket. The bucket needs an exception to the project's domain-restricted sharing, which the owner accepted.
 
 ## One-time setup
 
@@ -148,7 +148,7 @@ The bucket has no lifecycle rule (D-104 point 8): the retention is our own. Don'
 - A video may be 75 MB. The engine holds an upload in memory while it checks it and sends it on, about three times the file's size while it goes to the bucket (some 225 MB for the largest video; two people uploading at once need twice that), and only for a signed-in person: who is calling is asked before the body is read. Size the VM's memory with that in mind. An upload that is still coming in when the engine stops is given up, and the person uploads again. Caddy sets no limit on a request's size, and none is needed; a proxy put in front that has one must allow 75 MB on `/api/local-post-media`. A video's upload to the bucket is given a minute and four more seconds for every megabyte.
 - The VM's service account needs `roles/storage.objectUser` on the bucket: discarding a report deletes the original of its page after the copy (D-104), and a retried build overwrites its page, for which Cloud Storage asks for the delete permission too.
 
-Without `PONI_PUBLIC_BUCKET` the engine builds reports and staff read them in the dashboard, but none can be shared or sent.
+Without `PONI_PUBLIC_BUCKET` the engine builds no report (a person's "generate" is refused, and schedules start none) and takes no photo or video for a post.
 
 ## Building images
 

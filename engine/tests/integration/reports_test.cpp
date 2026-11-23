@@ -1,16 +1,14 @@
-// A location's reports end to end (FR-8, D-085, D-102), through the router and the jobs
+// A location's reports end to end (FR-8, D-085, D-102, D-104), through the router and the jobs
 // as the engine assembles them, with a fake Performance API, a scripted
 // model, a bucket held in memory and a channel that keeps what it is given.
 // Nothing leaves the test: no Google, no model, no bucket, no email.
 //
-// The share-link rules, as far as the engine holds them: a link is an
-// object under a random name (a wrong token names no object), revoking
-// overwrites it, and nothing of a report is served by the engine to anyone
-// who is not signed in. Expiry is the bucket's lifecycle rule, not code.
+// A report's page is one object in the public bucket under a random name,
+// named on the row by the build right before its upload; the engine serves
+// no report's page to anyone, signed in or not.
 
 #include "api_fixture.hpp"
 #include "db/repo_reports.hpp"
-#include "domain/report_html.hpp"
 #include "jobs/notifications.hpp"
 #include "jobs/reports.hpp"
 
@@ -115,7 +113,12 @@ protected:
     boost::json::value data(std::int64_t id) {
         return boost::json::parse(value<std::string>(std::format("SELECT data::text FROM reports WHERE id = {}", id)));
     }
-    std::string html(std::int64_t id) { return value<std::string>(std::format("SELECT html FROM reports WHERE id = {}", id)); }
+    // The name of the report's page, as the row holds it ("" while it has none).
+    std::string page_object(std::int64_t id) {
+        return value<std::string>(std::format("SELECT coalesce(page_object, '') FROM reports WHERE id = {}", id));
+    }
+    // The page, as the build put it into the bucket.
+    std::string html(std::int64_t id) { return public_.objects.at(page_object(id)).body; }
 
     void recipients(std::int64_t location, const std::string& list) {
         const auto response = post("/api/notification-rules",
@@ -177,7 +180,7 @@ TEST_F(Reports, AReportCountsTheReviewsOfItsLocationAndPeriodInTheLocationsTimeZ
                      complaint));
 
     const auto id = generate(chelsea_);
-    EXPECT_EQ(status(id), "draft");
+    EXPECT_EQ(status(id), "ready");
     const auto d = data(id);
     EXPECT_EQ(d.at("location_id").as_int64(), chelsea_);
     EXPECT_EQ(d.at("location_title").as_string(), "LU DREAM SPA - Chelsea");
@@ -267,8 +270,8 @@ TEST_F(Reports, NamedStaffAreListedApartFromTheItems) {
 }
 
 // An industry whose profile has no person type gives no section; a report
-// stored in an older shape is still sent as it was (D-085).
-TEST_F(Reports, AnIndustryWithoutPeopleHasNoSectionAndAnOldReportIsSentAsItWas) {
+// stored in an older shape is still read as it was (D-085).
+TEST_F(Reports, AnIndustryWithoutPeopleHasNoSectionAndAnOldReportIsReadAsItWas) {
     reseed("UPDATE kb_industries SET item_types = (SELECT jsonb_agg(t - 'person') FROM jsonb_array_elements(item_types) t)");
     const auto r = add_review(chelsea_, "s1", 5, "2026-10-05T15:00:00Z", "Anna was wonderful");
     analyze(r, "positive", "[]", R"([{"name": "Anna", "type": "therapist", "polarity": "positive"}])");
@@ -286,15 +289,14 @@ TEST_F(Reports, AnIndustryWithoutPeopleHasNoSectionAndAnOldReportIsSentAsItWas) 
                      "\"negative\": 0}}], \"complained\": []}}}}' WHERE id = {}",
                      chelsea_, id));
     EXPECT_TRUE(data(id).at("highlights_best").at(0).as_object().contains("location_title"));
-    recipients(chelsea_, R"(["owner@luspa.test"])");
-    sending_on();
-    const auto response = post(std::format("/api/reports/{}/send", id));
-    EXPECT_EQ(response.status, 200u) << response.body;
+    const auto response = get(std::format("/api/reports/{}", id), browser_);
+    ASSERT_EQ(response.status, 200u) << response.body;
+    EXPECT_EQ(json(response).at("new_reviews").as_int64(), 1);
 }
 
 TEST_F(Reports, ALocationWithoutAnyReviewGetsAReportThatSaysSo) {
     const auto id = generate(buffet_);
-    EXPECT_EQ(status(id), "draft");
+    EXPECT_EQ(status(id), "ready");
     const auto d = data(id);
     EXPECT_EQ(d.at("reviews").at("new_reviews").as_int64(), 0);
     EXPECT_TRUE(d.at("reviews").at("average_rating").is_null());
@@ -391,7 +393,7 @@ TEST_F(Reports, AnOutageAtGoogleIsRetriedAndThenTheReportIsBuiltWithoutVisibilit
         clock_.advance(2h);
         run_jobs();
     }
-    EXPECT_EQ(status(id), "draft");
+    EXPECT_EQ(status(id), "ready");
     const auto v = data(id).at("visibility");
     // The location's read failed for good.
     EXPECT_FALSE(v.at("available").as_bool());
@@ -406,7 +408,7 @@ TEST_F(Reports, AnAccountThatIsNotConnectedDoesNotStopAReportAndIsNotRetried) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
     performance_.failures.push_back({google::ApiError::Kind::not_configured, 0, "no GBP account is connected"});
     const auto id = generate(chelsea_);
-    EXPECT_EQ(status(id), "draft");
+    EXPECT_EQ(status(id), "ready");
     EXPECT_THAT(html(id), Not(HasSubstr("no GBP account is connected")));
     EXPECT_EQ(data(id).at("visibility").at("detail").as_string(), "no GBP account is connected");
     EXPECT_EQ(performance_.daily_calls, 1);
@@ -426,11 +428,10 @@ TEST_F(Reports, AJobThatKeepsFailingMarksTheReportFailed) {
     const auto failed = report(id);
     EXPECT_EQ(failed.at("status").as_string(), "failed");
     EXPECT_THAT(std::string(failed.at("error").as_string()), HasSubstr("Nowhere/Land"));
-    EXPECT_EQ(get(std::format("/api/reports/{}/html", id), browser_).status, 404u);
-    // A failed report can be set aside, and stays without numbers and page.
-    EXPECT_EQ(post(std::format("/api/reports/{}/reject", id)).status, 200u);
-    EXPECT_EQ(count(std::format("reports WHERE id = {} AND status = 'rejected' AND data IS NULL AND html IS NULL", id)), 1);
-    EXPECT_EQ(get(std::format("/api/reports/{}/html", id), browser_).status, 404u);
+    // It failed before its upload: no numbers, no page, and no name for one.
+    EXPECT_TRUE(failed.at("url").is_null());
+    EXPECT_EQ(count(std::format("reports WHERE id = {} AND data IS NULL AND page_object IS NULL", id)), 1);
+    EXPECT_TRUE(public_.objects.empty());
 }
 
 // ---- the summary -----------------------------------------------------------------------
@@ -464,7 +465,7 @@ TEST_F(Reports, ASummaryThatFailsACheckIsLeftOutAndTheReportIsBuiltAnyway) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
     llm_.summary = FakeLlm::always(R"({"summary": "A fine month. Book again at www.example.com/deal today."})");
     const auto id = generate(chelsea_);
-    EXPECT_EQ(status(id), "draft");
+    EXPECT_EQ(status(id), "ready");
     EXPECT_TRUE(report(id).at("summary").is_null());
     EXPECT_THAT(std::string(report(id).at("summary_note").as_string()), HasSubstr("no_url"));
     EXPECT_THAT(html(id), Not(HasSubstr("www.example.com")));
@@ -474,7 +475,7 @@ TEST_F(Reports, AModelThatDoesNotAnswerOrIsSwitchedOffLeavesTheReportWithoutASum
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
     llm_.summary = [](const llm::ChatRequest&) { return FakeLlm::failure(llm::Error::Kind::unavailable); };
     const auto down = generate(chelsea_);
-    EXPECT_EQ(status(down), "draft");
+    EXPECT_EQ(status(down), "ready");
     EXPECT_THAT(std::string(report(down).at("summary_note").as_string()), HasSubstr("gave no answer"));
 
     llm_.requests.clear();
@@ -525,23 +526,25 @@ TEST_F(Reports, HostileReviewTextIsTextOnThePage) {
     EXPECT_THAT(page, HasSubstr("Mallory &lt;script&gt;"));
     EXPECT_THAT(page, HasSubstr("Massage &lt;script&gt;"));
 
-    // What the dashboard gets: the same page, sandboxed, and not to be cached or indexed.
-    const auto response = get(std::format("/api/reports/{}/html", id), browser_);
-    ASSERT_EQ(response.status, 200u);
-    EXPECT_EQ(response.content_type, "text/html; charset=utf-8");
-    EXPECT_EQ(response.body, page);
-    EXPECT_THAT(header(response, "Content-Security-Policy"), testing::StartsWith("sandbox; default-src 'none'"));
-    EXPECT_EQ(header(response, "X-Robots-Tag"), "noindex, nofollow");
-    EXPECT_EQ(header(response, "Cache-Control"), "private, no-store");
+    // The object is served as HTML and kept in no cache.
+    const auto& object = public_.objects.at(page_object(id));
+    EXPECT_EQ(object.content_type, "text/html; charset=utf-8");
+    EXPECT_EQ(object.cache_control, "no-store");
 }
 
 TEST_F(Reports, NothingOfAReportIsServedWithoutASession) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
     generate(chelsea_);
-    // The routes of reports, from the router's table: the 7 this test once named and every one added since.
+    // The routes of reports, from the router's table: the 7 there are (D-104) and every one added since.
     EXPECT_GE(expect_session_and_csrf({"/reports", "/report-schedules"}, R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"), 7u);
-    // There is no route for a token at all: the engine does not host shared reports.
+    // There is no route for a token at all: the engine does not host reports' pages.
     EXPECT_EQ(get("/r/anything.html").status, 404u);
+    // Nor for the page, its share links, sending it the old way or rejecting it, even signed in.
+    for (const auto& response : {get("/api/reports/1/html", browser_), post("/api/reports/1/send"), post("/api/reports/1/reject"),
+                                 post("/api/reports/1/share-links"), post("/api/report-share-links/1/revoke")}) {
+        EXPECT_EQ(response.status, 404u);
+        EXPECT_EQ(error_code(response), "not_found");
+    }
 }
 
 TEST_F(Reports, APeriodMustBeOverAndMakeSense) {
@@ -568,177 +571,172 @@ TEST_F(Reports, APeriodMustBeOverAndMakeSense) {
     EXPECT_EQ(json(tokyo).at("status").as_string(), "building");
 }
 
-// ---- share links ------------------------------------------------------------------------
+// ---- the page in the bucket -------------------------------------------------------------
 
-TEST_F(Reports, AShareLinkIsACopyOfThePageUnderANameNobodyCanGuess) {
+TEST_F(Reports, ABuildNamesThePageBeforeItUploadsIt) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    // The connection to the bucket drops: the attempt throws, and the name is on the row.
+    public_.unreachable = true;
     const auto id = generate(chelsea_);
-    const auto first = post(std::format("/api/reports/{}/share-links", id));
-    ASSERT_EQ(first.status, 201u) << first.body;
-    const auto second = post(std::format("/api/reports/{}/share-links", id));
-    ASSERT_EQ(second.status, 201u);
-
-    const std::string url(json(first).at("url").as_string());
+    EXPECT_EQ(status(id), "building");
+    const auto name = page_object(id);
     // 32 random bytes as 43 characters, and nothing else: no location, no report number, no date.
-    std::smatch match;
-    ASSERT_TRUE(std::regex_match(url, match, std::regex(R"(https://storage\.test/public/r/([A-Za-z0-9_-]{43})\.html)"))) << url;
-    const auto token = match[1].str();
-    EXPECT_NE(url, std::string(json(second).at("url").as_string()));
-    EXPECT_EQ(json(first).at("origin").as_string(), "manual");
-    EXPECT_EQ(json(first).at("created_by").as_string(), "staff@xvisionmediaus.com");
+    EXPECT_TRUE(std::regex_match(name, std::regex(R"(r/[A-Za-z0-9_-]{43}\.html)"))) << name;
+    EXPECT_TRUE(public_.objects.empty());
 
-    ASSERT_EQ(public_.objects.size(), 2u);
-    const auto& object = public_.objects.at("r/" + token + ".html");
-    EXPECT_EQ(object.body, html(id));
-    EXPECT_EQ(object.content_type, "text/html; charset=utf-8");
-    EXPECT_EQ(object.cache_control, "no-store");
-    // A wrong token names nothing: there is no object to read and no route in the engine to ask.
-    EXPECT_FALSE(public_.objects.contains("r/" + std::string(43, 'A') + ".html"));
-
-    // The token opens the report, so it is in no audit entry.
-    EXPECT_EQ(count("audit_log WHERE action = 'report_share_link.create'"), 2);
-    EXPECT_EQ(count(std::format("audit_log WHERE coalesce(before::text, '') || coalesce(after::text, '') LIKE '%{}%'", token)), 0);
-    EXPECT_EQ(report(id).at("share_links").as_array().size(), 2u);
+    // The next attempt puts the page under the same name.
+    public_.unreachable = false;
+    clock_.advance(2h);
+    run_jobs();
+    const auto built = report(id);
+    EXPECT_EQ(built.at("status").as_string(), "ready");
+    EXPECT_EQ(page_object(id), name);
+    ASSERT_EQ(public_.objects.size(), 1u);
+    EXPECT_TRUE(public_.objects.contains(name));
+    EXPECT_EQ(built.at("url").as_string(), std::string(kPublicBase) + name);
+    EXPECT_TRUE(built.at("archive_url").is_null());
 }
 
-TEST_F(Reports, RevokingALinkReplacesItsPage) {
-    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely words");
-    const auto id = generate(chelsea_);
-    const auto kept = json(post(std::format("/api/reports/{}/share-links", id)));
-    const auto link = json(post(std::format("/api/reports/{}/share-links", id)));
-    const auto name = std::string(link.at("url").as_string()).substr(kPublicBase.size());
-    ASSERT_THAT(public_.objects.at(name).body, HasSubstr("Lovely words"));
-
-    const auto revoked = post(std::format("/api/report-share-links/{}/revoke", link.at("id").as_int64()));
-    ASSERT_EQ(revoked.status, 200u) << revoked.body;
-    EXPECT_FALSE(json(revoked).at("revoked_at").is_null());
-    // The address still answers, with nothing of the report.
-    EXPECT_EQ(public_.objects.at(name).body, domain::render_revoked_page());
-    EXPECT_THAT(public_.objects.at(name).body, Not(HasSubstr("Lovely words")));
-    // The other link is untouched.
-    const auto kept_name = std::string(kept.at("url").as_string()).substr(kPublicBase.size());
-    EXPECT_THAT(public_.objects.at(kept_name).body, HasSubstr("Lovely words"));
-    EXPECT_EQ(count("audit_log WHERE action = 'report_share_link.revoke'"), 1);
-
-    // Revoking again changes nothing and writes nothing.
-    const auto puts = public_.puts;
-    EXPECT_EQ(post(std::format("/api/report-share-links/{}/revoke", link.at("id").as_int64())).status, 200u);
-    EXPECT_EQ(public_.puts, puts);
-    EXPECT_EQ(count("audit_log WHERE action = 'report_share_link.revoke'"), 1);
-    EXPECT_EQ(post("/api/report-share-links/999999/revoke").status, 404u);
-}
-
-TEST_F(Reports, ALinkIsNotRecordedUnlessItsPageIsInTheBucket) {
+TEST_F(Reports, ABuildWhoseUploadsAreRefusedFailsAndSaysNothingOfTheObject) {
+    // What a person's rule for system problems would be sent.
+    const auto rule = post("/api/notification-rules", R"({"event_type": "system_problem", "recipients": ["ops@example.com"]})");
+    ASSERT_EQ(rule.status, 201u) << rule.body;
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
-    const auto id = generate(chelsea_);
-    const auto link = json(post(std::format("/api/reports/{}/share-links", id)));
-
     public_.refuse = true;
-    const auto refused = post(std::format("/api/reports/{}/share-links", id));
-    EXPECT_EQ(refused.status, 502u);
-    EXPECT_EQ(error_code(refused), "storage_failed");
-    EXPECT_EQ(count("report_share_links"), 1);
-    // And a link is not marked revoked while its page still shows the report.
-    const auto not_revoked = post(std::format("/api/report-share-links/{}/revoke", link.at("id").as_int64()));
-    EXPECT_EQ(not_revoked.status, 502u);
-    EXPECT_EQ(count("report_share_links WHERE revoked_at IS NOT NULL"), 0);
+    const auto response = post(std::format("/api/locations/{}/reports", chelsea_), R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})");
+    ASSERT_EQ(response.status, 201u) << response.body;
+    const auto id = json(response).at("id").as_int64();
+    // The workers of the engine: a job given up on is a system problem.
+    jobs::Worker worker(io_.get_executor(), queue(), registry_,
+                        {.id = "test-worker", .on_permanent_failure = [this](jobs::Job job, std::string error) -> boost::asio::awaitable<void> {
+                             co_await db().tx([job = std::move(job), error = std::move(error), now = clock_.now()](pqxx::work& tx) {
+                                 repo::emit_job_failed(tx, job, error, now);
+                             });
+                         }});
+    for (int attempt = 0; attempt < repo::kBuildReportAttempts; ++attempt) {
+        while (await(worker.run_once())) {
+        }
+        clock_.advance(2h);
+    }
+
+    const auto failed = report(id);
+    EXPECT_EQ(failed.at("status").as_string(), "failed");
+    EXPECT_EQ(failed.at("error").as_string(), "The report's page could not be put into the public bucket. (HTTP 403)");
+    EXPECT_TRUE(failed.at("url").is_null());
+    // The name stays: an upload of the page was begun.
+    const auto name = page_object(id);
+    ASSERT_FALSE(name.empty());
+    EXPECT_EQ(public_.puts, repo::kBuildReportAttempts);
+    EXPECT_TRUE(public_.objects.empty());
+    ASSERT_EQ(count("notification_deliveries WHERE event_type = 'system_problem'"), 1);
+    for (const auto& text : {name, std::string("scripted refusal")}) {
+        EXPECT_EQ(count(std::format("reports WHERE error LIKE '%{}%'", text)), 0) << text;
+        EXPECT_EQ(count(std::format("jobs WHERE last_error LIKE '%{}%'", text)), 0) << text;
+        EXPECT_EQ(count(std::format("notification_deliveries WHERE body LIKE '%{}%'", text)), 0) << text;
+    }
 }
 
-TEST_F(Reports, WithoutAPublicBucketNothingCanBeSharedOrSent) {
+TEST_F(Reports, NoAuditEntryAndNoJobNamesAReportsPage) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
-    start(false);
+    const auto built = generate(chelsea_);
+    public_.refuse = true;
+    const auto refused = generate(chelsea_);
+    for (int attempt = 1; attempt < repo::kBuildReportAttempts; ++attempt) {
+        clock_.advance(2h);
+        run_jobs();
+    }
+    ASSERT_EQ(status(built), "ready");
+    ASSERT_EQ(status(refused), "failed");
+    for (const auto id : {built, refused}) {
+        const auto name = page_object(id);
+        ASSERT_FALSE(name.empty());
+        EXPECT_EQ(count(std::format("audit_log WHERE object_type = 'report' AND object_id = '{}'", id)), 1);
+        EXPECT_EQ(count(std::format("audit_log WHERE coalesce(before::text, '') || coalesce(after::text, '') LIKE '%{}%'", name)), 0);
+        EXPECT_EQ(count(std::format("jobs WHERE coalesce(last_error, '') || payload::text LIKE '%{}%'", name)), 0);
+    }
+}
+
+TEST_F(Reports, ARunThatFindsTheReportNoLongerBuildingPutsNothing) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    const auto response = post(std::format("/api/locations/{}/reports", chelsea_), R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})");
+    ASSERT_EQ(response.status, 201u) << response.body;
+    const auto id = json(response).at("id").as_int64();
+    // While the model writes the summary, the stalled-report sweep (or another run) has settled the report.
+    llm_.summary = [&](const llm::ChatRequest&) {
+        exec(std::format("UPDATE reports SET status = 'failed', error = 'overtaken' WHERE id = {}", id));
+        return FakeLlm::json_answer(FakeLlm::kPlainSummary);
+    };
+    run_jobs();
+    EXPECT_EQ(llm_.calls("summary"), 1u);
+    EXPECT_EQ(public_.puts, 0);
+    EXPECT_EQ(status(id), "failed");
+    EXPECT_TRUE(page_object(id).empty());
+    EXPECT_EQ(count(std::format("reports WHERE id = {} AND data IS NULL", id)), 1);
+}
+
+TEST_F(Reports, AnAttemptThatFailsBeforeTheUploadNamesNoPage) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    performance_.failures.push_back({google::ApiError::Kind::unavailable, 503, "backend error"});
     const auto id = generate(chelsea_);
-    EXPECT_EQ(status(id), "draft");  // a report is built all the same
-    const auto refused = post(std::format("/api/reports/{}/share-links", id));
+    EXPECT_EQ(status(id), "building");
+    EXPECT_TRUE(page_object(id).empty());
+    EXPECT_EQ(public_.puts, 0);
+}
+
+TEST_F(Reports, AReportHasAnAddressOnlyWhileItIsReady) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    const auto ready = generate(chelsea_);
+    const auto building = json(post(std::format("/api/locations/{}/reports", chelsea_),
+                                    R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"))
+                              .at("id")
+                              .as_int64();
+    const auto failed = json(post(std::format("/api/locations/{}/reports", chelsea_),
+                                  R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"))
+                            .at("id")
+                            .as_int64();
+    exec(std::format("UPDATE reports SET status = 'failed', error = 'broken' WHERE id = {}", failed));
+    for (const auto& item : read(std::format("/api/reports?location_id={}", chelsea_)).at("items").as_array()) {
+        const auto id = item.at("id").as_int64();
+        EXPECT_TRUE(item.at("archive_url").is_null()) << id;
+        EXPECT_EQ(item.at("auto_send_status").as_string(), "off") << id;
+        if (id == ready) {
+            EXPECT_EQ(item.at("url").as_string(), std::string(kPublicBase) + page_object(ready));
+        } else {
+            EXPECT_TRUE(id == building || id == failed) << id;
+            EXPECT_TRUE(item.at("url").is_null()) << id;
+        }
+    }
+}
+
+TEST_F(Reports, WithoutAPublicBucketNoReportIsStarted) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    // A report asked for while there was a bucket, built by an engine that has none.
+    const auto asked = json(post(std::format("/api/locations/{}/reports", chelsea_),
+                                 R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"))
+                           .at("id")
+                           .as_int64();
+    const auto schedule_id = schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
+    start(false);
+
+    const auto refused = post(std::format("/api/locations/{}/reports", chelsea_), R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})");
     EXPECT_EQ(refused.status, 409u);
     EXPECT_EQ(error_code(refused), "no_public_bucket");
-    recipients(chelsea_, R"(["owner@spa.example"])");
-    sending_on();
-    EXPECT_EQ(error_code(post(std::format("/api/reports/{}/send", id))), "no_public_bucket");
-    EXPECT_EQ(status(id), "draft");
-}
+    EXPECT_EQ(count("reports"), 1);
 
-TEST_F(Reports, OnlyABuiltReportCanBeShared) {
-    const auto response = post(std::format("/api/locations/{}/reports", chelsea_),
-                               R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})");
-    const auto id = json(response).at("id").as_int64();
-    EXPECT_EQ(error_code(post(std::format("/api/reports/{}/share-links", id))), "report_not_ready");  // still building
+    // One run of its job, and it has failed with the reason; nothing is retried.
     run_jobs();
-    EXPECT_EQ(post(std::format("/api/reports/{}/reject", id)).status, 200u);
-    EXPECT_EQ(status(id), "rejected");
-    EXPECT_EQ(error_code(post(std::format("/api/reports/{}/share-links", id))), "report_not_ready");
-    EXPECT_EQ(error_code(post(std::format("/api/reports/{}/send", id))), "report_not_ready");
-    EXPECT_EQ(error_code(post(std::format("/api/reports/{}/reject", id))), "report_not_ready");
-    EXPECT_EQ(post("/api/reports/999999/share-links").status, 404u);
-    EXPECT_TRUE(public_.objects.empty());
-    EXPECT_EQ(count("audit_log WHERE action = 'report.reject'"), 1);
-}
+    const auto failed = report(asked);
+    EXPECT_EQ(failed.at("status").as_string(), "failed");
+    EXPECT_THAT(std::string(failed.at("error").as_string()), HasSubstr("No public bucket is configured"));
+    EXPECT_EQ(count("jobs WHERE kind = 'reports.build' AND status = 'succeeded' AND attempts = 1"), 1);
+    EXPECT_TRUE(page_object(asked).empty());
+    EXPECT_EQ(public_.puts, 0);
 
-// ---- sending ----------------------------------------------------------------------------
-
-TEST_F(Reports, AReportWaitsForAPersonAndGoesToItsLocationsRecipientsOnly) {
-    const auto review = add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "WORDS-OF-A-REVIEWER");
-    analyze(review, "positive", R"([{"id": "treatment_quality", "polarity": "positive"}])");
-    const auto id = generate(chelsea_);
-    EXPECT_EQ(status(id), "draft");
-    EXPECT_EQ(count("notification_deliveries"), 0);  // building a report tells nobody
-
-    // Sending is off after installation: a send would reach nobody, so it is refused.
-    recipients(chelsea_, R"(["owner@spa.example", "manager@spa.example"])");
-    // The client's other location has a manager of its own, who gets only that location's reports.
-    recipients(uptown_, R"(["uptown@spa.example"])");
-    recipients(buffet_, R"(["owner@buffet.example"])");
-    EXPECT_EQ(error_code(post(std::format("/api/reports/{}/send", id))), "sending_off");
-    EXPECT_TRUE(public_.objects.empty());
-
-    sending_on();
-    const auto sent = post(std::format("/api/reports/{}/send", id));
-    ASSERT_EQ(sent.status, 200u) << sent.body;
-    EXPECT_EQ(json(sent).at("status").as_string(), "sent");
-    EXPECT_EQ(json(sent).at("sent_by").as_string(), "staff@xvisionmediaus.com");
-    ASSERT_EQ(json(sent).at("share_links").as_array().size(), 1u);
-    EXPECT_EQ(json(sent).at("share_links").at(0).at("origin").as_string(), "email");
-    const std::string link(json(sent).at("share_links").at(0).at("url").as_string());
-    EXPECT_EQ(public_.objects.at(link.substr(kPublicBase.size())).body, html(id));
-
-    EXPECT_EQ(count(std::format("notification_deliveries WHERE event_type = 'location_report' AND location_id = {}", chelsea_)), 2);
-    EXPECT_EQ(count("notification_deliveries"), 2);
-    run_jobs();
-    ASSERT_EQ(channel_.sent.size(), 2u);
-    std::vector<std::string> to{channel_.sent[0].recipient, channel_.sent[1].recipient};
-    std::ranges::sort(to);
-    EXPECT_EQ(to, (std::vector<std::string>{"manager@spa.example", "owner@spa.example"}));
-    const auto& message = channel_.sent[0];
-    EXPECT_EQ(message.subject, "Your Google reviews and visibility report, October 1 to 31, 2026");
-    EXPECT_THAT(message.body, HasSubstr("New reviews: 1"));
-    EXPECT_THAT(message.body, HasSubstr("Praised most: Treatment quality"));
-    EXPECT_THAT(message.body, HasSubstr(link));
-    // The business is not sent to the dashboard, and no review text is in an email.
-    EXPECT_THAT(message.body, Not(HasSubstr("dashboard")));
-    EXPECT_THAT(message.body, Not(HasSubstr("WORDS-OF-A-REVIEWER")));
-    EXPECT_EQ(count("audit_log WHERE action = 'report.send' AND actor = 'staff@xvisionmediaus.com'"), 1);
-
-    // A sent report is sent once, and stays as it is.
-    EXPECT_EQ(error_code(post(std::format("/api/reports/{}/send", id))), "report_not_ready");
-    EXPECT_EQ(error_code(post(std::format("/api/reports/{}/reject", id))), "report_not_ready");
-    EXPECT_EQ(channel_.sent.size(), 2u);
-    // It can still be shared by hand, and its email link revoked.
-    EXPECT_EQ(post(std::format("/api/reports/{}/share-links", id)).status, 201u);
-}
-
-TEST_F(Reports, ALocationWithoutRecipientsCannotBeSentAReport) {
-    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
-    const auto id = generate(chelsea_);
-    sending_on();
-    recipients(uptown_, R"(["owner@spa.example"])");  // the list of the client's other location is not this location's
-    EXPECT_EQ(error_code(post(std::format("/api/reports/{}/send", id))), "no_recipients");
-    // A rule that is switched off names nobody.
-    recipients(chelsea_, R"(["owner@spa.example"])");
-    exec(std::format("UPDATE notification_rules SET enabled = false WHERE location_id = {}", chelsea_));
-    EXPECT_EQ(error_code(post(std::format("/api/reports/{}/send", id))), "no_recipients");
-    EXPECT_EQ(status(id), "draft");
-    EXPECT_TRUE(public_.objects.empty());
-    EXPECT_EQ(count("notification_deliveries"), 0);
+    // A schedule's time comes, and nothing is started.
+    clock_.advance(2h);
+    EXPECT_EQ(await(reporter_->start_due()), 0);
+    EXPECT_EQ(count("reports"), 1);
+    EXPECT_TRUE(listed_schedule(schedule_id).at("last_run_on").is_null());
 }
 
 TEST_F(Reports, ARuleForALocationsReportsMustNameALocation) {
@@ -763,9 +761,8 @@ TEST_F(Reports, ARuleForALocationsReportsMustNameALocation) {
 // A switched-off location gets no report (D-102): none is made, built, sent or scheduled.
 TEST_F(Reports, ASwitchedOffLocationGetsNoReport) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
-    const auto id = generate(chelsea_);
-    recipients(chelsea_, R"(["owner@spa.example"])");
-    sending_on();
+    generate(chelsea_);
+    const auto pages = public_.puts;
     schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
     const auto building = json(post(std::format("/api/locations/{}/reports", chelsea_),
                                     R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"))
@@ -773,9 +770,6 @@ TEST_F(Reports, ASwitchedOffLocationGetsNoReport) {
                               .as_int64();
     switch_location(chelsea_, false);
 
-    const auto sent = post(std::format("/api/reports/{}/send", id));
-    EXPECT_EQ(sent.status, 409u);
-    EXPECT_EQ(error_code(sent), "location_not_enabled");
     const auto made = post(std::format("/api/locations/{}/reports", chelsea_), R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})");
     EXPECT_EQ(made.status, 400u);
     EXPECT_THAT(error_message(made), HasSubstr("switched off"));
@@ -790,20 +784,7 @@ TEST_F(Reports, ASwitchedOffLocationGetsNoReport) {
     clock_.advance(2h);
     EXPECT_EQ(await(reporter_->start_due()), 0);
     EXPECT_EQ(count("notification_deliveries"), 0);
-    EXPECT_TRUE(public_.objects.empty());
-}
-
-TEST_F(Reports, AReportWithALinkThatWorksCannotBeRejected) {
-    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
-    const auto id = generate(chelsea_);
-    const auto link = json(post(std::format("/api/reports/{}/share-links", id)));
-    // Rejected, its page would stay readable under the link.
-    const auto refused = post(std::format("/api/reports/{}/reject", id));
-    EXPECT_EQ(refused.status, 409u);
-    EXPECT_EQ(error_code(refused), "report_shared");
-    EXPECT_EQ(status(id), "draft");
-    ASSERT_EQ(post(std::format("/api/report-share-links/{}/revoke", link.at("id").as_int64())).status, 200u);
-    EXPECT_EQ(post(std::format("/api/reports/{}/reject", id)).status, 200u);
+    EXPECT_EQ(public_.puts, pages);
 }
 
 TEST_F(Reports, AReportWhoseJobIsGoneDoesNotStayBuildingForEver) {
@@ -820,45 +801,6 @@ TEST_F(Reports, AReportWhoseJobIsGoneDoesNotStayBuildingForEver) {
     const auto failed = report(id);
     EXPECT_EQ(failed.at("status").as_string(), "failed");
     EXPECT_THAT(std::string(failed.at("error").as_string()), HasSubstr("did not finish"));
-    EXPECT_EQ(post(std::format("/api/reports/{}/reject", id)).status, 200u);
-}
-
-TEST_F(Reports, AnAutoSendThatBreaksOffLeavesTheReportWaitingWithTheReason) {
-    add_review(chelsea_, "a1", 5, "2026-11-09T15:00:00Z", "Lovely");
-    recipients(chelsea_, R"(["owner@spa.example"])");
-    sending_on();
-    schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York", "auto_send": true)");
-    clock_.advance(2h);
-    ASSERT_EQ(await(reporter_->start_due()), 1);
-    // The connection to the bucket drops: no answer, an exception.
-    public_.unreachable = true;
-    run_jobs();
-    const auto made = read(std::format("/api/reports?location_id={}", chelsea_)).at("items").at(0);
-    EXPECT_EQ(made.at("status").as_string(), "draft");
-    EXPECT_THAT(std::string(made.at("hold_reason").as_string()), HasSubstr("Sending failed"));
-    EXPECT_TRUE(channel_.sent.empty());
-    EXPECT_EQ(count("notification_deliveries"), 0);
-    // The job is done: it is not run again, and nothing is sent later behind anyone's back.
-    public_.unreachable = false;
-    clock_.advance(2h);
-    run_jobs();
-    EXPECT_TRUE(channel_.sent.empty());
-    EXPECT_EQ(status(made.at("id").as_int64()), "draft");
-    // A person sends it.
-    EXPECT_EQ(post(std::format("/api/reports/{}/send", made.at("id").as_int64())).status, 200u);
-}
-
-TEST_F(Reports, AFailedUploadSendsNothing) {
-    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
-    const auto id = generate(chelsea_);
-    recipients(chelsea_, R"(["owner@spa.example"])");
-    sending_on();
-    public_.refuse = true;
-    const auto refused = post(std::format("/api/reports/{}/send", id));
-    EXPECT_EQ(refused.status, 502u);
-    EXPECT_EQ(status(id), "draft");
-    EXPECT_EQ(count("notification_deliveries"), 0);
-    EXPECT_EQ(count("report_share_links"), 0);
 }
 
 // ---- schedules --------------------------------------------------------------------------
@@ -879,7 +821,7 @@ TEST_F(Reports, AScheduleBuildsOneReportPerRunInItsOwnTimeZone) {
     EXPECT_EQ(made.at("period_end").as_string(), "2026-11-09");
     EXPECT_EQ(made.at("schedule_id").as_int64(), id);
     EXPECT_TRUE(made.at("requested_by").is_null());
-    EXPECT_EQ(made.at("status").as_string(), "draft");  // it waits for a person
+    EXPECT_EQ(made.at("status").as_string(), "ready");
     EXPECT_EQ(listed_schedule(id).at("last_run_on").as_string(), "2026-11-10");
     EXPECT_EQ(count("audit_log WHERE action = 'report.create' AND actor = 'system:report-schedule'"), 1);
 
@@ -953,40 +895,28 @@ TEST_F(Reports, ADailyScheduleRunsOnceOnTheDaysClocksChange) {
               "2027-03-13");
 }
 
+// Whether a report is to be sent by itself is on the report; nothing sends it yet.
 TEST_F(Reports, AScheduleSendsByItselfOnlyWhereAPersonSaidSo) {
     add_review(chelsea_, "a1", 5, "2026-11-09T15:00:00Z", "Lovely");
     recipients(chelsea_, R"(["owner@spa.example"])");
     sending_on();
-    const auto id = schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York", "auto_send": true)");
-    EXPECT_TRUE(listed_schedule(id).at("auto_send").as_bool());
+    const auto by_itself = schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York", "auto_send": true)");
+    EXPECT_TRUE(listed_schedule(by_itself).at("auto_send").as_bool());
+    const auto waits = schedule(uptown_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
     clock_.advance(2h);
-    ASSERT_EQ(await(reporter_->start_due()), 1);
+    ASSERT_EQ(await(reporter_->start_due()), 2);
+    const auto by_hand = generate(chelsea_);
     run_jobs();
 
-    const auto made = read(std::format("/api/reports?location_id={}", chelsea_)).at("items").at(0);
-    EXPECT_EQ(made.at("status").as_string(), "sent");
-    EXPECT_TRUE(made.at("sent_by").is_null());  // its schedule
-    ASSERT_EQ(channel_.sent.size(), 1u);
-    EXPECT_EQ(channel_.sent[0].recipient, "owner@spa.example");
-    EXPECT_THAT(channel_.sent[0].body, HasSubstr(std::string(kPublicBase) + "r/"));
-    EXPECT_EQ(count("audit_log WHERE action = 'report.send' AND actor = 'system:report-schedule'"), 1);
-}
-
-TEST_F(Reports, AReportItsScheduleCouldNotSendWaitsWithTheReason) {
-    recipients(chelsea_, R"(["owner@spa.example"])");
-    schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York", "auto_send": true)");
-    clock_.advance(2h);  // sending is still off
-    ASSERT_EQ(await(reporter_->start_due()), 1);
-    run_jobs();
-    const auto made = read(std::format("/api/reports?location_id={}", chelsea_)).at("items").at(0);
-    EXPECT_EQ(made.at("status").as_string(), "draft");
-    EXPECT_THAT(std::string(made.at("hold_reason").as_string()), HasSubstr("Email sending is switched off"));
+    const auto auto_send = [&](std::string_view where) {
+        return value<std::string>(std::format("SELECT auto_send_status FROM reports WHERE {}", where));
+    };
+    EXPECT_EQ(auto_send(std::format("schedule_id = {}", by_itself)), "pending");
+    EXPECT_EQ(auto_send(std::format("schedule_id = {}", waits)), "off");
+    EXPECT_EQ(report(by_hand).at("auto_send_status").as_string(), "off");
+    EXPECT_EQ(count("reports WHERE status = 'ready'"), 3);
     EXPECT_TRUE(channel_.sent.empty());
-    EXPECT_TRUE(public_.objects.empty());
-    // A person can send it once sending is on.
-    sending_on();
-    EXPECT_EQ(post(std::format("/api/reports/{}/send", made.at("id").as_int64())).status, 200u);
-    EXPECT_TRUE(report(made.at("id").as_int64()).at("hold_reason").is_null());
+    EXPECT_EQ(count("notification_deliveries"), 0);
 }
 
 TEST_F(Reports, ADisabledScheduleAndASwitchedOffLocationRunNothing) {
@@ -1050,6 +980,6 @@ TEST_F(Reports, ADeletedScheduleLeavesItsReports) {
     const auto listed = read("/api/reports");
     ASSERT_EQ(listed.at("total").as_int64(), 1);
     EXPECT_TRUE(listed.at("items").at(0).at("schedule_id").is_null());
-    EXPECT_EQ(read("/api/reports?status=draft").at("total").as_int64(), 1);
-    EXPECT_EQ(read("/api/reports?status=sent").at("total").as_int64(), 0);
+    EXPECT_EQ(read("/api/reports?status=ready").at("total").as_int64(), 1);
+    EXPECT_EQ(read("/api/reports?status=failed").at("total").as_int64(), 0);
 }

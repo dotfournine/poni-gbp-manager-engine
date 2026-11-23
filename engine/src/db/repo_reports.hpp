@@ -1,7 +1,8 @@
-// A location's reports (FR-8, D-085, D-102): the reports themselves, their share links
+// A location's reports (FR-8, D-085, D-102, D-104): the reports themselves
 // and the schedules that ask for them. A report row is written once as
-// "building"; its job fills in the numbers and the page, after which they
-// never change. Blocking calls on a transaction the caller owns.
+// "building"; its job names its page, puts the page into the public bucket
+// and stores the numbers, after which neither changes. Blocking calls on a
+// transaction the caller owns.
 //
 // Nothing here talks to a bucket or to a model: jobs/reports.hpp does, and
 // records the outcome through these functions.
@@ -46,8 +47,9 @@ struct NewReport {
 // Writes the report as "building" and enqueues its job, requested by the
 // audit's actor (a person, or nobody: a schedule). Without a time zone it
 // takes the location's, else UTC. Refuses a location that is unknown or
-// switched off, a time zone the system does not know, and a period that is
-// upside down, longer than 400 days or not over yet.
+// switched off, a time zone the system does not know, a period that is
+// upside down, longer than 400 days or not over yet, and any report while
+// there is no public bucket (`link_base` empty): its page would have nowhere to go.
 Result<model::Report> create_report(pqxx::transaction_base& tx, audit::Writer& audit, const NewReport& report, std::string_view link_base);
 
 struct ReportLocationRef {
@@ -60,7 +62,6 @@ struct ReportLocationRef {
 // is in the database, and the report's location to ask Google about.
 struct ReportWork {
     std::int64_t report_id = 0;
-    bool auto_send = false;
     domain::ReportInput input;
     ReportLocationRef location;
 };
@@ -69,9 +70,15 @@ struct ReportWork {
 // switched off meanwhile is marked failed instead, and nothing is returned.
 std::optional<ReportWork> load_report_work(pqxx::transaction_base& tx, std::int64_t report_id, core::TimePoint now);
 
-// building -> draft, with the numbers and the page. False if the report was no longer building.
-bool store_built_report(pqxx::transaction_base& tx, std::int64_t report_id, const domain::ReportData& data, const std::string& html,
-                        core::TimePoint now);
+// The name of the report's page in the public bucket, written now if the row
+// has none yet (`candidate`, "r/<token>.<ext>"), or nothing when the report is
+// no longer "building". Called right before the page is uploaded and nowhere
+// else: a row names a page only if an upload of it was at least begun, and a
+// run that was overtaken uploads nothing. A retried build keeps the name.
+std::optional<std::string> name_report_page(pqxx::transaction_base& tx, std::int64_t report_id, const std::string& candidate);
+
+// building -> ready, with the numbers. False if the report was no longer building.
+bool store_built_report(pqxx::transaction_base& tx, std::int64_t report_id, const domain::ReportData& data, core::TimePoint now);
 // building -> failed.
 void fail_report(pqxx::transaction_base& tx, std::int64_t report_id, const std::string& error, core::TimePoint now);
 
@@ -83,52 +90,10 @@ struct ReportFilter {
     db::Page page;
 };
 
-// `link_base` is the address of the public bucket, in front of "r/<token>.html".
-model::ReportList list_reports(pqxx::transaction_base& tx, const ReportFilter& filter);
+// `link_base` is the address of the public bucket, in front of a page's object name: a report's
+// `url` while it is ready and its `archive_url` once it is withdrawn. Without a bucket both are null.
+model::ReportList list_reports(pqxx::transaction_base& tx, const ReportFilter& filter, std::string_view link_base);
 std::optional<model::Report> get_report(pqxx::transaction_base& tx, std::int64_t id, std::string_view link_base);
-// The stored page; nothing while the report has none.
-std::optional<std::string> report_html(pqxx::transaction_base& tx, std::int64_t id);
-// The stored numbers as JSON text.
-std::optional<std::string> report_data(pqxx::transaction_base& tx, std::int64_t id);
-
-// ---- sending, rejecting and share links ---------------------------------------------
-
-// The object a share link's token names in the public bucket.
-std::string share_object_name(std::string_view token);
-
-// The page to send, if the report can be sent now: it is a draft, its
-// location is switched on, email sending is switched on, and a rule names
-// recipients for that location's reports.
-Result<std::string> check_send(pqxx::transaction_base& tx, std::int64_t report_id);
-
-// After the page was put in the public bucket under `token`: records the
-// link, raises the location_report event (one email per recipient) and marks
-// the report sent by the audit's actor (nobody when its schedule sends it,
-// actor system:report-schedule). Checks again what check_send checked.
-Result<model::Report> mark_report_sent(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t report_id, const std::string& token,
-                                       std::string_view link_base);
-
-// A built report its schedule could not send keeps the reason for the person who looks at it.
-void hold_report(pqxx::transaction_base& tx, std::int64_t report_id, const std::string& reason, core::TimePoint now);
-
-// draft or failed -> rejected. A failed report stays without numbers and page.
-Result<model::Report> reject_report(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t report_id, std::string_view link_base);
-
-// The page of a report a link may be made for (a draft or a sent report).
-Result<std::string> shareable_html(pqxx::transaction_base& tx, std::int64_t report_id);
-// After the page was put in the bucket under `token`.
-model::ReportShareLink add_share_link(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t report_id, const std::string& token,
-                                      std::string_view link_base);
-
-struct ShareLinkRef {
-    std::int64_t report_id = 0;
-    std::string token;
-    bool revoked = false;
-};
-std::optional<ShareLinkRef> share_link_ref(pqxx::transaction_base& tx, std::int64_t link_id);
-// After the link's object was overwritten.
-Result<model::ReportShareLink> revoke_share_link(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t link_id,
-                                                 std::string_view link_base);
 
 // ---- schedules ------------------------------------------------------------------------
 
@@ -165,14 +130,14 @@ Result<void> delete_schedule(pqxx::transaction_base& tx, audit::Writer& audit, s
 
 // A report that has been building for longer than its job can take has lost
 // the job (a restart during the last attempt, say): it is marked failed, so
-// that it can be rejected and generated again. Returns how many.
+// that it can be discarded and generated again. Returns how many.
 inline constexpr std::chrono::minutes kReportStalledAfter{60};
 int fail_stalled_reports(pqxx::transaction_base& tx, core::TimePoint now);
 
 // Builds the report of every enabled schedule of an enabled location whose
 // latest run has come and has not been built yet: one report per schedule and run day, however often
 // this is called. A schedule made or changed after a run's moment does not
-// run for it. Returns how many reports were started.
-int start_due_reports(pqxx::transaction_base& tx, core::TimePoint now);
+// run for it. `link_base` as for create_report. Returns how many reports were started.
+int start_due_reports(pqxx::transaction_base& tx, std::string_view link_base, core::TimePoint now);
 
 }  // namespace poni::repo

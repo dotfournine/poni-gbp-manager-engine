@@ -347,7 +347,7 @@ struct NewLocalPostMedia {
 };
 
 // Records a file that is already in the public bucket. The object's name is
-// kept out of the audit entry, as a share link's token is.
+// kept out of the audit entry, as the name of a report's page is.
 model::LocalPostMedia create_local_post_media(pqxx::transaction_base& tx, audit::Writer& audit,
                                               const NewLocalPostMedia& media, std::string_view media_base);
 

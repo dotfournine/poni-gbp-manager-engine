@@ -226,7 +226,7 @@ int run(const core::Config& config) {
         subscriber.emplace(google::Api{http_client, service_tokens, limiter}, *subscription, quota_project);
     }
 
-    // The public bucket takes shared report pages (D-085) and the media of
+    // The public bucket takes reports' pages (D-104) and the media of
     // local posts. A folder stands in for it on a developer's machine.
     std::unique_ptr<storage::ObjectStore> public_store;
     if (storage::is_folder_setting(config.public_bucket)) {
@@ -234,7 +234,7 @@ int run(const core::Config& config) {
     } else if (!config.public_bucket.empty()) {
         public_store = std::make_unique<storage::GcsStore>(google::Api{http_client, service_tokens, limiter}, config.public_bucket);
     } else {
-        log::warn("PONI_PUBLIC_BUCKET is not set: reports can't be shared or sent");
+        log::warn("PONI_PUBLIC_BUCKET is not set: no report is built, and no photo or video can be uploaded for a post");
     }
 
     // ---- outbound: the LLM -----------------------------------------------------
