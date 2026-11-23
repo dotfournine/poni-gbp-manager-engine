@@ -33,7 +33,15 @@ PONI_REVIEW_POLL_TICK_S=10
 PONI_REVIEW_FULL_SYNC_INTERVAL_S=300
 PONI_ANALYSIS_TICK_S=10
 PONI_PUBLIC_BUCKET=$HOME/.local/state/poni-gbp/mock-public
+PONI_PUBLIC_FOLDER_URL=http://127.0.0.1:8088
 EOF
+```
+
+The public folder is served on 127.0.0.1:8088 so that the dashboard can show a report's page (D-105). Start the server once (from the repository's root):
+
+```bash
+mkdir -p ~/.local/state/poni-gbp/mock-public
+PONI_PUBLIC_FOLDER=$HOME/.local/state/poni-gbp/mock-public docker compose -f deploy/docker-compose.dev.yml --profile public up -d public
 ```
 
 For analysis, drafts and report summaries, add a model provider as in `engine.env` (`PONI_LLM_<NAME>_BASE_URL`, `_API_KEY`, `_PROTOCOL`). The real model is the point of the exercise; it costs a few cents.
@@ -78,7 +86,7 @@ The test portal is http://127.0.0.1:8090/, the dashboard http://localhost:5174. 
 4. **Approve and post.** Switch **Post replies and posts to Google** on under **Posting and sending** (off after installation, also in a mock database), then approve the draft in the **Approval queue**. The reply shows in the portal under the review, marked as posted by the engine, and the engine confirms it on its next read. To see the engine wait for a reply Google has not shown yet, set the portal's delay to, say, 120 seconds first.
 5. **Edit and remove.** In the portal, **Edit** a review (new text or stars): the engine sees an edited review at the next poll, and an edited review always goes to the approval queue. **Delete** one: at the next full sync (5 minutes with the settings above) the engine asks for it, the mock answers `NOT_FOUND`, and the review is marked removed.
 6. **Email.** Switch **Send notification emails** on and add a notification rule; what the engine sends lands in the portal's **Outbox**, not in anyone's mailbox.
-7. **A report.** **Reports**, **Generate a report**, a location, last month. Its visibility part (views, calls, search keywords) comes from the mock's made-up numbers, which are the same each time for the same days. Its page goes into the public folder when the report is built; nothing can be sent until sending a report is built again (D-104).
+7. **A report.** **Reports**, **Generate a report**, a location, last month. Its visibility part (views, calls, search keywords) comes from the mock's made-up numbers, which are the same each time for the same days. Its page goes into the public folder when the report is built and opens in the dashboard, served from 127.0.0.1:8088; nothing can be sent until sending a report is built again (D-104).
 
 ## Afterwards
 
