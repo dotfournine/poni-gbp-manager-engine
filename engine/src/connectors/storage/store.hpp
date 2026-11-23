@@ -1,9 +1,19 @@
-// Where the engine puts files for others to read: a shared report's page
-// (D-085) and the photo or video of a local post (D-088), in the public
-// bucket, under names nobody can guess. Writing an object is the only operation: there is no
-// read, no list and no delete. A share link is revoked by writing another
-// page over it, and old objects are removed by the bucket's lifecycle rule,
-// not by the engine.
+// Where the engine puts files for others to read: a report's page (D-085,
+// D-104) and the photo or video of a local post (D-088), in the public
+// bucket, under names nobody can guess. A store writes an object, copies a
+// report's page to its archive name and deletes the original (D-104 point
+// 6), and does nothing else: there is no read and no list. `copy` and
+// `remove` take a report's names and no other, in every store, so that
+// nothing else in a bucket can be copied or deleted through them; the
+// outbound client holds the same two requests to the configured bucket
+// (http::is_report_page_copy_url, http::is_report_page_delete_url).
+//
+// A copy at Cloud Storage is one call: inside one bucket, without a change
+// of storage class, Google finishes a rewrite in the one request. An answer
+// that says it did not (`done: false`, with a `rewriteToken`) is a failure,
+// and the token is not followed: that would put an opaque query on an address
+// the outbound client takes with no query at all, and a later call starts the
+// copy again, which replaces its destination.
 //
 // GcsStore talks to Cloud Storage; FolderStore writes into a local folder,
 // for development and tests, so that nothing leaves the machine.
@@ -47,12 +57,24 @@ public:
     virtual ~ObjectStore() = default;
     // Creates the object, or replaces the one with that name.
     virtual boost::asio::awaitable<Result<void>> put(Object object) = 0;
+    // Copies a report's page to its archive name in the same store, replacing what is there.
+    // ApiError::Kind::not_found: there is no such page.
+    virtual boost::asio::awaitable<Result<void>> copy(std::string from, std::string to) = 0;
+    // Deletes a report's page. ApiError::Kind::not_found: there is none.
+    virtual boost::asio::awaitable<Result<void>> remove(std::string name) = 0;
     // Where its objects are read: an object's address is this and its name.
     virtual std::string base_url() const = 0;
 };
 
 // True for a name put() accepts.
 bool valid_object_name(std::string_view name);
+
+// A report's page, the only name remove() takes and the only one copy()
+// copies from: "r/", the 43 characters of a token (A-Z a-z 0-9 - _), ".",
+// and an extension of 1 to 8 characters of a-z 0-9.
+bool is_report_page(std::string_view name);
+// A report's archive, the only name copy() copies to: the same with "a/".
+bool is_report_archive(std::string_view name);
 
 // Rate limiter key.
 inline constexpr std::string_view kStorageApi = "google.storage";
@@ -62,6 +84,8 @@ public:
     GcsStore(google::Api api, std::string bucket) : api_(api), bucket_(std::move(bucket)) {}
 
     boost::asio::awaitable<Result<void>> put(Object object) override;
+    boost::asio::awaitable<Result<void>> copy(std::string from, std::string to) override;
+    boost::asio::awaitable<Result<void>> remove(std::string name) override;
     std::string base_url() const override;
 
 private:
@@ -76,6 +100,8 @@ public:
     explicit FolderStore(std::filesystem::path folder) : folder_(std::move(folder)) {}
 
     boost::asio::awaitable<Result<void>> put(Object object) override;
+    boost::asio::awaitable<Result<void>> copy(std::string from, std::string to) override;
+    boost::asio::awaitable<Result<void>> remove(std::string name) override;
     std::string base_url() const override;
 
 private:

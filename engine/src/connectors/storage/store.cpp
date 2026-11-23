@@ -5,9 +5,11 @@
 #include <boost/json/object.hpp>
 #include <boost/json/serialize.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <format>
 #include <fstream>
+#include <system_error>
 
 namespace poni::storage {
 
@@ -20,6 +22,35 @@ ApiError refused(std::string message) { return {ApiError::Kind::other, 0, std::m
 
 // The slowest connection to Cloud Storage an upload is still given time for.
 constexpr std::size_t kSlowestUploadBytesPerSecond = 256 * 1024;
+
+// `prefix`, a token of 43 characters (32 random bytes in base64url), '.', and
+// an extension of 1 to 8 lower-case letters and digits.
+bool is_report_object(std::string_view name, std::string_view prefix) {
+    constexpr std::size_t kTokenLength = 43;
+    if (!name.starts_with(prefix)) return false;
+    name.remove_prefix(prefix.size());
+    if (name.size() < kTokenLength + 2 || name.size() > kTokenLength + 9 || name[kTokenLength] != '.') return false;
+    const auto token = name.substr(0, kTokenLength);
+    const auto extension = name.substr(kTokenLength + 1);
+    const auto lower_or_digit = [](unsigned char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'); };
+    return std::ranges::all_of(token, [&](unsigned char c) { return lower_or_digit(c) || (c >= 'A' && c <= 'Z') || c == '-' || c == '_'; }) &&
+           std::ranges::all_of(extension, lower_or_digit);
+}
+
+// A page and its archive name, in the same format: the archive keeps the page's extension.
+bool is_archive_of(std::string_view page, std::string_view archive) {
+    return is_report_page(page) && is_report_archive(archive) && page.substr(page.find('.')) == archive.substr(archive.find('.'));
+}
+
+// Google's words about an object may quote its name ("No such object: <bucket>/r/..."), and a report's
+// object name is a secret (D-104): an answer of Google's keeps its kind and status and loses its text.
+// An error without an answer (no token: status 0) and an answer that can't be read (a 2xx) name no object.
+ApiError without_google_text(ApiError error) {
+    if (error.http_status >= 300) error.message = std::format("HTTP {}", error.http_status);
+    return error;
+}
+
+ApiError no_such_file() { return {ApiError::Kind::not_found, 404, "no such file"}; }
 
 }  // namespace
 
@@ -39,6 +70,10 @@ bool valid_object_name(std::string_view name) {
     }
     return true;
 }
+
+bool is_report_page(std::string_view name) { return is_report_object(name, "r/"); }
+
+bool is_report_archive(std::string_view name) { return is_report_object(name, "a/"); }
 
 bool is_folder_setting(std::string_view setting) { return setting.contains('/'); }
 
@@ -81,6 +116,33 @@ asio::awaitable<Result<void>> GcsStore::put(Object object) {
     co_return Result<void>{};
 }
 
+asio::awaitable<Result<void>> GcsStore::copy(std::string from, std::string to) {
+    if (!is_archive_of(from, to)) co_return std::unexpected(refused("the object's name is not allowed"));
+    http::ClientRequest request;
+    request.method = http::ClientMethod::post;
+    request.url = google::url("https://storage.googleapis.com", {"storage", "v1", "b", bucket_, "o", from, "rewriteTo", "b", bucket_, "o", to});
+    // As an upload's base; Google asks for at least 30 seconds.
+    request.timeout = 60s;
+    const auto answer = co_await google::fetch_json(api_, kStorageApi, std::move(request));
+    if (!answer) co_return std::unexpected(without_google_text(answer.error()));
+    // One call or none: a rewriteToken is not followed (store.hpp says why).
+    const auto* done = answer->is_object() ? answer->get_object().if_contains("done") : nullptr;
+    if (!done || !done->is_bool() || !done->get_bool()) {
+        co_return std::unexpected(ApiError{ApiError::Kind::unavailable, 200, "Cloud Storage did not finish the copy in one call"});
+    }
+    co_return Result<void>{};
+}
+
+asio::awaitable<Result<void>> GcsStore::remove(std::string name) {
+    if (!is_report_page(name)) co_return std::unexpected(refused("the object's name is not allowed"));
+    http::ClientRequest request;
+    request.method = http::ClientMethod::del;
+    request.url = google::url("https://storage.googleapis.com", {"storage", "v1", "b", bucket_, "o", name});
+    const auto response = co_await google::send(api_, kStorageApi, std::move(request));
+    if (!response) co_return std::unexpected(without_google_text(response.error()));
+    co_return Result<void>{};
+}
+
 std::string GcsStore::base_url() const {
     // The bucket's objects are under it: the address ends in a slash.
     return std::string(google::url("https://storage.googleapis.com", {bucket_, ""}).buffer());
@@ -97,6 +159,27 @@ asio::awaitable<Result<void>> FolderStore::put(Object object) {
     file.write(content.data(), static_cast<std::streamsize>(content.size()));
     file.close();
     if (!file) co_return std::unexpected(refused("the file can't be written"));
+    co_return Result<void>{};
+}
+
+asio::awaitable<Result<void>> FolderStore::copy(std::string from, std::string to) {
+    if (!is_archive_of(from, to)) co_return std::unexpected(refused("the object's name is not allowed"));
+    const auto target = folder_ / to;
+    std::error_code ec;
+    std::filesystem::create_directories(target.parent_path(), ec);
+    if (ec) co_return std::unexpected(refused(std::format("the folder can't be created: {}", ec.message())));
+    std::filesystem::copy_file(folder_ / from, target, std::filesystem::copy_options::overwrite_existing, ec);
+    if (ec == std::errc::no_such_file_or_directory) co_return std::unexpected(no_such_file());
+    if (ec) co_return std::unexpected(refused(std::format("the page can't be copied: {}", ec.message())));
+    co_return Result<void>{};
+}
+
+asio::awaitable<Result<void>> FolderStore::remove(std::string name) {
+    if (!is_report_page(name)) co_return std::unexpected(refused("the object's name is not allowed"));
+    std::error_code ec;
+    const bool removed = std::filesystem::remove(folder_ / name, ec);
+    if (ec) co_return std::unexpected(refused(std::format("the page can't be deleted: {}", ec.message())));
+    if (!removed) co_return std::unexpected(no_such_file());
     co_return Result<void>{};
 }
 

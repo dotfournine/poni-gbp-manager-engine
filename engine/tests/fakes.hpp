@@ -53,7 +53,7 @@ public:
     boost::asio::awaitable<http::ClientResponse> send(http::ClientRequest request) override {
         // What the real client refuses to send is refused here too, and never
         // counted as sent: a connector that builds such a request fails its test.
-        if (const auto refusal = http::why_refused(request)) {
+        if (const auto refusal = http::why_refused(request, public_bucket)) {
             refused.push_back(std::move(request));
             throw std::invalid_argument(std::string(*refusal));
         }
@@ -69,7 +69,7 @@ public:
     // anywhere returns nothing. The answers are taken in order, one each.
     boost::asio::awaitable<std::vector<http::ClientResponse>> send_h2(std::vector<http::ClientRequest> batch) override {
         for (const auto& request : batch) {
-            if (const auto refusal = http::why_refused(request)) {
+            if (const auto refusal = http::why_refused(request, public_bucket)) {
                 refused.push_back(request);
                 throw std::invalid_argument(std::string(*refusal));
             }
@@ -102,6 +102,8 @@ public:
     std::vector<http::ClientRequest> requests;
     // Requests the outbound client's rules refused (http/client.hpp).
     std::vector<http::ClientRequest> refused;
+    // The configured public bucket, as the engine's client is given it: unset, no report's page is copied or deleted.
+    std::string public_bucket;
     // How many requests each send_h2 carried.
     std::vector<std::size_t> h2_batches;
 
@@ -847,9 +849,9 @@ public:
     explicit FakeStore(std::string base = "https://storage.test/public/") : base_(std::move(base)) {}
 
     std::map<std::string, storage::Object> objects;
-    // True: every put is refused, as by a bucket the engine may not write to.
+    // True: every put, copy and remove is refused, as by a bucket the engine may not write to.
     bool refuse = false;
-    // True: every put throws, as a connection that drops does.
+    // True: every put, copy and remove throws, as a connection that drops does.
     bool unreachable = false;
     int puts = 0;
 
@@ -861,6 +863,29 @@ public:
         }
         auto name = object.name;
         objects.insert_or_assign(std::move(name), std::move(object));
+        co_return storage::Result<void>{};
+    }
+    // As the stores: a report's page to its archive name, with the same extension, and nothing else.
+    boost::asio::awaitable<storage::Result<void>> copy(std::string from, std::string to) override {
+        if (unreachable) throw std::runtime_error("connection reset");
+        if (!storage::is_report_page(from) || !storage::is_report_archive(to) || from.substr(from.find('.')) != to.substr(to.find('.'))) {
+            co_return std::unexpected(storage::ApiError{storage::ApiError::Kind::other, 0, "the object's name is not allowed"});
+        }
+        if (refuse) co_return std::unexpected(storage::ApiError{storage::ApiError::Kind::permission_denied, 403, "scripted refusal"});
+        const auto found = objects.find(from);
+        if (found == objects.end()) co_return std::unexpected(storage::ApiError{storage::ApiError::Kind::not_found, 404, "no such object"});
+        auto copied = found->second;
+        copied.name = to;
+        objects.insert_or_assign(std::move(to), std::move(copied));
+        co_return storage::Result<void>{};
+    }
+    boost::asio::awaitable<storage::Result<void>> remove(std::string name) override {
+        if (unreachable) throw std::runtime_error("connection reset");
+        if (!storage::is_report_page(name)) {
+            co_return std::unexpected(storage::ApiError{storage::ApiError::Kind::other, 0, "the object's name is not allowed"});
+        }
+        if (refuse) co_return std::unexpected(storage::ApiError{storage::ApiError::Kind::permission_denied, 403, "scripted refusal"});
+        if (objects.erase(name) == 0) co_return std::unexpected(storage::ApiError{storage::ApiError::Kind::not_found, 404, "no such object"});
         co_return storage::Result<void>{};
     }
     std::string base_url() const override { return base_; }

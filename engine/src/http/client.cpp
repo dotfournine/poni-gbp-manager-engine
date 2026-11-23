@@ -212,6 +212,54 @@ bool is_plain_host(const boost::urls::url& url) {
 
 bool breaks_a_line(std::string_view text) { return text.find_first_of(std::string_view("\r\n\0", 3)) != std::string_view::npos; }
 
+constexpr std::string_view kStorageHost = "storage.googleapis.com";
+
+bool is_lower_or_digit(unsigned char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'); }
+
+// A bucket's name as Cloud Storage has them: 3 to 222 of a-z, 0-9, '-', '_'
+// and '.', beginning and ending with a letter or a digit. So never empty,
+// "." or "..": a dot segment survives being built again and compared, and a
+// server that resolves one would take ".../b/../o" for another address.
+bool is_bucket_name(std::string_view name) {
+    return name.size() >= 3 && name.size() <= 222 && is_lower_or_digit(name.front()) && is_lower_or_digit(name.back()) &&
+           std::ranges::all_of(name, [](unsigned char c) { return is_lower_or_digit(c) || c == '-' || c == '_' || c == '.'; });
+}
+
+// A report's page ("r/") or archive ("a/"): the prefix, a token of 43
+// characters (A-Z a-z 0-9 - _), '.', and an extension of 1 to 8 of a-z 0-9.
+// storage::is_report_page and storage::is_report_archive, written again
+// (client.hpp says why). Returns the extension, or nothing.
+std::optional<std::string_view> report_object_extension(std::string_view name, std::string_view prefix) {
+    constexpr std::size_t kTokenLength = 43;
+    if (!name.starts_with(prefix)) return std::nullopt;
+    name.remove_prefix(prefix.size());
+    if (name.size() < kTokenLength + 2 || name.size() > kTokenLength + 9 || name[kTokenLength] != '.') return std::nullopt;
+    const auto token = name.substr(0, kTokenLength);
+    const auto extension = name.substr(kTokenLength + 1);
+    if (!std::ranges::all_of(token, [](unsigned char c) { return is_letter_or_digit(c) || c == '-' || c == '_'; })) return std::nullopt;
+    if (!std::ranges::all_of(extension, is_lower_or_digit)) return std::nullopt;
+    return extension;
+}
+
+// The decoded segments of `url` if it is https on Cloud Storage's host as
+// the engine writes it and has `count` of them; nothing otherwise.
+std::optional<std::vector<std::string>> storage_segments(const boost::urls::url& url, std::size_t count) {
+    if (url.scheme_id() != boost::urls::scheme::https || url.host() != kStorageHost) return std::nullopt;
+    const auto segments = url.segments();
+    if (segments.size() != count) return std::nullopt;
+    return std::vector<std::string>(segments.begin(), segments.end());
+}
+
+// Whether `written` (an address, or the part of it before its query) is the
+// address built from `segments`, character for character: no port, user or
+// fragment, and nothing percent-encoded but what building it encodes, which
+// for the names the shapes take is the '/' of an object's name, as %2F.
+bool is_storage_address_of(std::string_view written, const std::vector<std::string>& segments) {
+    boost::urls::url built("https://storage.googleapis.com");
+    for (const auto& segment : segments) built.segments().push_back(segment);
+    return std::string_view(built.buffer()) == written;
+}
+
 }  // namespace
 
 bool is_reply_url(const boost::urls::url& url) {
@@ -271,7 +319,42 @@ bool is_apns_device_url(const boost::urls::url& url) {
     return built.buffer() == url.buffer();
 }
 
-std::optional<std::string_view> why_refused(ClientMethod method, const boost::urls::url& url) {
+bool is_storage_host(const boost::urls::url& url) {
+    std::string host = text::ascii_lower(url.host());
+    while (host.ends_with('.')) host.pop_back();
+    return host == kStorageHost;
+}
+
+bool is_storage_upload_url(const boost::urls::url& url) {
+    const auto s = storage_segments(url, 6);
+    if (!s || (*s)[0] != "upload" || (*s)[1] != "storage" || (*s)[2] != "v1" || (*s)[3] != "b" || !is_bucket_name((*s)[4]) || (*s)[5] != "o") {
+        return false;
+    }
+    // Up to the query, which is not looked at: it names the kind of upload, and for a file the object.
+    const std::string_view written = url.buffer();
+    return is_storage_address_of(written.substr(0, written.find('?')), *s);
+}
+
+bool is_report_page_copy_url(const boost::urls::url& url, std::string_view public_bucket) {
+    if (!is_bucket_name(public_bucket)) return false;
+    const auto s = storage_segments(url, 11);
+    if (!s || (*s)[0] != "storage" || (*s)[1] != "v1" || (*s)[2] != "b" || (*s)[3] != public_bucket || (*s)[4] != "o" || (*s)[6] != "rewriteTo" ||
+        (*s)[7] != "b" || (*s)[8] != public_bucket || (*s)[9] != "o") {
+        return false;
+    }
+    const auto page = report_object_extension((*s)[5], "r/");
+    const auto archive = report_object_extension((*s)[10], "a/");
+    return page && archive && *page == *archive && is_storage_address_of(url.buffer(), *s);
+}
+
+bool is_report_page_delete_url(const boost::urls::url& url, std::string_view public_bucket) {
+    if (!is_bucket_name(public_bucket)) return false;
+    const auto s = storage_segments(url, 6);
+    if (!s || (*s)[0] != "storage" || (*s)[1] != "v1" || (*s)[2] != "b" || (*s)[3] != public_bucket || (*s)[4] != "o") return false;
+    return report_object_extension((*s)[5], "r/") && is_storage_address_of(url.buffer(), *s);
+}
+
+std::optional<std::string_view> why_refused(ClientMethod method, const boost::urls::url& url, std::string_view public_bucket) {
     if (!is_plain_host(url)) return "the outbound client only sends to a host named with letters, digits, '.' and '-'";
     // The host however it is written; the one allowed address only as the engine writes it.
     if (is_apns_host(url) && (method != ClientMethod::post || !is_apns_device_url(url))) {
@@ -283,6 +366,13 @@ std::optional<std::string_view> why_refused(ClientMethod method, const boost::ur
             if (!is_reply_url(url)) return "the outbound client only sends PUT for a reply to a review";
             return std::nullopt;
         case ClientMethod::del:
+            // The host however it is written; the one allowed address only as the engine writes it.
+            if (is_storage_host(url)) {
+                if (!is_report_page_delete_url(url, public_bucket)) {
+                    return "the outbound client only sends Cloud Storage a DELETE of a report's page in the public bucket";
+                }
+                return std::nullopt;
+            }
             if (!is_local_post_url(url)) return "the outbound client only sends DELETE for a local post";
             return std::nullopt;
         case ClientMethod::patch:
@@ -295,13 +385,16 @@ std::optional<std::string_view> why_refused(ClientMethod method, const boost::ur
             if (is_gbp_host(url) && !is_local_post_collection_url(url) && !is_batch_get_reviews_url(url)) {
                 return "the outbound client only sends a POST to Google Business Profile to create a local post or to read reviews";
             }
+            if (is_storage_host(url) && !is_storage_upload_url(url) && !is_report_page_copy_url(url, public_bucket)) {
+                return "the outbound client only sends Cloud Storage an upload, or the copy of a report's page to the archive in the public bucket";
+            }
             return std::nullopt;
     }
     return "the outbound client does not know this method";
 }
 
-std::optional<std::string_view> why_refused(const ClientRequest& request) {
-    if (const auto refusal = why_refused(request.method, request.url)) return refusal;
+std::optional<std::string_view> why_refused(const ClientRequest& request, std::string_view public_bucket) {
+    if (const auto refusal = why_refused(request.method, request.url, public_bucket)) return refusal;
     // Google's front ends take a method from these headers on a POST; the
     // others would change where the request goes or how its body is read.
     static constexpr std::array<std::string_view, 6> forbidden{"Host",           "X-HTTP-Method-Override", "X-HTTP-Method",
@@ -363,8 +456,8 @@ asio::awaitable<ClientResponse> NetClient::send(ClientRequest request) {
     if (request.url.scheme_id() != boost::urls::scheme::https && request.url.scheme_id() != boost::urls::scheme::http) {
         throw std::invalid_argument("outbound requests need an http or https URL");
     }
-    // What may change something at Google is four address shapes wide (client.hpp).
-    if (const auto refusal = why_refused(request)) throw std::invalid_argument(std::string(*refusal));
+    // What may change something at Google is four address shapes wide, and two in the public bucket (client.hpp).
+    if (const auto refusal = why_refused(request, public_bucket_)) throw std::invalid_argument(std::string(*refusal));
     if (google_mock_ && is_google_address(request.url)) {
         auto mocked = google_mock_address(*google_mock_, request.url);
         // A mock database must never reach a real Google service, nor a real one the mock (D-087).
@@ -398,7 +491,7 @@ asio::awaitable<ClientResponse> NetClient::send(ClientRequest request) {
 asio::awaitable<std::vector<ClientResponse>> NetClient::send_h2(std::vector<ClientRequest> requests) {
     if (requests.empty()) co_return std::vector<ClientResponse>{};
     for (const auto& request : requests) {
-        if (const auto refusal = why_refused(request)) throw std::invalid_argument(std::string(*refusal));
+        if (const auto refusal = why_refused(request, public_bucket_)) throw std::invalid_argument(std::string(*refusal));
         // Apple's push service is the one server the engine speaks HTTP/2 to (D-097).
         if (!is_apns_device_url(request.url)) throw std::invalid_argument("the outbound client speaks HTTP/2 only to Apple's push service");
         if (request.file) throw std::invalid_argument("the outbound client sends no file over HTTP/2");

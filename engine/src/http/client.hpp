@@ -2,7 +2,7 @@
 // OpenSSL inside client.cpp and lets tests replace the network with a fake.
 //
 // What the engine can do to the outside world is limited here, in code
-// (D-042, D-061, D-088, D-099). The engine changes a Google Business Profile
+// (D-042, D-061, D-088, D-099, D-104). The engine changes a Google Business Profile
 // with four requests, each on the one address shape of the v4 API
 // (mybusiness.googleapis.com) that Google has for it:
 //
@@ -12,14 +12,27 @@
 //   PATCH   .../accounts/{a}/locations/{l}/localPosts/{p}?updateMask=<fields>
 //                                                              an edit of that local post, in the fields named
 //
+// In its own public bucket at Cloud Storage (storage.googleapis.com) the
+// engine writes objects, and withdraws a report's page by copying it to its
+// archive name and deleting the original (D-104):
+//
+//   POST    /upload/storage/v1/b/{bucket}/o?uploadType=...     an upload, to any bucket
+//   POST    /storage/v1/b/{public}/o/r%2F{page}/rewriteTo/b/{public}/o/a%2F{archive}
+//                                                              the copy of a report's page to its archive
+//   DELETE  /storage/v1/b/{public}/o/r%2F{page}                that page, and nothing else
+//
+// where {public} is the configured public bucket, which the client is given
+// at its start: without one, neither the copy nor the delete is sent.
+//
 // What the client enforces, before a name is resolved: a PUT goes nowhere
-// but to a reply, a DELETE nowhere but to a local post, and a PATCH nowhere
-// but to a local post with its mask, on any host. A POST to the v4 host is
-// refused unless it is the create above or the read-only batchGetReviews. A
-// POST to any other host is not limited here: those are the engine's
-// ordinary calls (OAuth tokens, Pub/Sub, Gmail, Cloud Storage, the models),
-// and that the engine sends no other POST to a Google service is a rule for
-// the code that calls this client (CLAUDE.md).
+// but to a reply, a DELETE nowhere but to a local post or, at Cloud Storage,
+// a report's page in the public bucket, and a PATCH nowhere but to a local
+// post with its mask, on any host. A POST to the v4 host is refused unless it
+// is the create above or the read-only batchGetReviews, and a POST to Cloud
+// Storage unless it is an upload or the copy above. A POST to any other host
+// is not limited here: those are the engine's ordinary calls (OAuth tokens,
+// Pub/Sub, Gmail, the models), and that the engine sends no other POST to a
+// Google service is a rule for the code that calls this client (CLAUDE.md).
 //
 // An address that changes something is taken only as the engine itself
 // writes it: the ids are letters, digits, '-' and '_', and the address must
@@ -27,6 +40,10 @@
 // sent. Only the PATCH has a query, and it is one parameter: `updateMask=`
 // and one or more of six field names (summary, callToAction, event, offer,
 // media, languageCode), each once, joined by commas, with nothing encoded.
+// At Cloud Storage the copy and the delete are taken the same way: a
+// bucket's name as Cloud Storage has them, an object's name as a report's
+// page or archive is, the '/' of that name as %2F and nothing else encoded,
+// and no query.
 // No request names its host with other characters than letters,
 // digits, '.' and '-', carries a header that would change its method or its
 // host, or holds a line break in a header; a DELETE carries no body.
@@ -73,7 +90,8 @@ bool is_reply_url(const boost::urls::url& url);
 // https://mybusiness.googleapis.com/v4/accounts/{a}/locations/{l}/localPosts
 bool is_local_post_collection_url(const boost::urls::url& url);
 
-// True for the only address a DELETE may go to, one local post:
+// True for the address a DELETE may go to at Google Business Profile, one
+// local post (the other is a report's page, is_report_page_delete_url):
 // https://mybusiness.googleapis.com/v4/accounts/{a}/locations/{l}/localPosts/{p}
 bool is_local_post_url(const boost::urls::url& url);
 
@@ -117,9 +135,33 @@ bool is_apns_host(const boost::urls::url& url);
 // api.sandbox.push.apple.com, the token as domain::is_device_token says.
 bool is_apns_device_url(const boost::urls::url& url);
 
+// True when the address names Cloud Storage's host in any case, with a
+// trailing dot, a port or another scheme: the host whose POSTs and DELETEs
+// are limited to the three addresses below.
+bool is_storage_host(const boost::urls::url& url);
+
+// True for an upload to a bucket, whatever its query says:
+// https://storage.googleapis.com/upload/storage/v1/b/{bucket}/o?...
+// where {bucket} is a bucket's name as Cloud Storage has them.
+bool is_storage_upload_url(const boost::urls::url& url);
+
+// True for the only copy the client sends Cloud Storage, a report's page to
+// its archive name with the same extension, both in `public_bucket` (D-104):
+// https://storage.googleapis.com/storage/v1/b/{public_bucket}/o/r%2F{token}.{ext}/rewriteTo/b/{public_bucket}/o/a%2F{token}.{ext}
+// The names' shape is storage::is_report_page and storage::is_report_archive,
+// held here a second time on purpose: what a store accepts may be widened,
+// what goes out may not follow it. Nothing with an empty `public_bucket`.
+bool is_report_page_copy_url(const boost::urls::url& url, std::string_view public_bucket);
+
+// True for the only DELETE the client sends Cloud Storage, a report's page
+// in `public_bucket` (D-104):
+// https://storage.googleapis.com/storage/v1/b/{public_bucket}/o/r%2F{token}.{ext}
+bool is_report_page_delete_url(const boost::urls::url& url, std::string_view public_bucket);
+
 // The rule for a method and an address alone: why the client will not send
-// to it, or nothing.
-std::optional<std::string_view> why_refused(ClientMethod method, const boost::urls::url& url);
+// to it, or nothing. `public_bucket`: the configured public bucket, the one
+// a report's page is copied and deleted in; none allows neither.
+std::optional<std::string_view> why_refused(ClientMethod method, const boost::urls::url& url, std::string_view public_bucket = {});
 
 // Where the mock serves what `google` names: http://127.0.0.1:8090/mybusiness.googleapis.com/v4/...,
 // the Google host as the first segment, then the same path and query. Nothing
@@ -155,7 +197,7 @@ struct ClientResponse {
 // may not be. NetClient asks before it resolves a name; a test's stand-in
 // for the network asks too, so a connector that builds a forbidden request
 // fails its test the way it would fail in the engine.
-std::optional<std::string_view> why_refused(const ClientRequest& request);
+std::optional<std::string_view> why_refused(const ClientRequest& request, std::string_view public_bucket = {});
 
 class Client {
 public:
@@ -181,14 +223,18 @@ class NetClient final : public Client {
 public:
     // `tls` must outlive the client (core::make_tls_client_context()).
     // `google_mock`: PONI_GOOGLE_MOCK_URL, already checked to be loopback.
-    explicit NetClient(boost::asio::ssl::context& tls, std::optional<boost::urls::url> google_mock = std::nullopt)
-        : tls_(tls), google_mock_(std::move(google_mock)) {}
+    // `public_bucket`: PONI_PUBLIC_BUCKET when it names a bucket, empty for a
+    // folder or none; the one bucket a report's page is copied and deleted in.
+    explicit NetClient(boost::asio::ssl::context& tls, std::optional<boost::urls::url> google_mock = std::nullopt,
+                       std::string public_bucket = {})
+        : tls_(tls), google_mock_(std::move(google_mock)), public_bucket_(std::move(public_bucket)) {}
     boost::asio::awaitable<ClientResponse> send(ClientRequest request) override;
     boost::asio::awaitable<std::vector<ClientResponse>> send_h2(std::vector<ClientRequest> requests) override;
 
 private:
     boost::asio::ssl::context& tls_;
     std::optional<boost::urls::url> google_mock_;
+    std::string public_bucket_;
 };
 
 // application/x-www-form-urlencoded encoding of one value.
