@@ -175,7 +175,7 @@ From `tools/`, with the same settings as the engine (`PONI_DATABASE_URL` and so 
 | Engine build and tests, macOS | `cmake --build --preset macos-llvm && ctest --preset macos-llvm` (in `engine/`) |
 | Tools and knowledge base | `uv run ruff check . && uv run ruff format --check . && uv run pytest -q && uv run poni-tools check` (in `tools/`; the tests need the database server) |
 | Engine build and tests, Linux container | `engine/scripts/linux.sh test` |
-| Engine answers match the API contract | `npm run check:contract` (in `api/`, engine running with development sign-in; it signs in and creates a test client), or `engine/scripts/linux.sh contract` for the Linux build, which uses its own database `poni_linux` |
+| Engine answers match the API contract | `npm run check:contract` (in `api/`, engine running with development sign-in and a public bucket or a folder for one; it signs in and creates a test client), or `engine/scripts/linux.sh contract` for the Linux build, which uses its own database `poni_linux` |
 | API contract lint | `npm run lint` (in `api/`) |
 
 CI (`.github/workflows/ci.yml`) runs all of these on every push and pull request: the engine on Linux arm64 and x86_64 with clang, through the same `engine/scripts/linux.sh`, the contract check and lint, and the tools with the knowledge base check. `.github/workflows/ai-live.yml` runs the adversarial suite against the real model, by hand only.

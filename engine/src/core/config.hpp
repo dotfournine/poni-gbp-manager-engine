@@ -174,12 +174,13 @@ struct Config {
     // mailbox's that was connected on the status page (D-100): no setting names it.
     std::string email_from_name = "PONI GBP Manager";
 
-    // ---- reports (D-085) ----
+    // ---- reports (D-085, D-104) ----
 
-    // The Cloud Storage bucket shared report pages are put in, readable by
-    // anyone who has an object's address and listable by nobody. A value
-    // with a slash in it is a local folder instead, for development. Empty:
-    // no report can be shared or sent.
+    // The Cloud Storage bucket the pages of reports and the photos and videos
+    // of local posts are put in, readable by anyone who has an object's
+    // address and listable by nobody. A value with a slash in it is a local
+    // folder instead, for development. Empty: no report is built and no photo
+    // or video can be uploaded for a post.
     std::string public_bucket;
 
     // ---- push to the phone app (D-097) ----
