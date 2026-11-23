@@ -19,6 +19,9 @@ services:
       - engine
     environment:
       PONI_SITE_ADDRESS: ${PONI_SITE_ADDRESS:?set PONI_SITE_ADDRESS, e.g. gbp.example.com}
+      # The frame's source in the Caddyfile's Content-Security-Policy: the
+      # dashboard may frame a report's page in this bucket and nothing else.
+      PONI_PUBLIC_BUCKET: ${PONI_PUBLIC_BUCKET:-}
     ports:
       - "${PONI_HTTP_PORT:-80}:80"
       - "${PONI_HTTPS_PORT:-443}:443"
