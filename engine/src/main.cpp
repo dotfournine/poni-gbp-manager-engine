@@ -173,7 +173,8 @@ int run(const core::Config& config) {
                   "mock, and every other Google service is refused",
                   {{"mock", config.google_mock_url}});
     }
-    http::NetClient http_client(tls.ctx, google_mock);
+    // The one bucket a report's page may be copied and deleted in (D-104); a folder is no bucket.
+    http::NetClient http_client(tls.ctx, google_mock, storage::is_folder_setting(config.public_bucket) ? std::string() : config.public_bucket);
     core::RateLimiter limiter(io.get_executor(), clock);
     configure_limits(limiter);
 

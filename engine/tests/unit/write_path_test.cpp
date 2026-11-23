@@ -2,10 +2,13 @@
 // outbound client: the four requests that change something at Google (a
 // reply to a review, the create of a local post, the delete of a local
 // post, the edit of a local post), each of which the client refuses to send
-// anywhere else, and the email the Gmail channel builds.
+// anywhere else; the copy and the delete of a report's page in the public
+// bucket (D-104), which go to that bucket and nowhere else; and the email
+// the Gmail channel builds.
 
 #include "connectors/gbp/writer.hpp"
 #include "connectors/notify/gmail.hpp"
+#include "connectors/storage/store.hpp"
 #include "core/crypto.hpp"
 #include "core/tls.hpp"
 #include "unit/connector_fixture.hpp"
@@ -16,6 +19,9 @@
 
 #include <array>
 #include <format>
+#include <string>
+#include <utility>
+#include <vector>
 
 using namespace poni;
 using google::ApiError;
@@ -31,7 +37,7 @@ constexpr std::string_view kReplyUrl = "https://mybusiness.googleapis.com/v4/acc
 class WritePath : public test::ConnectorTest {
 protected:
     WritePath()
-        : ConnectorTest({gbp::kReviewsApi, google::kOAuthApi, notify::kGmailApi}),
+        : ConnectorTest({gbp::kReviewsApi, google::kOAuthApi, notify::kGmailApi, storage::kStorageApi}),
           tokens_(clock_, google::refresh_fetch(http_, limiter_, test::stored_credentials())),
           writer_(api_),
           gmail_(api_, "PONI GBP Manager", [this]() -> boost::asio::awaitable<std::expected<std::string, std::string>> {
@@ -151,11 +157,14 @@ TEST(OutboundPut, OnlyTheReplyAddressIsAReplyAddress) {
 
 // The real client for the refusal tests. It is in mock mode with nothing listening on the mock's port: the rules
 // are checked on Google's address before it is exchanged for the mock's, and if a rule were ever lost, the request
-// would fail on this machine instead of reaching Google.
+// would fail on this machine instead of reaching Google. `public_bucket`: as
+// the engine's client is given PONI_PUBLIC_BUCKET.
 struct RefusingClient {
+    explicit RefusingClient(std::string public_bucket = {}) : client(tls.ctx, boost::urls::url("http://127.0.0.1:1"), std::move(public_bucket)) {}
+
     boost::asio::io_context io;
     core::TlsSetup tls = core::make_tls_client_context();
-    http::NetClient client{tls.ctx, boost::urls::url("http://127.0.0.1:1")};
+    http::NetClient client;
 
     http::ClientResponse send(http::ClientRequest request) { return test::run(io, client.send(std::move(request))); }
 };
@@ -869,4 +878,300 @@ TEST(OutboundApns, HttpTwoCarriesOnlyThatPostAndRefusesTheWholeBeforeOpeningACon
     with_header.headers.emplace_back("X-HTTP-Method-Override", "DELETE");
     EXPECT_THROW(run({with_header}), std::invalid_argument);
     EXPECT_TRUE(run({}).empty());
+}
+
+// ---- Cloud Storage: an upload, and a report's page copied to the archive and deleted (D-104) ----
+
+namespace {
+
+constexpr std::string_view kToken = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_abcde";
+constexpr std::string_view kOtherToken = "zYxWvUtSrQpOnMlKjIhGfEdCbA9876543210_-edcba";
+static_assert(kToken.size() == 43 && kOtherToken.size() == 43);
+const std::string kPage = std::format("r/{}.html", kToken);
+const std::string kArchive = std::format("a/{}.html", kOtherToken);
+
+// A copy's and a delete's address, from segments written as they go out (an object's '/' as %2F).
+std::string copy_address(std::string_view from, std::string_view to, std::string_view from_bucket = "poni-public",
+                         std::string_view to_bucket = "poni-public") {
+    return std::format("https://storage.googleapis.com/storage/v1/b/{}/o/{}/rewriteTo/b/{}/o/{}", from_bucket, from, to_bucket, to);
+}
+std::string delete_address(std::string_view object, std::string_view bucket = "poni-public") {
+    return std::format("https://storage.googleapis.com/storage/v1/b/{}/o/{}", bucket, object);
+}
+
+const std::string kPageSegment = std::format("r%2F{}.html", kToken);
+const std::string kArchiveSegment = std::format("a%2F{}.html", kOtherToken);
+const std::string kCopyUrl = copy_address(kPageSegment, kArchiveSegment);
+const std::string kDeleteUrl = delete_address(kPageSegment);
+
+// Every way of writing the copy and the delete that is not them, and every other POST and DELETE at Cloud
+// Storage, refused with `poni-public` as the configured bucket.
+std::vector<std::pair<http::ClientMethod, std::string>> storage_neighbours() {
+    using enum http::ClientMethod;
+    const auto page = [](std::string_view token, std::string_view ext = "html") { return std::format("r%2F{}.{}", token, ext); };
+    const auto archive = [](std::string_view token, std::string_view ext = "html") { return std::format("a%2F{}.{}", token, ext); };
+    const auto with_a = std::format("%41{}", kToken.substr(1));  // 'A', percent-encoded
+    std::vector<std::pair<http::ClientMethod, std::string>> out{
+        // another bucket, in either place of the copy, or in the delete
+        {post, copy_address(kPageSegment, kArchiveSegment, "other-bucket")},
+        {post, copy_address(kPageSegment, kArchiveSegment, "poni-public", "other-bucket")},
+        {post, copy_address(kPageSegment, kArchiveSegment, "other-bucket", "other-bucket")},
+        {del, delete_address(kPageSegment, "other-bucket")},
+        {del, delete_address(kPageSegment, "poni-publi")},
+        // from anything but a page, to anything but an archive
+        {post, copy_address(archive(kToken), kArchiveSegment)},
+        {post, copy_address(std::format("p%2F{}.jpg", kToken), archive(kOtherToken, "jpg"))},
+        {post, copy_address(kPageSegment, page(kOtherToken))},
+        {post, copy_address(kArchiveSegment, kPageSegment)},
+        {post, copy_address(kPageSegment, std::format("p%2F{}.html", kOtherToken))},
+        // a DELETE of an archive, of a post's photo, of anything else
+        {del, delete_address(kArchiveSegment)},
+        {del, delete_address(std::format("p%2F{}.jpg", kToken))},
+        {del, delete_address("x")},
+        {del, "https://storage.googleapis.com/storage/v1/b/poni-public"},
+        {del, "https://storage.googleapis.com/storage/v1/b/poni-public/o"},
+        // a query
+        {del, kDeleteUrl + "?generation=1"},
+        {del, kDeleteUrl + "?"},
+        {post, kCopyUrl + "?rewriteToken=x"},
+        {post, kCopyUrl + "?"},
+        {post, kCopyUrl + "#x"},
+        // percent-encoding: a token's letter, a lower-case %2f, a second %2F
+        {del, delete_address(page(with_a))},
+        {post, copy_address(page(with_a), kArchiveSegment)},
+        {del, delete_address(std::format("r%2f{}.html", kToken))},
+        {post, copy_address(kPageSegment, std::format("a%2f{}.html", kOtherToken))},
+        {del, delete_address(std::format("r%2F%2F{}.html", kToken.substr(1)))},
+        {del, delete_address(std::format("r%2F{}.html%2F", kToken))},
+        {post, copy_address(std::format("r%2F{}%2Ehtml", kToken), kArchiveSegment)},
+        // dot segments, an extra '/' or segment
+        {del, delete_address("..")},
+        {del, delete_address(std::format("r%2F..%2F{}.html", kToken.substr(3)))},
+        {del, std::format("https://storage.googleapis.com/storage/v1/b/poni-public/o/r/{}.html", kToken)},
+        {del, kDeleteUrl + "/"},
+        {del, kDeleteUrl + "/x"},
+        {del, std::format("https://storage.googleapis.com/storage/v1/b/poni-public/o//{}", kPageSegment)},
+        {del, std::format("https://storage.googleapis.com/./storage/v1/b/poni-public/o/{}", kPageSegment)},
+        {post, copy_address("..", kArchiveSegment)},
+        {post, kCopyUrl + "/"},
+        {post, kCopyUrl + "/x"},
+        {post, std::format("https://storage.googleapis.com/storage/v1/b/poni-public/o/{}/rewriteTo//b/poni-public/o/{}", kPageSegment,
+                           kArchiveSegment)},
+        // two formats; a token of the wrong length
+        {post, copy_address(kPageSegment, archive(kOtherToken, "pdf"))},
+        {post, copy_address(page(kToken, "pdf"), kArchiveSegment)},
+        {del, delete_address(page(kToken.substr(1)))},
+        {del, delete_address(page(std::format("{}x", kToken)))},
+        {post, copy_address(page(kToken.substr(1)), kArchiveSegment)},
+        {post, copy_address(kPageSegment, archive(std::format("{}x", kOtherToken)))},
+        {del, delete_address(page(kToken, "abcdefghi"))},
+        {del, delete_address(page(kToken, "HTML"))},
+        // the host however it is written, the scheme
+        {del, std::format("https://storage.googleapis.com.example/storage/v1/b/poni-public/o/{}", kPageSegment)},
+        {del, std::format("https://storage.googleapis.com./storage/v1/b/poni-public/o/{}", kPageSegment)},
+        {post, std::format("https://storage.googleapis.com./storage/v1/b/poni-public/o/{}/rewriteTo/b/poni-public/o/{}", kPageSegment,
+                           kArchiveSegment)},
+        {del, std::format("https://STORAGE.googleapis.com/storage/v1/b/poni-public/o/{}", kPageSegment)},
+        {post, std::format("https://Storage.GoogleAPIs.com/storage/v1/b/poni-public/o/{}/rewriteTo/b/poni-public/o/{}", kPageSegment,
+                           kArchiveSegment)},
+        {del, std::format("https://storage.googleapis.com:443/storage/v1/b/poni-public/o/{}", kPageSegment)},
+        {post, std::format("https://storage.googleapis.com:443/storage/v1/b/poni-public/o/{}/rewriteTo/b/poni-public/o/{}", kPageSegment,
+                           kArchiveSegment)},
+        {del, std::format("https://user@storage.googleapis.com/storage/v1/b/poni-public/o/{}", kPageSegment)},
+        {post, std::format("https://user@storage.googleapis.com/storage/v1/b/poni-public/o/{}/rewriteTo/b/poni-public/o/{}", kPageSegment,
+                           kArchiveSegment)},
+        {del, std::format("http://storage.googleapis.com/storage/v1/b/poni-public/o/{}", kPageSegment)},
+        {post, std::format("http://storage.googleapis.com/storage/v1/b/poni-public/o/{}/rewriteTo/b/poni-public/o/{}", kPageSegment,
+                           kArchiveSegment)},
+        {post, std::format("https://storage.googleapis.com/storage/v2/b/poni-public/o/{}/rewriteTo/b/poni-public/o/{}", kPageSegment,
+                           kArchiveSegment)},
+        // a POST to the JSON API that is not the copy
+        {post, "https://storage.googleapis.com/storage/v1/b/poni-public/o"},
+        {post, "https://storage.googleapis.com/storage/v1/b"},
+        {post, std::format("https://storage.googleapis.com/storage/v1/b/poni-public/o/{}/compose", kPageSegment)},
+        {post, std::format("https://storage.googleapis.com/storage/v1/b/poni-public/o/{}/copyTo/b/poni-public/o/{}", kPageSegment, kArchiveSegment)},
+        {post, std::format("https://storage.googleapis.com/storage/v1/b/poni-public/o/{}/moveTo/o/{}", kPageSegment, kArchiveSegment)},
+        {post, "https://storage.googleapis.com/batch/storage/v1"},
+        // an upload under another path, with an extra segment, or with no bucket's name as the bucket
+        {post, "https://storage.googleapis.com/upload/storage/v1/b/poni-public/o/x?uploadType=media&name=r%2Fx.html"},
+        {post, "https://storage.googleapis.com/upload/storage/v1/b/poni-public?uploadType=multipart"},
+        {post, "https://storage.googleapis.com/upload/storage/v1/b/../o?uploadType=multipart"},
+        {post, "https://storage.googleapis.com/upload/storage/v1/b/./o?uploadType=multipart"},
+        {post, "https://storage.googleapis.com/upload/storage/v1/b//o?uploadType=multipart"},
+        {post, "https://storage.googleapis.com/upload/storage/v1/b/%70oni-public/o?uploadType=multipart"},
+        {post, "https://storage.googleapis.com:443/upload/storage/v1/b/poni-public/o?uploadType=multipart"},
+        {post, "http://storage.googleapis.com/upload/storage/v1/b/poni-public/o?uploadType=multipart"},
+        // the copy and the delete with ".." as the bucket in the address
+        {post, copy_address(kPageSegment, kArchiveSegment, "..", "..")},
+        {post, copy_address(kPageSegment, kArchiveSegment, "poni-public", "..")},
+        {del, delete_address(kPageSegment, "..")},
+        {del, delete_address(kPageSegment, ".")},
+        // what is not a POST or a DELETE is refused as before
+        {http::ClientMethod::put, kDeleteUrl},
+        {patch, kDeleteUrl},
+    };
+    return out;
+}
+
+}  // namespace
+
+TEST(OutboundStorage, TheCopyAndTheDeleteGoOnlyToTheConfiguredBucket) {
+    // Exactly as storage::GcsStore builds them.
+    EXPECT_EQ(kCopyUrl, std::string(google::url("https://storage.googleapis.com",
+                                                {"storage", "v1", "b", "poni-public", "o", kPage, "rewriteTo", "b", "poni-public", "o", kArchive})
+                                        .buffer()));
+    EXPECT_EQ(kDeleteUrl, std::string(google::url("https://storage.googleapis.com", {"storage", "v1", "b", "poni-public", "o", kPage}).buffer()));
+    const boost::urls::url copy_url(kCopyUrl);
+    const boost::urls::url delete_url(kDeleteUrl);
+    EXPECT_TRUE(http::is_storage_host(copy_url));
+    EXPECT_TRUE(http::is_report_page_copy_url(copy_url, "poni-public"));
+    EXPECT_TRUE(http::is_report_page_delete_url(delete_url, "poni-public"));
+    EXPECT_FALSE(http::why_refused(http::ClientMethod::post, copy_url, "poni-public"));
+    EXPECT_FALSE(http::why_refused(http::ClientMethod::del, delete_url, "poni-public"));
+    // Any extension, the same on both sides.
+    EXPECT_FALSE(http::why_refused(http::ClientMethod::post, boost::urls::url(copy_address(std::format("r%2F{}.pdf", kToken),
+                                                                                          std::format("a%2F{}.pdf", kOtherToken))),
+                                   "poni-public"));
+
+    // Without a configured bucket (a folder, or nothing), or with another, neither is sent.
+    for (const auto* bucket : {"", "other-bucket", "poni-publi", "..", ".", "PONI-PUBLIC"}) {
+        EXPECT_TRUE(http::why_refused(http::ClientMethod::post, copy_url, bucket)) << bucket;
+        EXPECT_TRUE(http::why_refused(http::ClientMethod::del, delete_url, bucket)) << bucket;
+    }
+    EXPECT_THAT(std::string(*http::why_refused(http::ClientMethod::post, copy_url)), HasSubstr("Cloud Storage"));
+    EXPECT_THAT(std::string(*http::why_refused(http::ClientMethod::del, delete_url)), HasSubstr("Cloud Storage"));
+    // A configured bucket that is no bucket's name allows nothing, even when the address names it.
+    for (const auto* bucket : {"..", ".", "ab", "Poni-Public", "-poni", "poni-"}) {
+        EXPECT_TRUE(http::why_refused(http::ClientMethod::post, boost::urls::url(copy_address(kPageSegment, kArchiveSegment, bucket, bucket)), bucket))
+            << bucket;
+        EXPECT_TRUE(http::why_refused(http::ClientMethod::del, boost::urls::url(delete_address(kPageSegment, bucket)), bucket)) << bucket;
+    }
+    // The upload is not tied to the configured bucket, and its query is not looked at.
+    for (const auto* upload : {"https://storage.googleapis.com/upload/storage/v1/b/poni-public/o?uploadType=multipart",
+                               "https://storage.googleapis.com/upload/storage/v1/b/another.bucket_name/o?uploadType=media&name=p%2Fabc.jpg"}) {
+        EXPECT_TRUE(http::is_storage_upload_url(boost::urls::url(upload))) << upload;
+        EXPECT_FALSE(http::why_refused(http::ClientMethod::post, boost::urls::url(upload))) << upload;
+    }
+}
+
+TEST(OutboundStorage, EveryOtherPostAndDeleteAtCloudStorageIsRefused) {
+    for (const auto& [method, address] : storage_neighbours()) {
+        EXPECT_TRUE(http::why_refused(method, boost::urls::url(address), "poni-public")) << address;
+    }
+    // A DELETE carries no body, also to the one address it may go to.
+    auto with_body = request_to(http::ClientMethod::del, kDeleteUrl);
+    EXPECT_FALSE(http::why_refused(with_body, "poni-public"));
+    with_body.body = "{}";
+    EXPECT_TRUE(http::why_refused(with_body, "poni-public"));
+    // Nor does a header turn the copy into something else.
+    auto overridden = request_to(http::ClientMethod::post, kCopyUrl);
+    overridden.headers.emplace_back("X-HTTP-Method-Override", "DELETE");
+    EXPECT_TRUE(http::why_refused(overridden, "poni-public"));
+}
+
+TEST(OutboundStorage, TheClientRefusesThemWithTheRulesOwnWordsBeforeOpeningAConnection) {
+    // In mock mode an allowed Cloud Storage address is refused as well, by the mock's rule ("no other Google
+    // service"); so what is compared is the refusal's text, which for a request the rule refuses is the rule's.
+    RefusingClient refusing("poni-public");
+    const auto refusal_of = [&](http::ClientRequest request) -> std::string {
+        try {
+            refusing.send(std::move(request));
+        } catch (const std::invalid_argument& e) {
+            return e.what();
+        }
+        return "sent";
+    };
+    auto requests = std::vector<http::ClientRequest>{};
+    for (const auto& [method, address] : storage_neighbours()) requests.push_back(request_to(method, address));
+    requests.push_back(request_to(http::ClientMethod::del, kDeleteUrl));
+    requests.back().body = "{}";
+    for (auto& request : requests) {
+        const auto rule = http::why_refused(request, "poni-public");
+        ASSERT_TRUE(rule) << request.url.buffer();
+        const std::string address(request.url.buffer());
+        EXPECT_EQ(refusal_of(std::move(request)), *rule) << address;
+    }
+    // The two allowed requests pass the rule and stop at the mock's.
+    constexpr std::string_view kMockRefusal = "against the Google mock the engine calls no other Google service";
+    EXPECT_EQ(refusal_of(request_to(http::ClientMethod::post, kCopyUrl)), kMockRefusal);
+    EXPECT_EQ(refusal_of(request_to(http::ClientMethod::del, kDeleteUrl)), kMockRefusal);
+    // A client without a bucket refuses both with the rule's words.
+    RefusingClient without_bucket;
+    for (auto request : {request_to(http::ClientMethod::post, kCopyUrl), request_to(http::ClientMethod::del, kDeleteUrl)}) {
+        const auto rule = http::why_refused(request);
+        ASSERT_TRUE(rule);
+        try {
+            without_bucket.send(std::move(request));
+            ADD_FAILURE() << "sent";
+        } catch (const std::invalid_argument& e) {
+            EXPECT_EQ(std::string_view(e.what()), *rule);
+        }
+    }
+}
+
+TEST(OutboundStorage, TheRuleAndTheStoreTakeTheSameNames) {
+    // The shape is written twice on purpose (client.hpp); this holds the two equal.
+    const std::vector<std::string> names{
+        std::format("{}.html", kToken),
+        std::format("{}.pdf", kToken),
+        std::format("{}.abcdefg8", kToken),
+        std::format("{}.abcdefghi", kToken),
+        std::format("{}.", kToken),
+        std::format("{}", kToken),
+        std::format("{}.HTML", kToken),
+        std::format("{}.ht-l", kToken),
+        std::format("{}.html", kToken.substr(1)),
+        std::format("{}x.html", kToken),
+        std::format("{}.{}.html", kToken.substr(0, 20), kToken.substr(21)),
+        std::format("{}%{}.html", kToken.substr(0, 20), kToken.substr(21)),
+        std::format("{}~{}.html", kToken.substr(0, 20), kToken.substr(21)),
+        std::format("{}/{}.html", kToken.substr(0, 20), kToken.substr(21)),
+        std::format("{}\xc3\xa9{}.html", kToken.substr(0, 20), kToken.substr(22)),
+        std::format("{}.html/x", kToken),
+        "",
+    };
+    for (const auto& rest : names) {
+        for (const auto* prefix : {"r/", "a/", "p/", "R/", "", "../r/"}) {
+            const auto name = prefix + rest;
+            const auto as_page = google::url("https://storage.googleapis.com", {"storage", "v1", "b", "poni-public", "o", name});
+            EXPECT_EQ(storage::is_report_page(name), http::is_report_page_delete_url(as_page, "poni-public")) << name;
+            // As the copy's destination, from a page in the same format.
+            const auto dot = name.rfind('.');
+            const auto source = std::format("r/{}{}", kOtherToken, dot == std::string::npos ? std::string(".html") : name.substr(dot));
+            const auto as_archive = google::url("https://storage.googleapis.com",
+                                                {"storage", "v1", "b", "poni-public", "o", source, "rewriteTo", "b", "poni-public", "o", name});
+            EXPECT_EQ(storage::is_report_archive(name) && storage::is_report_page(source),
+                      http::is_report_page_copy_url(as_archive, "poni-public"))
+                << name;
+        }
+    }
+    EXPECT_TRUE(storage::is_report_page(kPage));
+    EXPECT_TRUE(storage::is_report_archive(kArchive));
+}
+
+TEST_F(WritePath, AReportsPageIsCopiedAndDeletedOnlyInTheConfiguredBucket) {
+    storage::GcsStore store(api_, "poni-public");
+    http_.public_bucket = "poni-public";
+    http_.reply(200, std::string(kTokenOk));
+    http_.reply(200, R"({"kind": "storage#rewriteResponse", "done": true})");
+    http_.reply(204, "");
+    const auto copied = await(store.copy(kPage, kArchive));
+    ASSERT_TRUE(copied) << copied.error().message;
+    const auto removed = await(store.remove(kPage));
+    ASSERT_TRUE(removed) << removed.error().message;
+    ASSERT_EQ(http_.requests.size(), 3u);
+    EXPECT_EQ(http_.requests[1].method, http::ClientMethod::post);
+    EXPECT_EQ(std::string(http_.requests[1].url.buffer()), kCopyUrl);
+    EXPECT_EQ(http_.requests[2].method, http::ClientMethod::del);
+    EXPECT_EQ(std::string(http_.requests[2].url.buffer()), kDeleteUrl);
+    EXPECT_TRUE(http_.refused.empty());
+
+    // The engine configured with another bucket: the store's own bucket is not one the client sends these to.
+    http_.public_bucket = "another-bucket";
+    EXPECT_THROW(await(store.copy(kPage, kArchive)), std::invalid_argument);
+    EXPECT_THROW(await(store.remove(kPage)), std::invalid_argument);
+    ASSERT_EQ(http_.refused.size(), 2u);
+    EXPECT_EQ(std::string(http_.refused[0].url.buffer()), kCopyUrl);
+    EXPECT_EQ(std::string(http_.refused[1].url.buffer()), kDeleteUrl);
+    EXPECT_EQ(http_.requests.size(), 3u);
 }

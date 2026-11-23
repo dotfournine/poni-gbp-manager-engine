@@ -23,8 +23,12 @@
 
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <sstream>
+#include <string>
+#include <utility>
+#include <vector>
 
 using namespace poni;
 using namespace poni::domain;
@@ -966,5 +970,221 @@ TEST(ObjectStore, AFolderStandsInForABucketOnADevelopersMachine) {
     EXPECT_THAT(store.base_url(), testing::StartsWith("file:///"));
     EXPECT_THAT(store.base_url(), testing::EndsWith(folder.filename().string() + "/"));
     EXPECT_FALSE(test::run(io, store.put({.name = "../outside.html", .content_type = "text/html", .body = "x"})));
+    std::filesystem::remove_all(folder);
+}
+
+// ---- a report's page: copied to the archive and deleted (D-104) ---------------------------
+
+namespace {
+
+// Names as the build and the discard write them: 32 random bytes in base64url.
+constexpr std::string_view kPageToken = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_abcde";
+constexpr std::string_view kArchiveToken = "zYxWvUtSrQpOnMlKjIhGfEdCbA9876543210_-edcba";
+static_assert(kPageToken.size() == 43 && kArchiveToken.size() == 43);
+const std::string kPage = std::format("r/{}.html", kPageToken);
+const std::string kArchive = std::format("a/{}.html", kArchiveToken);
+constexpr std::string_view kPublicBucket = "xvisionmedia-gbp-public";
+
+// Names that are no report's page: neither deleted nor copied from.
+std::vector<std::string> not_a_page() {
+    return {kArchive,
+            std::format("p/{}.jpg", kPageToken),
+            std::format("r/{}.html", kPageToken.substr(1)),
+            std::format("r/{}x.html", kPageToken),
+            std::format("r/{}.{}.html", kPageToken.substr(0, 20), kPageToken.substr(21)),
+            std::format("r/{}%{}.html", kPageToken.substr(0, 20), kPageToken.substr(21)),
+            std::format("r/{}", kPageToken),
+            std::format("r/{}.", kPageToken),
+            std::format("r/{}.HTML", kPageToken),
+            std::format("r/{}.abcdefghi", kPageToken),
+            std::format("r/{}.html/x", kPageToken),
+            std::format("R/{}.html", kPageToken),
+            std::format("../r/{}.html", kPageToken),
+            "r/abc.html",
+            ""};
+}
+
+// Copies that are not of a page to its archive: from or to the wrong place, or into another format.
+std::vector<std::pair<std::string, std::string>> not_a_copy() {
+    return {{kArchive, std::format("a/{}.html", kPageToken)},
+            {kPage, std::format("r/{}.html", kArchiveToken)},
+            {kArchive, kPage},
+            {std::format("p/{}.jpg", kPageToken), std::format("a/{}.jpg", kArchiveToken)},
+            {kPage, std::format("a/{}.pdf", kArchiveToken)},
+            {std::format("r/{}.html", kPageToken.substr(1)), kArchive},
+            {kPage, std::format("a/{}x.html", kArchiveToken)},
+            {kPage, std::format("a/{}%{}.html", kArchiveToken.substr(0, 20), kArchiveToken.substr(21))},
+            {kPage, std::format("a/{}.{}.html", kArchiveToken.substr(0, 20), kArchiveToken.substr(21))}};
+}
+
+std::string google_error(unsigned code, std::string_view message) {
+    return std::format(R"({{"error": {{"code": {}, "message": "{}", "errors": [{{"message": "{}", "reason": "notFound"}}]}}}})", code, message,
+                       message);
+}
+
+std::string read_file(const std::filesystem::path& path) {
+    std::ifstream file(path, std::ios::binary);
+    std::stringstream text;
+    text << file.rdbuf();
+    return text.str();
+}
+
+}  // namespace
+
+TEST(ObjectStore, AReportsPageAndItsArchiveHaveOneShapeEach) {
+    EXPECT_TRUE(storage::is_report_page(kPage));
+    EXPECT_TRUE(storage::is_report_page(std::format("r/{}.pdf", kPageToken)));
+    EXPECT_TRUE(storage::is_report_page(std::format("r/{}.abcdefg8", kPageToken)));
+    EXPECT_TRUE(storage::is_report_archive(kArchive));
+    EXPECT_FALSE(storage::is_report_archive(kPage));
+    for (const auto& name : not_a_page()) EXPECT_FALSE(storage::is_report_page(name)) << name;
+}
+
+TEST_F(PerformanceHttp, AReportsPageIsCopiedToItsArchiveInOneCall) {
+    http_.public_bucket = kPublicBucket;
+    http_.reply(200, std::format(R"({{"kind": "storage#rewriteResponse", "totalBytesRewritten": "11", "objectSize": "11", "done": true,
+                                     "resource": {{"name": "{}"}}}})",
+                                 kArchive));
+    storage::GcsStore store(api_, std::string(kPublicBucket));
+    const auto copied = test::run(io_, store.copy(kPage, kArchive));
+    ASSERT_TRUE(copied) << copied.error().message;
+
+    ASSERT_EQ(http_.requests.size(), 1u);
+    const auto& request = http_.requests[0];
+    EXPECT_EQ(request.method, http::ClientMethod::post);
+    EXPECT_EQ(std::string(request.url.buffer()),
+              std::format("https://storage.googleapis.com/storage/v1/b/xvisionmedia-gbp-public/o/r%2F{}.html/rewriteTo/b/xvisionmedia-gbp-public/o/"
+                          "a%2F{}.html",
+                          kPageToken, kArchiveToken));
+    EXPECT_FALSE(request.url.has_query());
+    EXPECT_TRUE(request.body.empty());
+    EXPECT_FALSE(request.file);
+    EXPECT_EQ(request.timeout, 60s);
+    EXPECT_EQ(http_.header(0, "Authorization"), "Bearer token-1");
+}
+
+TEST_F(PerformanceHttp, ACopyThatIsNotFinishedInOneCallIsAFailure) {
+    http_.public_bucket = kPublicBucket;
+    storage::GcsStore store(api_, std::string(kPublicBucket));
+    // Google would go on with the token; the engine does not follow it.
+    http_.reply(200, R"({"kind": "storage#rewriteResponse", "totalBytesRewritten": "0", "objectSize": "11", "done": false, "rewriteToken": "tok"})");
+    const auto unfinished = test::run(io_, store.copy(kPage, kArchive));
+    ASSERT_FALSE(unfinished);
+    EXPECT_EQ(unfinished.error().kind, google::ApiError::Kind::unavailable);
+    EXPECT_EQ(unfinished.error().message, "Cloud Storage did not finish the copy in one call");
+    EXPECT_EQ(http_.requests.size(), 1u) << "no second request";
+
+    http_.reply(200, R"({"kind": "storage#rewriteResponse"})");
+    const auto unsaid = test::run(io_, store.copy(kPage, kArchive));
+    ASSERT_FALSE(unsaid);
+    EXPECT_EQ(unsaid.error().kind, google::ApiError::Kind::unavailable);
+    EXPECT_EQ(http_.requests.size(), 2u) << "no second request";
+
+    http_.reply(200, "not json");
+    const auto garbled = test::run(io_, store.copy(kPage, kArchive));
+    ASSERT_FALSE(garbled);
+    EXPECT_EQ(garbled.error().kind, google::ApiError::Kind::invalid_response);
+    EXPECT_EQ(http_.requests.size(), 3u);
+}
+
+TEST_F(PerformanceHttp, AReportsPageIsDeletedInOneDelete) {
+    http_.public_bucket = kPublicBucket;
+    http_.reply(204, "");
+    storage::GcsStore store(api_, std::string(kPublicBucket));
+    const auto removed = test::run(io_, store.remove(kPage));
+    ASSERT_TRUE(removed) << removed.error().message;
+
+    ASSERT_EQ(http_.requests.size(), 1u);
+    const auto& request = http_.requests[0];
+    EXPECT_EQ(request.method, http::ClientMethod::del);
+    EXPECT_EQ(std::string(request.url.buffer()),
+              std::format("https://storage.googleapis.com/storage/v1/b/xvisionmedia-gbp-public/o/r%2F{}.html", kPageToken));
+    EXPECT_TRUE(request.body.empty());
+    EXPECT_FALSE(request.file);
+}
+
+TEST_F(PerformanceHttp, GooglesAnswerKeepsItsKindAndLosesItsWordsWhichMayNameTheObject) {
+    http_.public_bucket = kPublicBucket;
+    storage::GcsStore store(api_, std::string(kPublicBucket));
+    const auto quoted = std::format("No such object: xvisionmedia-gbp-public/{}", kPage);
+    const auto expect_nameless = [&](const google::Result<void>& result, google::ApiError::Kind kind, unsigned status) {
+        ASSERT_FALSE(result);
+        EXPECT_EQ(result.error().kind, kind);
+        EXPECT_EQ(result.error().http_status, status);
+        EXPECT_EQ(result.error().message, std::format("HTTP {}", status));
+        EXPECT_THAT(result.error().message, Not(HasSubstr(std::string(kPageToken))));
+    };
+    http_.reply(404, google_error(404, quoted));
+    expect_nameless(test::run(io_, store.copy(kPage, kArchive)), google::ApiError::Kind::not_found, 404);
+    http_.reply(404, google_error(404, quoted));
+    expect_nameless(test::run(io_, store.remove(kPage)), google::ApiError::Kind::not_found, 404);
+    const auto denied = std::format("caller does not have storage.objects.delete access to the Google Cloud Storage object {}", kPage);
+    http_.reply(403, google_error(403, denied));
+    expect_nameless(test::run(io_, store.copy(kPage, kArchive)), google::ApiError::Kind::permission_denied, 403);
+    http_.reply(403, google_error(403, denied));
+    expect_nameless(test::run(io_, store.remove(kPage)), google::ApiError::Kind::permission_denied, 403);
+    http_.reply(503, google_error(503, quoted));
+    expect_nameless(test::run(io_, store.remove(kPage)), google::ApiError::Kind::unavailable, 503);
+    EXPECT_EQ(http_.requests.size(), 5u) << "nothing is sent twice";
+}
+
+TEST_F(PerformanceHttp, NoOtherNameIsCopiedOrDeletedAndNothingIsSent) {
+    http_.public_bucket = kPublicBucket;
+    storage::GcsStore store(api_, std::string(kPublicBucket));
+    const auto expect_refused = [](const google::Result<void>& result, const std::string& what) {
+        ASSERT_FALSE(result) << what;
+        EXPECT_EQ(result.error().kind, google::ApiError::Kind::other) << what;
+        EXPECT_EQ(result.error().http_status, 0u) << what;
+    };
+    for (const auto& name : not_a_page()) {
+        expect_refused(test::run(io_, store.remove(name)), name);
+        expect_refused(test::run(io_, store.copy(name, kArchive)), name);
+    }
+    for (const auto& [from, to] : not_a_copy()) expect_refused(test::run(io_, store.copy(from, to)), from + " -> " + to);
+    // The store's own refusal: the client was not asked, so not even its rule refused anything.
+    EXPECT_TRUE(http_.requests.empty());
+    EXPECT_TRUE(http_.refused.empty());
+}
+
+TEST(ObjectStore, AFolderCopiesAPageToItsArchiveAndDeletesThePage) {
+    const auto folder = std::filesystem::temp_directory_path() / std::format("poni-store-copy-test-{}", ::getpid());
+    std::filesystem::remove_all(folder);
+    boost::asio::io_context io;
+    storage::FolderStore store(folder);
+    ASSERT_TRUE(test::run(io, store.put({.name = kPage, .content_type = "text/html", .body = "the page"})));
+    ASSERT_TRUE(test::run(io, store.put({.name = kArchive, .content_type = "text/html", .body = "an older copy"})));
+
+    // A copy replaces what is at the archive's name, and leaves the page.
+    ASSERT_TRUE(test::run(io, store.copy(kPage, kArchive)));
+    EXPECT_EQ(read_file(folder / kPage), "the page");
+    EXPECT_EQ(read_file(folder / kArchive), "the page");
+    // Done again, it writes the same bytes.
+    ASSERT_TRUE(test::run(io, store.copy(kPage, kArchive)));
+    EXPECT_EQ(read_file(folder / kArchive), "the page");
+
+    ASSERT_TRUE(test::run(io, store.remove(kPage)));
+    EXPECT_FALSE(std::filesystem::exists(folder / kPage));
+    EXPECT_EQ(read_file(folder / kArchive), "the page");
+
+    // What is not there is not_found, and its error names no path.
+    for (const auto& result : {test::run(io, store.remove(kPage)), test::run(io, store.copy(kPage, kArchive))}) {
+        ASSERT_FALSE(result);
+        EXPECT_EQ(result.error().kind, google::ApiError::Kind::not_found);
+        EXPECT_EQ(result.error().http_status, 404u);
+        EXPECT_THAT(result.error().message, Not(HasSubstr(std::string(kPageToken))));
+        EXPECT_THAT(result.error().message, Not(HasSubstr(folder.string())));
+    }
+
+    // No other name, and nothing outside the folder.
+    ASSERT_TRUE(test::run(io, store.put({.name = "p/photo.jpg", .content_type = "image/jpeg", .body = "JPEG"})));
+    for (const auto& name : not_a_page()) {
+        const auto removed = test::run(io, store.remove(name));
+        ASSERT_FALSE(removed) << name;
+        EXPECT_EQ(removed.error().kind, google::ApiError::Kind::other) << name;
+    }
+    for (const auto& [from, to] : not_a_copy()) EXPECT_EQ(test::run(io, store.copy(from, to)).error().kind, google::ApiError::Kind::other) << from;
+    EXPECT_TRUE(std::filesystem::exists(folder / kArchive)) << "an archive is never deleted";
+    EXPECT_TRUE(std::filesystem::exists(folder / "p" / "photo.jpg"));
+    EXPECT_FALSE(std::filesystem::exists(folder / "r" / std::format("{}.html", kArchiveToken)));
     std::filesystem::remove_all(folder);
 }
