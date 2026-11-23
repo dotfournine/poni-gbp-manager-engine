@@ -128,7 +128,7 @@ It downloads the archive as the VM's service account, compares the version insid
 
 ### The public bucket
 
-A report is shared as a page in a public bucket (D-085); its numbers are kept in the database (D-091 point 2). The bucket also holds the photos and videos of local posts (D-088, D-090), under `p/`: Google takes a post's photo or video only from a public address. The engine only writes objects; it reads, lists and deletes nothing. Not tried against real Cloud Storage yet: the first deployment is the test.
+A report is shared as a page in a public bucket (D-085); its numbers are kept in the database (D-091 point 2). The bucket also holds the photos and videos of local posts (D-088, D-090), under `p/`: Google takes a post's photo or video only from a public address. The engine writes objects, and under D-104 moves a discarded report's page from `r/` to `a/` (a copy, then the delete of the original); it reads and lists nothing, and deletes nothing else. Not tried against real Cloud Storage yet: the first deployment is the test.
 
 The public bucket (`PONI_PUBLIC_BUCKET`):
 
@@ -136,23 +136,17 @@ The public bucket (`PONI_PUBLIC_BUCKET`):
 gcloud storage buckets create gs://<public-bucket> --location=us --uniform-bucket-level-access
 # Anyone may read an object whose name they know; nobody may list the bucket.
 gcloud storage buckets add-iam-policy-binding gs://<public-bucket> --member=allUsers --role=roles/storage.legacyObjectReader
-# Pages of shared reports and the photos and videos of local posts are removed a year after they were written.
-gcloud storage buckets update gs://<public-bucket> --lifecycle-file=public-lifecycle.json
 ```
 
-with `public-lifecycle.json`:
-
-```json
-{"rule": [{"action": {"type": "Delete"}, "condition": {"age": 365, "matchesPrefix": ["r/", "p/"]}}]}
-```
+The bucket has no lifecycle rule (D-104 point 8): the retention is our own. Don't add one, and remove one that an older setup added (`gcloud storage buckets update gs://<public-bucket> --clear-lifecycle`).
 
 - `allUsers` is outside the organization, so the binding needs an exception to domain-restricted sharing for this project (the organization admin), and public access prevention must not be enforced on the bucket.
 - Do not grant `roles/storage.objectViewer` to `allUsers`: it includes listing, and a listing would give every report's address away. The names are the secret.
-- The retention is this rule and nothing else: the engine has no expiry of its own. A revoked link's page is written again, so it stays for a year from the revoke.
-- A post's photo or video (`p/<32 random bytes>.jpg`, `.png`, `.mp4` or `.mov`) is stored exactly as it was uploaded: the engine does not resize it, convert it or strip what a phone wrote into it (place and time among it), and it is public to anyone who has its address. Google copies the file when the post is created, so it is only needed until then; the engine stops offering an upload for new posts after 360 days, just before the rule removes it. Without the `p/` prefix in the rule these files stay forever.
+- The retention is the clean-up script's (work-items, "Clean-up of old reports, posts and uploads"): it expires old reports to the archive, deletes the uploads no open post or edit names, and deletes objects no row names. It is not built yet; until it is, nothing leaves the bucket. The archive (`a/`) is kept for good.
+- A post's photo or video (`p/<32 random bytes>.jpg`, `.png`, `.mp4` or `.mov`) is stored exactly as it was uploaded: the engine does not resize it, convert it or strip what a phone wrote into it (place and time among it), and it is public to anyone who has its address. Google copies the file when the post is created, so it is only needed until then. The engine refuses an upload older than 360 days for a new post (`kMediaUsableFor`), which the clean-up script's period is to follow.
 - With a folder in place of the bucket (development) a photo or video can be uploaded but no post with one can be approved: Google cannot fetch a file from a folder.
 - A video may be 75 MB. The engine holds an upload in memory while it checks it and sends it on, about three times the file's size while it goes to the bucket (some 225 MB for the largest video; two people uploading at once need twice that), and only for a signed-in person: who is calling is asked before the body is read. Size the VM's memory with that in mind. An upload that is still coming in when the engine stops is given up, and the person uploads again. Caddy sets no limit on a request's size, and none is needed; a proxy put in front that has one must allow 75 MB on `/api/local-post-media`. A video's upload to the bucket is given a minute and four more seconds for every megabyte.
-- The VM's service account needs `roles/storage.objectUser` on the bucket. Revoking a link overwrites its object, and Cloud Storage asks for the delete permission to overwrite.
+- The VM's service account needs `roles/storage.objectUser` on the bucket: discarding a report deletes the original of its page after the copy (D-104), and a retried build overwrites its page, for which Cloud Storage asks for the delete permission too.
 
 Without `PONI_PUBLIC_BUCKET` the engine builds reports and staff read them in the dashboard, but none can be shared or sent.
 
