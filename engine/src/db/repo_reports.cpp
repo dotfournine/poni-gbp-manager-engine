@@ -2,10 +2,8 @@
 
 #include "db/database.hpp"
 #include "db/repo_knowledge.hpp"
-#include "db/repo_notifications.hpp"
 #include "domain/posting_schedule.hpp"
 #include "domain/reply_settings.hpp"
-#include "domain/report_html.hpp"
 #include "jobs/queue.hpp"
 
 #include <boost/json/parse.hpp>
@@ -32,35 +30,21 @@ core::TimePoint from_micros(std::int64_t micros) { return core::TimePoint(std::c
 
 std::string micros(std::string_view column) { return std::format("(extract(epoch FROM {}) * 1000000)::bigint", column); }
 
-std::string report_select() {
+// `base` is the placeholder of the public bucket's address ("$2"): a bound parameter, never part of the SQL.
+std::string report_select(std::string_view base) {
     return std::format(R"sql(
         SELECT p.id, p.location_id, l.title AS location_title, p.period_start::text AS period_start, p.period_end::text AS period_end,
                p.time_zone, p.schedule_id, (SELECT u.email FROM users u WHERE u.id = p.requested_by) AS requested_by, p.status, p.error,
-               p.hold_reason, (p.data->'reviews'->>'new_reviews')::bigint AS new_reviews,
+               CASE WHEN p.status = 'ready' AND {0}::text <> '' THEN {0} || p.page_object END AS url,
+               CASE WHEN p.status IN ('discarded', 'expired') AND {0} <> '' AND p.archive_object IS NOT NULL
+                    THEN {0} || p.archive_object END AS archive_url,
+               p.auto_send_status, (p.data->'reviews'->>'new_reviews')::bigint AS new_reviews,
                (p.data->'reviews'->>'average_rating')::float8 AS average_rating,
                (p.data->'reviews'->>'response_rate')::float8 AS response_rate, p.data->>'summary' AS summary,
-               nullif(p.data->>'summary_note', '') AS summary_note, {} AS created_at, {} AS sent_at,
-               (SELECT u.email FROM users u WHERE u.id = p.sent_by) AS sent_by
+               nullif(p.data->>'summary_note', '') AS summary_note, {1} AS created_at
           FROM reports p
           JOIN locations l ON l.id = p.location_id)sql",
-                       iso("p.created_at"), iso("p.sent_at"));
-}
-
-// A share link's object, r/<token>.html, in two parts: a link's address is put together where its row is read.
-// Constants written into the SQL: no quote in either.
-constexpr std::string_view kShareObjectPrefix = "r/";
-constexpr std::string_view kShareObjectSuffix = ".html";
-
-// The share links whose `column` is `id` ($2), each with its address: the bucket's ($1), then share_object_name(token).
-std::string link_select(std::string_view column) {
-    return std::format("SELECT s.id, $1::text || '{}' || s.token || '{}' AS url, s.origin, "
-                       "(SELECT u.email FROM users u WHERE u.id = s.created_by) AS created_by, {} AS created_at, {} AS revoked_at "
-                       "FROM report_share_links s WHERE {} = $2 ORDER BY s.id",
-                       kShareObjectPrefix, kShareObjectSuffix, iso("s.created_at"), iso("s.revoked_at"), column);
-}
-
-model::ReportShareLink link_by_id(pqxx::transaction_base& tx, std::int64_t id, std::string_view link_base) {
-    return db::one_as<model::ReportShareLink>(tx, link_select("s.id"), pqxx::params{std::string(link_base), id});
+                       base, iso("p.created_at"));
 }
 
 boost::json::value report_json(const model::Report& report) {
@@ -69,32 +53,6 @@ boost::json::value report_json(const model::Report& report) {
             {"period_end", report.period_end},
             {"time_zone", report.time_zone},
             {"status", report.status}};
-}
-
-// What has to hold for a report to go out, read with the report's row locked.
-Result<std::int64_t> sendable(pqxx::transaction_base& tx, std::int64_t report_id) {
-    const auto rows = tx.exec("SELECT p.status, p.location_id, l.enabled FROM reports p JOIN locations l ON l.id = p.location_id "
-                              "WHERE p.id = $1 FOR UPDATE OF p",
-                              pqxx::params{report_id});
-    if (rows.empty()) return not_found("report");
-    if (rows[0][0].as<std::string>() != "draft") {
-        return conflict("report_not_ready", "Only a report that is built and has not been sent or rejected can be sent.");
-    }
-    const auto location_id = rows[0][1].as<std::int64_t>();
-    if (!rows[0][2].as<bool>()) {
-        return conflict("location_not_enabled", "The location is switched off, so its reports are not sent.");
-    }
-    if (!tx.query_value<bool>("SELECT email_sending_enabled FROM system_settings")) {
-        return conflict("sending_off", "Email sending is switched off, so the report would reach nobody. Switch it on first.");
-    }
-    const auto recipients = tx.query_value<std::int64_t>(
-        "SELECT coalesce(sum(jsonb_array_length(recipients)), 0) FROM notification_rules "
-        "WHERE event_type = $1 AND enabled AND location_id = $2",
-        pqxx::params{kEventLocationReport, location_id});
-    if (recipients == 0) {
-        return conflict("no_recipients", "This location has no recipients for its reports. Add them first.");
-    }
-    return location_id;
 }
 
 // ---- schedules ----
@@ -128,8 +86,6 @@ boost::json::value schedule_json(const model::ReportSchedule& schedule) {
 
 }  // namespace
 
-std::string share_object_name(std::string_view token) { return std::format("{}{}{}", kShareObjectPrefix, token, kShareObjectSuffix); }
-
 // ---- creating and building ---------------------------------------------------------
 
 Result<model::Report> create_report(pqxx::transaction_base& tx, audit::Writer& audit, const NewReport& report, std::string_view link_base) {
@@ -146,14 +102,17 @@ Result<model::Report> create_report(pqxx::transaction_base& tx, audit::Writer& a
     const auto bounds = domain::period_bounds(report.period, time_zone);
     if (!bounds) return invalid(bounds.error());
     if (bounds->to > audit.now()) return invalid("The period is not over yet: its last day must be before today.");
+    if (link_base.empty()) {
+        return conflict("no_public_bucket", "No public bucket is configured (PONI_PUBLIC_BUCKET), so a report's page has nowhere to go.");
+    }
 
     const auto now = audit.now();
     const auto id = tx.query_value<std::int64_t>(
-        "INSERT INTO reports (location_id, period_start, period_end, time_zone, schedule_id, requested_by, auto_send, status, "
+        "INSERT INTO reports (location_id, period_start, period_end, time_zone, schedule_id, requested_by, auto_send_status, status, "
         "created_at, updated_at) VALUES ($1, $2::date, $3::date, $4, $5, $6, $7, 'building', $8::timestamptz, $8::timestamptz) "
         "RETURNING id",
         pqxx::params{report.location_id, domain::format_day(report.period.start), domain::format_day(report.period.end), time_zone,
-                     report.schedule_id, audit.person_id(), report.auto_send, to_timestamptz(now)});
+                     report.schedule_id, audit.person_id(), report.auto_send ? "pending" : "off", to_timestamptz(now)});
     jobs::sql::enqueue(tx,
                        {.kind = std::string(kBuildReportKind),
                         .payload = boost::json::object{{"report_id", id}},
@@ -170,19 +129,18 @@ Result<model::Report> create_report(pqxx::transaction_base& tx, audit::Writer& a
 
 std::optional<ReportWork> load_report_work(pqxx::transaction_base& tx, std::int64_t report_id, core::TimePoint now) {
     const auto rows = tx.exec("SELECT p.location_id, l.title, l.industry_key, p.period_start::text, p.period_end::text, p.time_zone, "
-                              "p.auto_send, l.enabled, l.gbp_location_id, l.access_status = 'active' "
+                              "l.enabled, l.gbp_location_id, l.access_status = 'active' "
                               "FROM reports p JOIN locations l ON l.id = p.location_id WHERE p.id = $1 AND p.status = 'building'",
                               pqxx::params{report_id});
     if (rows.empty()) return std::nullopt;
     const auto row = rows[0];
-    if (!row[7].as<bool>()) {
+    if (!row[6].as<bool>()) {
         fail_report(tx, report_id, "The location was switched off before its report was built.", now);
         return std::nullopt;
     }
     ReportWork work;
     work.report_id = report_id;
-    work.auto_send = row[6].as<bool>();
-    work.location = {.id = row[0].as<std::int64_t>(), .gbp_location_id = row[8].as<std::string>(), .accessible = row[9].as<bool>()};
+    work.location = {.id = row[0].as<std::int64_t>(), .gbp_location_id = row[7].as<std::string>(), .accessible = row[8].as<bool>()};
     auto& input = work.input;
     input.location_id = work.location.id;
     input.location_title = row[1].as<std::string>();
@@ -251,11 +209,18 @@ std::optional<ReportWork> load_report_work(pqxx::transaction_base& tx, std::int6
     return work;
 }
 
-bool store_built_report(pqxx::transaction_base& tx, std::int64_t report_id, const domain::ReportData& data, const std::string& html,
-                        core::TimePoint now) {
-    return !tx.exec("UPDATE reports SET status = 'draft', data = $2::jsonb, html = $3, error = NULL, built_at = $4::timestamptz, "
-                    "updated_at = $4::timestamptz WHERE id = $1 AND status = 'building' RETURNING id",
-                    pqxx::params{report_id, boost::json::serialize(boost::json::value_from(data)), html, to_timestamptz(now)})
+std::optional<std::string> name_report_page(pqxx::transaction_base& tx, std::int64_t report_id, const std::string& candidate) {
+    const auto rows = tx.exec("UPDATE reports SET page_object = coalesce(page_object, $2) WHERE id = $1 AND status = 'building' "
+                              "RETURNING page_object",
+                              pqxx::params{report_id, candidate});
+    if (rows.empty()) return std::nullopt;
+    return rows[0][0].as<std::string>();
+}
+
+bool store_built_report(pqxx::transaction_base& tx, std::int64_t report_id, const domain::ReportData& data, core::TimePoint now) {
+    return !tx.exec("UPDATE reports SET status = 'ready', data = $2::jsonb, error = NULL, built_at = $3::timestamptz, "
+                    "updated_at = $3::timestamptz WHERE id = $1 AND status = 'building' RETURNING id",
+                    pqxx::params{report_id, boost::json::serialize(boost::json::value_from(data)), to_timestamptz(now)})
                 .empty();
 }
 
@@ -266,136 +231,16 @@ void fail_report(pqxx::transaction_base& tx, std::int64_t report_id, const std::
 
 // ---- reading -------------------------------------------------------------------------
 
-model::ReportList list_reports(pqxx::transaction_base& tx, const ReportFilter& filter) {
+model::ReportList list_reports(pqxx::transaction_base& tx, const ReportFilter& filter, std::string_view link_base) {
     db::Conditions where;
+    const auto base = where.bind(std::string(link_base));
     if (filter.location_id) where.add("p.location_id = " + where.bind(*filter.location_id));
     if (!filter.status.empty()) where.add("p.status = " + where.bind(filter.status));
-    // A list has no share links: they are read with one report.
-    return db::page<model::Report>(tx, report_select(), std::move(where), "p.id DESC", filter.page, db::FilledLater{"share_links"});
+    return db::page<model::Report>(tx, report_select(base), std::move(where), "p.id DESC", filter.page);
 }
 
 std::optional<model::Report> get_report(pqxx::transaction_base& tx, std::int64_t id, std::string_view link_base) {
-    auto report = db::row_as<model::Report>(tx, report_select() + " WHERE p.id = $1", pqxx::params{id}, db::FilledLater{"share_links"});
-    if (report) {
-        report->share_links = db::rows_as<model::ReportShareLink>(tx, link_select("s.report_id"), pqxx::params{std::string(link_base), id});
-    }
-    return report;
-}
-
-std::optional<std::string> report_html(pqxx::transaction_base& tx, std::int64_t id) {
-    const auto rows = tx.exec("SELECT html FROM reports WHERE id = $1 AND html IS NOT NULL", pqxx::params{id});
-    if (rows.empty()) return std::nullopt;
-    return rows[0][0].as<std::string>();
-}
-
-std::optional<std::string> report_data(pqxx::transaction_base& tx, std::int64_t id) {
-    const auto rows = tx.exec("SELECT data::text FROM reports WHERE id = $1 AND data IS NOT NULL", pqxx::params{id});
-    if (rows.empty()) return std::nullopt;
-    return rows[0][0].as<std::string>();
-}
-
-// ---- sending, rejecting and share links ---------------------------------------------
-
-Result<std::string> check_send(pqxx::transaction_base& tx, std::int64_t report_id) {
-    const auto location = sendable(tx, report_id);
-    if (!location) return std::unexpected(location.error());
-    return report_html(tx, report_id).value();
-}
-
-Result<model::Report> mark_report_sent(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t report_id, const std::string& token,
-                                       std::string_view link_base) {
-    const auto location = sendable(tx, report_id);
-    if (!location) return std::unexpected(location.error());
-    const auto user_id = audit.person_id();  // nothing: its schedule sends it
-    const auto now = audit.now();
-    const auto now_text = to_timestamptz(now);
-    tx.exec("INSERT INTO report_share_links (report_id, token, origin, created_by, created_at) VALUES ($1, $2, 'email', $3, $4::timestamptz)",
-            pqxx::params{report_id, token, user_id, now_text});
-    tx.exec("UPDATE reports SET status = 'sent', sent_at = $2::timestamptz, sent_by = $3, hold_reason = NULL, updated_at = $2::timestamptz "
-            "WHERE id = $1",
-            pqxx::params{report_id, now_text, user_id});
-
-    const auto data = boost::json::value_to<domain::ReportData>(boost::json::parse(report_data(tx, report_id).value()));
-    const auto link = std::string(link_base) + share_object_name(token);
-    emit(tx,
-         {.type = std::string(kEventLocationReport),
-          .key = std::format("report:{}:sent", report_id),
-          .location_id = *location,
-          .review_id = std::nullopt,
-          .subject = std::format("Your Google reviews and visibility report, {}", domain::period_label(data.period_start, data.period_end)),
-          .body = domain::render_report_email(data, link),
-          // The link is to the shared page and is in the body: the notifier's "open in the dashboard" line is for staff.
-          .link_path = ""},
-         now);
-    auto sent = *get_report(tx, report_id, link_base);
-    audit.record("report.send", "report", report_id, {.after = report_json(sent)});
-    return sent;
-}
-
-void hold_report(pqxx::transaction_base& tx, std::int64_t report_id, const std::string& reason, core::TimePoint now) {
-    tx.exec("UPDATE reports SET hold_reason = $2, updated_at = $3::timestamptz WHERE id = $1 AND status = 'draft'",
-            pqxx::params{report_id, reason, to_timestamptz(now)});
-}
-
-Result<model::Report> reject_report(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t report_id, std::string_view link_base) {
-    const auto rows = tx.exec("SELECT status FROM reports WHERE id = $1 FOR UPDATE", pqxx::params{report_id});
-    if (rows.empty()) return not_found("report");
-    const auto status = rows[0][0].as<std::string>();
-    if (status != "draft" && status != "failed") {
-        return conflict("report_not_ready", "Only a report that is waiting or failed can be rejected.");
-    }
-    // A link that works would go on showing a report that was set aside.
-    if (!tx.exec("SELECT 1 FROM report_share_links WHERE report_id = $1 AND revoked_at IS NULL LIMIT 1", pqxx::params{report_id}).empty()) {
-        return conflict("report_shared", "This report has share links that work. Revoke them first.");
-    }
-    const auto before = *get_report(tx, report_id, link_base);
-    tx.exec("UPDATE reports SET status = 'rejected', updated_at = $2::timestamptz WHERE id = $1",
-            pqxx::params{report_id, to_timestamptz(audit.now())});
-    auto after = *get_report(tx, report_id, link_base);
-    audit.record("report.reject", "report", report_id, {.before = report_json(before), .after = report_json(after)});
-    return after;
-}
-
-Result<std::string> shareable_html(pqxx::transaction_base& tx, std::int64_t report_id) {
-    const auto rows = tx.exec("SELECT status, html FROM reports WHERE id = $1", pqxx::params{report_id});
-    if (rows.empty()) return not_found("report");
-    const auto status = rows[0][0].as<std::string>();
-    if (status != "draft" && status != "sent") {
-        return conflict("report_not_ready", "A link can be made for a report that is built and not rejected.");
-    }
-    return rows[0][1].as<std::string>();
-}
-
-model::ReportShareLink add_share_link(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t report_id, const std::string& token,
-                                      std::string_view link_base) {
-    const auto id = tx.query_value<std::int64_t>(
-        "INSERT INTO report_share_links (report_id, token, origin, created_by, created_at) "
-        "VALUES ($1, $2, 'manual', $3, $4::timestamptz) RETURNING id",
-        pqxx::params{report_id, token, audit.user_id(), to_timestamptz(audit.now())});
-    // The token opens the report: it is not written to the audit log.
-    audit.record("report_share_link.create", "report_share_link", id, {.after = {{"report_id", report_id}}});
-    return link_by_id(tx, id, link_base);
-}
-
-std::optional<ShareLinkRef> share_link_ref(pqxx::transaction_base& tx, std::int64_t link_id) {
-    const auto rows = tx.exec("SELECT report_id, token, revoked_at IS NOT NULL FROM report_share_links WHERE id = $1", pqxx::params{link_id});
-    if (rows.empty()) return std::nullopt;
-    return ShareLinkRef{.report_id = rows[0][0].as<std::int64_t>(), .token = rows[0][1].as<std::string>(), .revoked = rows[0][2].as<bool>()};
-}
-
-Result<model::ReportShareLink> revoke_share_link(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t link_id,
-                                                 std::string_view link_base) {
-    const auto rows = tx.exec("SELECT report_id, revoked_at IS NOT NULL FROM report_share_links WHERE id = $1 FOR UPDATE",
-                              pqxx::params{link_id});
-    if (rows.empty()) return not_found("share link");
-    if (rows[0][1].as<bool>()) {
-        audit.nothing_changed();
-    } else {
-        tx.exec("UPDATE report_share_links SET revoked_at = $2::timestamptz, revoked_by = $3 WHERE id = $1",
-                pqxx::params{link_id, to_timestamptz(audit.now()), audit.user_id()});
-        audit.record("report_share_link.revoke", "report_share_link", link_id, {.after = {{"report_id", rows[0][0].as<std::int64_t>()}}});
-    }
-    return link_by_id(tx, link_id, link_base);
+    return db::row_as<model::Report>(tx, report_select("$2") + " WHERE p.id = $1", pqxx::params{id, std::string(link_base)});
 }
 
 // ---- schedules ------------------------------------------------------------------------
@@ -482,7 +327,7 @@ int fail_stalled_reports(pqxx::transaction_base& tx, core::TimePoint now) {
             .size());
 }
 
-int start_due_reports(pqxx::transaction_base& tx, core::TimePoint now) {
+int start_due_reports(pqxx::transaction_base& tx, std::string_view link_base, core::TimePoint now) {
     int started = 0;
     const auto rows = tx.exec(std::format(
         "SELECT s.id, s.location_id, s.frequency, coalesce(s.weekday, 0), coalesce(s.month_day, 0), s.minute_of_day, s.time_zone, "
@@ -510,7 +355,7 @@ int start_due_reports(pqxx::transaction_base& tx, core::TimePoint now) {
                                             .time_zone = schedule.time_zone,
                                             .schedule_id = id,
                                             .auto_send = row[7].as<bool>()},
-                                           "");
+                                           link_base);
         if (created) ++started;
     }
     return started;

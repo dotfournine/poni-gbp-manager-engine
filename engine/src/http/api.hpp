@@ -64,7 +64,7 @@ void add_reply_routes(Router& router, const Api& api, jobs::ReviewPipeline& pipe
 void add_auto_posting_routes(Router& router, const Api& api);
 // the go-live test (http/api_go_live.cpp);
 void add_go_live_routes(Router& router, const Api& api);
-// a location's reports, their share links and schedules (http/api_reports.cpp);
+// a location's reports and their schedules (http/api_reports.cpp);
 void add_report_routes(Router& router, const Api& api, jobs::Reporter& reporter);
 // local posts (http/api_local_posts.cpp).
 void add_local_post_routes(Router& router, const Api& api, storage::ObjectStore* public_store, jobs::PostAdvisor& advisor);

@@ -473,16 +473,6 @@ std::string render_report(const ReportData& data) {
     return out;
 }
 
-std::string render_revoked_page() {
-    std::string out(kHead);
-    out += "<title>Report not available</title>\n";
-    out += kStyle;
-    out += "</head>\n<body>\n<main>\n<header><h1>This report is no longer available</h1></header>\n"
-           "<p>The link you followed has been withdrawn. Please ask your contact at PONI for a new one.</p>\n"
-           "</main>\n</body>\n</html>\n";
-    return out;
-}
-
 std::string render_report_email(const ReportData& data, std::string_view link) {
     const auto& now = data.reviews;
     std::string out = std::format("Your Google reviews and visibility report for {} is ready.\n\n", period_label(data.period_start, data.period_end));

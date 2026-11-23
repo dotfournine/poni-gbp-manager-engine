@@ -28,7 +28,8 @@ void record(pqxx::transaction_base& tx, const Actor& actor, const Entry& entry, 
         return v.is_null() ? std::nullopt : std::optional(boost::json::serialize(v));
     };
     // The kinds are those of AuditEntry.location_id (api/openapi.yaml) and of
-    // the check in 0009_audit_location.sql.
+    // the check in 0009_audit_location.sql, but report_share_link: its table is
+    // gone (D-104), and nothing writes such an entry any more.
     tx.exec(
           R"sql(
         INSERT INTO audit_log (occurred_at, actor_type, actor_user_id, actor, action, object_type, object_id,
@@ -43,8 +44,6 @@ void record(pqxx::transaction_base& tx, const Actor& actor, const Entry& entry, 
                                              WHERE c.id = $12::bigint)
                     WHEN 'local_post' THEN (SELECT location_id FROM local_posts WHERE id = $12::bigint)
                     WHEN 'report' THEN (SELECT location_id FROM reports WHERE id = $12::bigint)
-                    WHEN 'report_share_link' THEN (SELECT r.location_id FROM report_share_links l
-                                                    JOIN reports r ON r.id = l.report_id WHERE l.id = $12::bigint)
                     WHEN 'report_schedule' THEN (SELECT location_id FROM report_schedules WHERE id = $12::bigint)
                     WHEN 'go_live_run' THEN (SELECT location_id FROM go_live_runs WHERE id = $12::bigint)
                     WHEN 'notification_rule' THEN (SELECT location_id FROM notification_rules WHERE id = $12::bigint)

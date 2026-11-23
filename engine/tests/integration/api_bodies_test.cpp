@@ -82,10 +82,6 @@ const std::vector<std::string> kRoutesWithoutBody = {
     "POST /api/locations/{id}/auto-posting/resume",
     "POST /api/locations/{id}/go-live-test",
     "POST /api/go-live-runs/{id}/cancel",
-    "POST /api/reports/{id}/send",
-    "POST /api/reports/{id}/reject",
-    "POST /api/reports/{id}/share-links",
-    "POST /api/report-share-links/{id}/revoke",
     "POST /api/local-posts/{id}/remove",
     "POST /api/local-posts/{id}/copy",
     "POST /api/local-post-media",  // the body is the file

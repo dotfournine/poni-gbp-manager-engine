@@ -88,9 +88,6 @@ TEST_F(AuditLocation, EachKindOfObjectIsRecordedWithItsLocation) {
         "INSERT INTO cases (review_id, opened_by, opened_at, updated_at) VALUES ({}, 'severity_flag', now(), now()) RETURNING id",
         buffet_review));
     const auto spa_report = report(spa_);
-    const auto link = stored(std::format(
-        "INSERT INTO report_share_links (report_id, token, origin, created_at) VALUES ({}, 'token-1', 'manual', now()) RETURNING id",
-        spa_report));
     become_test_clients();  // a go-live setup needs the location's industry
     certify(buffet_);
     const auto run = value<std::int64_t>("SELECT max(id) FROM go_live_runs");
@@ -101,7 +98,6 @@ TEST_F(AuditLocation, EachKindOfObjectIsRecordedWithItsLocation) {
     EXPECT_EQ(recorded("escalation", std::to_string(escalation)), buffet_);
     EXPECT_EQ(recorded("local_post", std::to_string(local_post(buffet_))), buffet_);
     EXPECT_EQ(recorded("report", std::to_string(spa_report)), spa_);
-    EXPECT_EQ(recorded("report_share_link", std::to_string(link)), spa_);
     EXPECT_EQ(recorded("report_schedule", std::to_string(schedule(buffet_))), buffet_);
     EXPECT_EQ(recorded("go_live_run", std::to_string(run)), buffet_);
     EXPECT_EQ(recorded("notification_rule", std::to_string(rule(std::to_string(spa_)))), spa_);

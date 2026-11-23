@@ -21,11 +21,6 @@ bool passing(const google::ApiError& error) {
     return error.kind == google::ApiError::Kind::unavailable || error.kind == google::ApiError::Kind::rate_limited;
 }
 
-// The bucket is not ours to fix from here: a gateway error, like a model that can't be reached.
-std::unexpected<repo::Failure> storage_failure(const google::ApiError& error) {
-    return repo::unavailable("storage_failed", std::format("The page could not be put into the public bucket ({}).", error.message));
-}
-
 }  // namespace
 
 std::string Reporter::link_base() const { return public_store_ ? public_store_->base_url() : std::string{}; }
@@ -103,39 +98,41 @@ asio::awaitable<void> Reporter::summarize(domain::ReportData& data) {
 }
 
 asio::awaitable<void> Reporter::build_once(std::int64_t report_id, bool last_attempt) {
+    if (!public_store_) {
+        // No report is started without a bucket; this is for a row that exists anyway. Not retried.
+        co_await db_.tx([report_id, now = clock_.now()](pqxx::work& tx) {
+            repo::fail_report(tx, report_id, "No public bucket is configured (PONI_PUBLIC_BUCKET), so the report's page has nowhere to go.", now);
+        });
+        co_return;
+    }
     auto work = co_await db_.tx([report_id, now = clock_.now()](pqxx::work& tx) { return repo::load_report_work(tx, report_id, now); });
-    if (!work) co_return;  // built, failed or rejected already
+    if (!work) co_return;  // built, failed or discarded already
 
     work->input.performance = co_await read_performance(*work, last_attempt);
     auto data = domain::build_report(work->input);
     co_await summarize(data);
-    const auto html = domain::render_report(data);
+    auto html = domain::render_report(data);
 
-    const bool built = co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) { return repo::store_built_report(tx, report_id, data, html, now); });
-    log::info("report built", {{"report_id", report_id}, {"location_id", data.location_id}, {"summary", data.summary.has_value()}});
-    if (!built || !work->auto_send) co_return;
-
-    // Its schedule sends by itself. If that can't be done the report waits for a person, with the reason.
-    // The reason is written first, so a report is never left as a plain draft when the engine stops
-    // or the upload throws between here and the send; sending clears it.
-    std::string held = "The engine was to send this report by itself and was interrupted before it did.";
-    co_await hold(report_id, held);
-    try {
-        const auto sent = co_await send(report_id, audit::Actor::system("report-schedule"));
-        if (sent) co_return;
-        held = sent.error().message;
-    } catch (const std::exception& e) {
-        // A thrown error is a network or database failure. Not retried: the job has stored its report,
-        // and a second upload and email after an unknown outcome is worse than a report that waits.
-        held = std::format("Sending failed ({}).", e.what());
-    }
-    co_await hold(report_id, held);
-}
-
-asio::awaitable<void> Reporter::hold(std::int64_t report_id, std::string reason) {
-    co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) {
-        repo::hold_report(tx, report_id, reason, now);
+    // The page is named on the row right before its upload, and only while the report is still building: a run
+    // that was overtaken (its job started again after the queue's lock ran out, or the stalled-report sweep failed
+    // the report meanwhile) puts nothing over the page of a ready report and none back for a discarded one. That
+    // leaves only the instant of the upload itself.
+    const auto name = co_await db_.tx([report_id](pqxx::work& tx) {
+        return repo::name_report_page(tx, report_id, std::format("r/{}.{}", core::random_token(), domain::kReportPageExtension));
     });
+    if (!name) co_return;
+    const auto stored = co_await public_store_->put(
+        {.name = *name, .content_type = std::string(domain::kReportPageContentType), .body = std::move(html)});
+    if (!stored) {
+        // What a build throws reaches the log, the job, the report and an email: neither Google's message nor the
+        // object's name goes into it.
+        const auto status = stored.error().http_status;
+        throw std::runtime_error(std::format("The report's page could not be put into the public bucket.{}",
+                                             status != 0 ? std::format(" (HTTP {})", status) : std::string{}));
+    }
+
+    co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) { repo::store_built_report(tx, report_id, data, now); });
+    log::info("report built", {{"report_id", report_id}, {"location_id", data.location_id}, {"summary", data.summary.has_value()}});
 }
 
 asio::awaitable<void> Reporter::build(std::int64_t report_id, bool last_attempt) {
@@ -156,100 +153,13 @@ asio::awaitable<void> Reporter::build(std::int64_t report_id, bool last_attempt)
 }
 
 asio::awaitable<int> Reporter::start_due() {
-    const int started = co_await db_.tx([now = clock_.now()](pqxx::work& tx) {
+    const int started = co_await db_.tx([base = link_base(), now = clock_.now()](pqxx::work& tx) {
         repo::fail_stalled_reports(tx, now);
-        return repo::start_due_reports(tx, now);
+        // Without a bucket a report's page has nowhere to go: no schedule starts one.
+        return base.empty() ? 0 : repo::start_due_reports(tx, base, now);
     });
     if (started > 0) log::info("scheduled reports started", {{"count", started}});
     co_return started;
-}
-
-asio::awaitable<repo::Result<std::string>> Reporter::publish(std::string html) {
-    using Out = repo::Result<std::string>;
-    if (!public_store_) {
-        Out none = repo::conflict("no_public_bucket", "No public bucket is configured (PONI_PUBLIC_BUCKET), so a report cannot be shared.");
-        co_return none;
-    }
-    // 32 random bytes: the whole secret of a share link.
-    auto token = core::base64url_encode(core::random_bytes(32));
-    const auto stored = co_await public_store_->put(
-        {.name = repo::share_object_name(token), .content_type = "text/html; charset=utf-8", .body = std::move(html)});
-    if (!stored) {
-        Out failed = storage_failure(stored.error());
-        co_return failed;
-    }
-    Out out = std::move(token);
-    co_return out;
-}
-
-asio::awaitable<repo::Result<model::Report>> Reporter::send(std::int64_t report_id, audit::Actor actor) {
-    using Out = repo::Result<model::Report>;
-    auto html = co_await db_.tx([report_id](pqxx::work& tx) { return repo::check_send(tx, report_id); });
-    if (!html) {
-        Out refused = std::unexpected(html.error());
-        co_return refused;
-    }
-    const auto token = co_await publish(std::move(*html));
-    if (!token) {
-        Out refused = std::unexpected(token.error());
-        co_return refused;
-    }
-    Out result = co_await db_.audited(actor, clock_.now(), [&, base = link_base()](pqxx::work& tx, audit::Writer& audit) {
-        return repo::mark_report_sent(tx, audit, report_id, *token, base);
-    });
-    if (!result) {
-        // Something changed between the check and now. The page is under a name nobody was given; take it down anyway.
-        (void)co_await public_store_->put({.name = repo::share_object_name(*token),
-                                           .content_type = "text/html; charset=utf-8",
-                                           .body = domain::render_revoked_page()});
-    }
-    co_return result;
-}
-
-asio::awaitable<repo::Result<model::ReportShareLink>> Reporter::create_link(std::int64_t report_id, audit::Actor actor) {
-    using Out = repo::Result<model::ReportShareLink>;
-    auto html = co_await db_.tx([report_id](pqxx::work& tx) { return repo::shareable_html(tx, report_id); });
-    if (!html) {
-        Out refused = std::unexpected(html.error());
-        co_return refused;
-    }
-    const auto token = co_await publish(std::move(*html));
-    if (!token) {
-        Out refused = std::unexpected(token.error());
-        co_return refused;
-    }
-    Out result = co_await db_.audited(actor, clock_.now(), [&, base = link_base()](pqxx::work& tx, audit::Writer& audit) {
-        return repo::add_share_link(tx, audit, report_id, *token, base);
-    });
-    co_return result;
-}
-
-asio::awaitable<repo::Result<model::ReportShareLink>> Reporter::revoke_link(std::int64_t link_id, audit::Actor actor) {
-    using Out = repo::Result<model::ReportShareLink>;
-    const auto ref = co_await db_.tx([link_id](pqxx::work& tx) { return repo::share_link_ref(tx, link_id); });
-    if (!ref) {
-        Out missing = repo::not_found("share link");
-        co_return missing;
-    }
-    if (!ref->revoked) {
-        if (!public_store_) {
-            Out none = repo::conflict("no_public_bucket",
-                                      "No public bucket is configured (PONI_PUBLIC_BUCKET), so the link's page cannot be replaced.");
-            co_return none;
-        }
-        // The page first: a link is marked revoked only once its address no longer shows the report.
-        const auto replaced = co_await public_store_->put({.name = repo::share_object_name(ref->token),
-                                                           .content_type = "text/html; charset=utf-8",
-                                                           .body = domain::render_revoked_page()});
-        if (!replaced) {
-            Out failed = storage_failure(replaced.error());
-            co_return failed;
-        }
-    }
-    Out revoked = co_await db_.audited(actor, clock_.now(), [&, base = link_base()](pqxx::work& tx, audit::Writer& audit) {
-        return repo::revoke_share_link(tx, audit, link_id, base);
-    });
-    co_return revoked;
 }
 
 void install(Registry& registry, Reporter& reporter) {

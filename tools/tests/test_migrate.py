@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 
+import psycopg
 import pytest
 
 from poni_tools import cli, migrate
@@ -144,6 +145,81 @@ def test_the_sessions_there_are_become_browser_sessions(db):
     assert migrate.apply_migrations(db, shipped[:2]) == [2]
     assert db.execute("SELECT kind, csrf_token FROM sessions").fetchall() == [("browser", "a-csrf-token")]
     assert one(db, "SELECT count(*) FROM app_sign_in_codes") == 0
+
+
+def old_report(conn, location: int, status: str, *, auto_send=False, built=False, error=None, sent_by=None) -> int:
+    """A report as 0009 left them; a draft's and a sent report's page was in the database."""
+    return conn.execute(
+        "INSERT INTO reports (location_id, period_start, period_end, time_zone, auto_send, status, error, data, html, "
+        "created_at, built_at, sent_at, sent_by, updated_at) VALUES (%s, '2026-10-01', '2026-10-31', 'UTC', %s, %s, %s, "
+        "CASE WHEN %s THEN '{\"version\": 3}'::jsonb END, CASE WHEN %s THEN '<html></html>' END, now(), "
+        "CASE WHEN %s THEN now() END, CASE WHEN %s::bigint IS NOT NULL OR %s = 'sent' THEN now() END, %s, now()) RETURNING id",
+        (location, auto_send, status, error, built, built, built, sent_by, status, sent_by),
+    ).fetchone()[0]
+
+
+def test_reports_become_ready_failed_or_discarded_and_their_sends_name_them(db):
+    # 0010 (D-104): no draft, sent or rejected report, no page in the database, no share link.
+    shipped = migrate.load_migrations(SHIPPED)
+    assert migrate.apply_migrations(db, shipped[:9]) == list(range(1, 10))
+    user = one(
+        db,
+        "INSERT INTO users (google_sub, email, created_at, last_login_at) "
+        "VALUES ('sub', 'staff@example.com', now(), now()) RETURNING id",
+    )
+    location = one(
+        db,
+        "INSERT INTO locations (gbp_location_id, gbp_account_id, title, raw, first_seen_at, last_seen_at, updated_at) "
+        "VALUES ('9001', '111', 'A Spa', '{}', now(), now(), now()) RETURNING id",
+    )
+    building_auto = old_report(db, location, "building", auto_send=True)
+    building = old_report(db, location, "building")
+    failed = old_report(db, location, "failed", error="broken")
+    draft_auto = old_report(db, location, "draft", auto_send=True, built=True)
+    draft = old_report(db, location, "draft", built=True)
+    sent_by_person = old_report(db, location, "sent", built=True, sent_by=user)
+    sent_by_schedule = old_report(db, location, "sent", auto_send=True, built=True)
+    rejected_draft = old_report(db, location, "rejected", built=True)
+    rejected_failed = old_report(db, location, "rejected", error="broken")
+    db.execute(
+        "INSERT INTO report_share_links (report_id, token, origin, created_at) VALUES (%s, 'a-token', 'manual', now())",
+        (draft,),
+    )
+    deliveries = {}
+    for report in (sent_by_person, sent_by_schedule, 999999):
+        deliveries[report] = db.execute(
+            "INSERT INTO notification_deliveries (event_type, event_key, location_id, channel, recipient, subject, body, "
+            "created_at, updated_at) VALUES ('location_report', %s, %s, 'email', 'owner@example.com', 'Report', 'Body', "
+            "now(), now()) RETURNING id",
+            (f"report:{report}:sent", location),
+        ).fetchone()[0]
+
+    assert migrate.apply_migrations(db, shipped[:10]) == [10]
+    rows = {
+        row[0]: row[1:]
+        for row in db.execute("SELECT id, status, error, auto_send_status, data IS NOT NULL, page_object FROM reports")
+    }
+    gone = "Built before D-104; generate it again."
+    assert rows == {
+        building_auto: ("building", None, "pending", False, None),
+        building: ("building", None, "off", False, None),
+        failed: ("failed", "broken", "off", False, None),
+        draft_auto: ("failed", gone, "off", True, None),
+        draft: ("failed", gone, "off", True, None),
+        sent_by_person: ("failed", gone, "off", True, None),
+        sent_by_schedule: ("failed", gone, "done", True, None),
+        rejected_draft: ("discarded", None, "off", True, None),
+        rejected_failed: ("discarded", "broken", "off", False, None),
+    }
+    sends = {row[0]: row[1:] for row in db.execute("SELECT id, report_id, requested_by FROM notification_deliveries")}
+    assert {report: sends[delivery] for report, delivery in deliveries.items()} == {
+        sent_by_person: (sent_by_person, user),
+        sent_by_schedule: (sent_by_schedule, None),
+        999999: (None, None),
+    }
+    assert one(db, "SELECT to_regclass('report_share_links')") is None
+    with pytest.raises(psycopg.errors.CheckViolation):
+        db.execute("UPDATE reports SET status = 'ready' WHERE id = %s", (draft,))
 
 
 @pytest.mark.parametrize(
