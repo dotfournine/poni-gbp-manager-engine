@@ -7,14 +7,22 @@
 #include "domain/report_html.hpp"
 #include "jobs/search_keywords.hpp"
 
+#include <chrono>
+#include <exception>
 #include <format>
+#include <optional>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 namespace poni::jobs {
 
 namespace asio = boost::asio;
 
 namespace {
+
+// The reason of an address the channel threw on. What it threw may say more than a person should read; the log has it.
+constexpr std::string_view kNotHandedToGmail = "The engine could not hand this message to Gmail; its log says why.";
 
 // Worth asking Google again in a later attempt of the job.
 bool passing(const google::ApiError& error) {
@@ -131,8 +139,60 @@ asio::awaitable<void> Reporter::build_once(std::int64_t report_id, bool last_att
                                              status != 0 ? std::format(" (HTTP {})", status) : std::string{}));
     }
 
-    co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) { repo::store_built_report(tx, report_id, data, now); });
+    auto built = co_await db_.tx(
+        [&, base = link_base(), now = clock_.now()](pqxx::work& tx) { return repo::store_built_report(tx, report_id, data, base, now); });
     log::info("report built", {{"report_id", report_id}, {"location_id", data.location_id}, {"summary", data.summary.has_value()}});
+    if (!built.to_send) co_return;
+
+    // Its schedule sends it, once: `done` is stored already, so a failure here is logged and never tried again,
+    // and the report the job stored stands. Only the last transaction of a send can throw.
+    std::optional<std::string> failure;
+    try {
+        const auto sent = co_await deliver(report_id, std::move(*built.to_send), audit::Actor::system("report-schedule"));
+        if (sent) log::info("report sent by its schedule", {{"report_id", report_id}, {"deliveries", std::ssize(sent->deliveries)}});
+    } catch (const std::exception& e) {
+        failure = e.what();
+    }
+    if (failure) log::warn("report not recorded after its schedule's send", {{"report_id", report_id}, {"error", *failure}});
+}
+
+asio::awaitable<repo::Result<model::Report>> Reporter::send(std::int64_t report_id, std::optional<std::vector<std::string>> only,
+                                                          audit::Actor actor) {
+    // The row's lock ends with this transaction: none is open while the emails go out.
+    auto mail = co_await db_.tx(
+        [report_id, &only, base = link_base()](pqxx::work& tx) { return repo::prepare_report_send(tx, report_id, only, base); });
+    if (!mail) co_return std::unexpected(mail.error());
+    auto sent = co_await deliver(report_id, std::move(*mail), std::move(actor));
+    co_return sent;
+}
+
+asio::awaitable<repo::Result<model::Report>> Reporter::deliver(std::int64_t report_id, repo::ReportMail mail, audit::Actor actor) {
+    const auto micros = std::chrono::duration_cast<std::chrono::microseconds>(clock_.now().time_since_epoch()).count();
+    // New for every send: a second send of the same report to the same address is a second email and a second row.
+    const auto key = std::format("report:{}:send:{}-{}", report_id, micros, core::random_token(6));
+    std::vector<repo::ReportDelivery> outcomes;
+    outcomes.reserve(mail.recipients.size());
+    for (const auto& address : mail.recipients) {
+        repo::ReportDelivery outcome{.recipient = address};
+        // co_await is not allowed in a catch block: note the error, act after it.
+        std::optional<std::string> thrown;
+        try {
+            const auto sent = co_await email_.send({.recipient = address, .subject = mail.subject, .body = mail.body});
+            outcome.sent = sent.has_value();
+            if (!sent) outcome.reason = sent.error().message;  // Gmail's own message: the channel puts no secret in it
+        } catch (const std::exception& e) {
+            thrown = e.what();
+        }
+        if (thrown) {
+            outcome.reason = std::string(kNotHandedToGmail);
+            log::warn("report email not sent", {{"report_id", report_id}, {"error", *thrown}});  // no address
+        }
+        outcomes.push_back(std::move(outcome));
+    }
+    auto recorded = co_await db_.audited(std::move(actor), clock_.now(), [&, base = link_base()](pqxx::work& tx, audit::Writer& audit) {
+        return repo::record_report_send(tx, audit, report_id, mail, outcomes, key, base);
+    });
+    co_return recorded;
 }
 
 asio::awaitable<void> Reporter::build(std::int64_t report_id, bool last_attempt) {

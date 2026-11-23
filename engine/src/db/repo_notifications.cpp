@@ -72,11 +72,7 @@ boost::json::object rule_json(const model::NotificationRule& rule) {
 std::optional<std::vector<std::string>> clean_recipients(const std::vector<std::string>& recipients) {
     std::vector<std::string> out;
     for (const auto& raw : recipients) {
-        // Only the ends are trimmed: a space inside an address is a mistake to report, not to repair.
-        std::string address(text::trim(raw));
-        for (auto& c : address) {
-            if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-        }
+        auto address = normal_address(raw);
         if (!valid_email(address)) return std::nullopt;
         if (!std::ranges::contains(out, address)) out.push_back(std::move(address));
     }
@@ -85,13 +81,23 @@ std::optional<std::vector<std::string>> clean_recipients(const std::vector<std::
 }
 
 std::string delivery_select() {
-    return std::format("SELECT d.id, d.event_type, d.location_id, d.review_id, d.escalation_id, d.channel, d.recipient, d.subject, "
+    return std::format("SELECT d.id, d.event_type, d.location_id, d.review_id, d.escalation_id, d.report_id, "
+                       "(SELECT u.email FROM users u WHERE u.id = d.requested_by) AS requested_by, d.channel, d.recipient, d.subject, "
                        "d.body, d.status, d.status_reason, d.attempts, {} AS created_at, {} AS sent_at "
                        "FROM notification_deliveries d",
                        iso("d.created_at"), iso("d.sent_at"));
 }
 
 }  // namespace
+
+std::string normal_address(std::string_view raw) {
+    // Only the ends are trimmed: a space inside an address is a mistake to report, not to repair.
+    std::string address(text::trim(raw));
+    for (auto& c : address) {
+        if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    }
+    return address;
+}
 
 bool valid_email(std::string_view address) {
     if (address.size() < 3 || address.size() > 254) return false;
@@ -277,11 +283,50 @@ model::NotificationDeliveryList list_deliveries(pqxx::transaction_base& tx, cons
     if (!filter.event_type.empty()) where.add(std::format("d.event_type = {}", where.bind(filter.event_type)));
     if (!filter.status.empty()) where.add(std::format("d.status = {}", where.bind(filter.status)));
     if (filter.escalation_id) where.add(std::format("d.escalation_id = {}", where.bind(*filter.escalation_id)));
+    if (filter.report_id) where.add(std::format("d.report_id = {}", where.bind(*filter.report_id)));
     return db::page<model::NotificationDelivery>(tx, delivery_select(), where, "d.created_at DESC, d.id DESC", filter.page);
 }
 
 std::optional<model::NotificationDelivery> get_delivery(pqxx::transaction_base& tx, std::int64_t id) {
     return db::row_as<model::NotificationDelivery>(tx, delivery_select() + " WHERE d.id = $1", pqxx::params{id});
+}
+
+// ---- a report's sends ------------------------------------------------------------
+
+std::vector<std::string> report_recipients(pqxx::transaction_base& tx, std::int64_t location_id) {
+    std::vector<std::string> out;
+    for (const auto& row : tx.exec("SELECT a.address FROM notification_rules n, jsonb_array_elements_text(n.recipients) a(address) "
+                                   "WHERE n.event_type = $1 AND n.channel = $2 AND n.enabled AND n.location_id = $3",
+                                   pqxx::params{kEventLocationReport, kEmailChannel, location_id})) {
+        out.push_back(row[0].as<std::string>());
+    }
+    // Sorted here, by bytes: the database's collation would not sort the punctuation of an address the same everywhere.
+    std::ranges::sort(out);
+    const auto repeats = std::ranges::unique(out);
+    out.erase(repeats.begin(), repeats.end());
+    return out;
+}
+
+void record_report_deliveries(pqxx::transaction_base& tx, std::int64_t report_id, std::int64_t location_id,
+                              std::optional<std::int64_t> requested_by, std::string_view event_key, std::string_view subject,
+                              std::string_view body, const std::vector<ReportDelivery>& deliveries, core::TimePoint now) {
+    const auto now_text = to_timestamptz(now);
+    for (const auto& delivery : deliveries) {
+        tx.exec(R"sql(
+            INSERT INTO notification_deliveries (event_type, event_key, location_id, report_id, requested_by, channel, recipient, subject,
+                                                 body, link_path, status, status_reason, attempts, created_at, updated_at, sent_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '', $10, $11, 1, $12::timestamptz, $12::timestamptz,
+                    CASE WHEN $13::boolean THEN $12::timestamptz END))sql",
+                pqxx::params{kEventLocationReport, event_key, location_id, report_id, requested_by, kEmailChannel, delivery.recipient,
+                             subject, body, delivery.sent ? "sent" : "failed", delivery.sent ? OptString{} : delivery.reason, now_text,
+                             delivery.sent})
+            .no_rows();
+    }
+}
+
+std::vector<model::NotificationDelivery> report_deliveries(pqxx::transaction_base& tx, std::int64_t report_id) {
+    return db::rows_as<model::NotificationDelivery>(tx, delivery_select() + " WHERE d.report_id = $1 ORDER BY d.created_at DESC, d.id DESC",
+                                                    pqxx::params{report_id});
 }
 
 // ---- the switches ----------------------------------------------------------------

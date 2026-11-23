@@ -1,17 +1,20 @@
-// A location's reports (FR-8, D-085, D-102, D-104): the reports themselves
-// and the schedules that ask for them. A report row is written once as
-// "building"; its job names its page, puts the page into the public bucket
-// and stores the numbers, after which neither changes. Blocking calls on a
+// A location's reports (FR-8, D-085, D-102, D-104): the reports themselves,
+// their sends and the schedules that ask for them. A report row is written
+// once as "building"; its job names its page, puts the page into the public
+// bucket and stores the numbers, after which neither changes. A send checks
+// first, under the report's row lock, and writes its delivery rows after its
+// emails went out; it changes nothing on the report. Blocking calls on a
 // transaction the caller owns.
 //
-// Nothing here talks to a bucket or to a model: jobs/reports.hpp does, and
-// records the outcome through these functions.
+// Nothing here talks to a bucket, a mailbox or a model: jobs/reports.hpp
+// does, and records the outcome through these functions.
 #pragma once
 
 #include "core/body.hpp"
 #include "core/clock.hpp"
 #include "db/audit.hpp"
 #include "db/failure.hpp"
+#include "db/repo_notifications.hpp"
 #include "db/sql.hpp"
 #include "domain/models.hpp"
 #include "domain/report.hpp"
@@ -77,8 +80,40 @@ std::optional<ReportWork> load_report_work(pqxx::transaction_base& tx, std::int6
 // run that was overtaken uploads nothing. A retried build keeps the name.
 std::optional<std::string> name_report_page(pqxx::transaction_base& tx, std::int64_t report_id, const std::string& candidate);
 
-// building -> ready, with the numbers. False if the report was no longer building.
-bool store_built_report(pqxx::transaction_base& tx, std::int64_t report_id, const domain::ReportData& data, core::TimePoint now);
+// ---- sending (D-104) ------------------------------------------------------------------
+
+// What a send needs once its checks passed.
+struct ReportMail {
+    std::int64_t location_id = 0;
+    std::vector<std::string> recipients;  // sorted, each once
+    std::string subject;
+    std::string body;
+};
+
+// The checks of a send, under the report's row lock, in this order: `only`, when given, names at
+// least one address; the report is ready; its location is switched on; email sending is on and a
+// mailbox is connected; there is a public bucket (`link_base`); the location has recipients; and
+// each address of `only` is one of them (trimmed and lower-cased first). Then the mail: to every
+// recipient, or to those of `only`, with the report's link in its body. Writes nothing.
+Result<ReportMail> prepare_report_send(pqxx::transaction_base& tx, std::int64_t report_id,
+                                       const std::optional<std::vector<std::string>>& only, std::string_view link_base);
+
+// After the sends: one delivery row per address as it ended, under `event_key` and in the name of
+// the audit's actor (a person, or nobody: its schedule), the audit entry with the counts, and the
+// report as the API serves it. Checks nothing again and changes nothing on the report.
+Result<model::Report> record_report_send(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t report_id, const ReportMail& mail,
+                                         const std::vector<ReportDelivery>& outcomes, std::string_view event_key,
+                                         std::string_view link_base);
+
+struct BuiltReport {
+    bool built = false;                 // this call took the report from building to ready
+    std::optional<ReportMail> to_send;  // its schedule sends by itself and the checks passed: auto_send_status is now done
+};
+// building -> ready, with the numbers. A report whose schedule sends it by itself ("pending") is
+// checked as a send in the same transaction: if the checks pass it becomes "done" and the mail is
+// returned for the caller to send, once; if not, it stays "pending" for a person to send.
+BuiltReport store_built_report(pqxx::transaction_base& tx, std::int64_t report_id, const domain::ReportData& data,
+                               std::string_view link_base, core::TimePoint now);
 // building -> failed.
 void fail_report(pqxx::transaction_base& tx, std::int64_t report_id, const std::string& error, core::TimePoint now);
 
@@ -92,6 +127,7 @@ struct ReportFilter {
 
 // `link_base` is the address of the public bucket, in front of a page's object name: a report's
 // `url` while it is ready and its `archive_url` once it is withdrawn. Without a bucket both are null.
+// A report of the list has no `recipients` and no `deliveries`; get_report fills both.
 model::ReportList list_reports(pqxx::transaction_base& tx, const ReportFilter& filter, std::string_view link_base);
 std::optional<model::Report> get_report(pqxx::transaction_base& tx, std::int64_t id, std::string_view link_base);
 

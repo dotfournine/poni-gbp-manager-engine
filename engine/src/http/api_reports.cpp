@@ -1,6 +1,6 @@
 // The reports part of the dashboard's API (FR-8, D-085, D-102, D-104): the
-// list of reports, generating a location's report by hand, reading one, and
-// the schedules. Paths, parameters and bodies are defined in
+// list of reports, generating a location's report by hand, reading one,
+// sending one by email, and the schedules. Paths, parameters and bodies are defined in
 // api/openapi.yaml; change that file first.
 //
 // Every route here needs a signed-in person. The engine serves no report's
@@ -16,6 +16,11 @@
 
 #include <boost/describe/class.hpp>
 
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
 namespace poni::http {
 
 namespace asio = boost::asio;
@@ -30,6 +35,11 @@ struct ReportCreateBody {
     std::optional<std::string> time_zone;
 };
 BOOST_DESCRIBE_STRUCT(ReportCreateBody, (), (period_start, period_end, time_zone))
+
+struct ReportSendBody {
+    std::optional<std::vector<std::string>> recipients;  // nothing: every recipient
+};
+BOOST_DESCRIBE_STRUCT(ReportSendBody, (), (recipients))
 
 }  // namespace
 
@@ -66,6 +76,19 @@ void add_report_routes(Router& router, const Api& api, jobs::Reporter& reporter)
 
     add_get_by_id(router, api, "/api/reports/{id}", "reports.read", "report",
                   [link_base](pqxx::work& tx, std::int64_t id) { return repo::get_report(tx, id, link_base); });
+
+    // Sends a ready report to its location's recipients, or some of them (D-104). The request waits until every
+    // address was tried, and answers 200 whatever came of each: the report's deliveries say.
+    router.add(verb::post, "/api/reports/{id}/send", {Access::user, "reports.send"},
+               [api, &reporter](const Request& request) -> asio::awaitable<Response> {
+                   // The body first: a bad one is refused before anything is looked up.
+                   auto body = optional_body_as<ReportSendBody>(request);
+                   if (!body) co_return body.error();
+                   const auto id = path_id(request);
+                   if (!id) co_return not_found("report");
+                   const auto sent = co_await reporter.send(*id, std::move(body->recipients), api.actor(request));
+                   co_return respond(sent);
+               });
 
     // ---- schedules ---------------------------------------------------------------------
 
