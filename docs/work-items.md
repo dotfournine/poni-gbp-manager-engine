@@ -37,6 +37,28 @@ The app's requests are in the app repository (`poni-gbp-manager-ios/docs/design/
 
 **Touches:** D-092, D-094, D-095.
 
+## Next: reports
+
+### Reports: one page, repeated sends, discard
+
+**What and why.** D-104 replaces the draft, send-once and reject workflow and the share links: a report is one page in the public bucket with one link, sent as often as a person likes, and withdrawn by a discard that moves the page to an archive. Neither the dashboard nor the phone app has shipped, so the contract changes in place, without a compatibility path.
+
+**What to build** (D-104):
+
+- **Spec first** (`api/openapi.yaml`). `ReportStatus`: `building`, `failed`, `ready`, `discarding`, `discarded`, `expired`. `Report` loses `sent_at`, `sent_by`, `hold_reason` and `share_links`, and gains `url` (while `ready`), `archive_url` (once discarded or expired), `auto_send_status` (`off`, `pending`, `done`), `recipients` (the addresses of the location's enabled `location_report` rules) and `deliveries` (its rows of the delivery log, newest first). `POST /api/reports/{id}/send` takes an optional body `{"recipients": [...]}`, a subset of `recipients` (any other address is a 400), blocks, and answers 200 with the report, this send's rows included, whatever each address's outcome; its 409s are the report not `ready`, the location switched off, sending off or no sender, and no recipient. `POST /api/reports/{id}/discard` answers 200 with the report, or 409 while it is `building` or once it is `discarded` or `expired`. Removed: `POST /api/reports/{id}/reject`, `GET /api/reports/{id}/html`, `POST /api/reports/{id}/share-links`, `POST /api/report-share-links/{id}/revoke` and `ReportShareLink`. `NotificationDelivery` gains `report_id` and `requested_by` (the person's email, null for a schedule), and the delivery list a `report_id` filter.
+- **Migration 0010.** `reports`: the new status check; `page_object` and `archive_object`; `auto_send_status` in place of `auto_send`; `html`, `hold_reason`, `sent_at` and `sent_by` dropped, and `reports_built_check` rewritten (`ready` needs `data` and `page_object`). `report_share_links` dropped; the audit entries that name a `report_share_link` stay, so the object types of `0009_audit_location.sql` keep it. `notification_deliveries`: `report_id` referencing `reports` and `requested_by` referencing `users`. Nothing is deployed: a development report without an object becomes `failed`, saying it was built before D-104.
+- **Storage.** `storage::Store` gains the copy of an `r/` object to an `a/` object and the delete of an `r/` object, in the bucket and in the local folder. `http::why_refused` takes the two requests on the configured public bucket only (the object name's `/` is the one `%2F` the address may hold), with lines in `tests/unit/write_path_test.cpp` for every refused neighbour: another bucket, another prefix, a DELETE of an `a/` or a `p/` object, a copy the other way.
+- **Build.** The object name on the row first, then the upload, then `ready`; in the transaction that marks it `ready`, the send's checks decide `auto_send_status` (`done`, then the send; or `pending`). `fail_stalled_reports` stays.
+- **Send.** The checks with the row locked; one Gmail message per address, one after another, through the Gmail channel; afterwards the rows, `sent` or `failed` with Gmail's message, under the key `report:{id}:send:<one per send>`, and a `report.send` audit entry naming how many addresses. Not through `repo::emit` or the delivery job. The Gmail limit in `main.cpp` becomes 120 a minute with a burst of 5.
+- **Discard.** `discarding` with the row locked, the copy, the delete, then `discarded` with the archive's name and a `report.discard` audit entry; a call on a `discarding` report finishes it.
+- **Tests.** `integration/reports_test.cpp` for the build's order, every refusal of a send and of a discard, a send repeated to the same address, a send with some addresses failing, auto-send at most once (a build run twice), a discard finished by a second call; the API tests for the new routes; `write_path_test.cpp`.
+- **Tell the clients.** Once merged, the web app's builder and the phone app get the list above in a message they can act on: the members and routes removed and added, the statuses, that the dashboard frames `url` or `archive_url` directly, and that the client asks the person before sending to an address with a `sent` row.
+- **The notes in `CLAUDE.md` and `architecture.md`** that say D-104 is not built yet go.
+
+**Done when:** a report is uploaded when built, sent twice to the same address with two rows in its log, auto-sent once by its schedule, and discarded, its old link answering Cloud Storage's error page and its archive loading in the dashboard; tests cover all of it; the contract check passes.
+
+**Touches:** D-066, D-085, D-102 point 6, D-104; the rules on reports, on the public bucket and on what the outbound client may write in `CLAUDE.md`; spec-first API changes.
+
 ## First deployment
 
 The system runs locally only. The owner postponed the first deployment (D-052); the VM type (`e2-medium`) and the address (`gbp.xvisionmediaus.com`) are decided.
@@ -51,7 +73,7 @@ The system runs locally only. The owner postponed the first deployment (D-052); 
 
 ### Bring up production
 
-**What.** On the VM: the Compose stack of `deploy/docker-compose.prod.yml` with images built for x86_64 (`build-images.sh --push`, never tried), `migrate` and then `seed` from the knowledge bucket (the first real `publish` and the first `seed` from a bucket were tested only against a stand-in), read access to the knowledge bucket for the VM's service account, the report buckets and the public bucket with the lifecycle rule for `p/` (365 days), nightly backups, and the DNS record at Wix. Then, on each real database once it is migrated: connect the GBP managing account and the sending mailbox in the dashboard.
+**What.** On the VM: the Compose stack of `deploy/docker-compose.prod.yml` with images built for x86_64 (`build-images.sh --push`, never tried), `migrate` and then `seed` from the knowledge bucket (the first real `publish` and the first `seed` from a bucket were tested only against a stand-in), read access to the knowledge bucket for the VM's service account, the report buckets and the public bucket without a lifecycle rule (D-104 point 8), nightly backups, and the DNS record at Wix. Then, on each real database once it is migrated: connect the GBP managing account and the sending mailbox in the dashboard.
 
 **Done when:** the dashboard is served at its address with a real certificate, the System status page is green (knowledge base, GBP token, discovery, Pub/Sub), a backup is written and restored once, and staff sign in from a phone.
 
@@ -59,7 +81,7 @@ The system runs locally only. The owner postponed the first deployment (D-052); 
 
 ### What only a deployment can prove
 
-**What.** Things tried only locally or against stand-ins: a real Let's Encrypt certificate; the dashboard under the Content-Security-Policy in a browser; Pub/Sub and the metadata server from a container on the VM; the Cloud Storage upload, a public read without listing, the lifecycle rule and the service account's role; a post with a video sent by the engine itself (needs the public bucket); sign-in from a phone with a real account.
+**What.** Things tried only locally or against stand-ins: a real Let's Encrypt certificate; the dashboard under the Content-Security-Policy in a browser; Pub/Sub and the metadata server from a container on the VM; the Cloud Storage upload, a public read without listing, the move of a report's page to `a/` (D-104) and the service account's role; a post with a video sent by the engine itself (needs the public bucket); sign-in from a phone with a real account.
 
 **Done when:** each is seen working once and `deploy/README.md` says so.
 
@@ -166,6 +188,12 @@ In the suggested order.
 ### More notification channels and roles
 
 **What.** As the need appears: channels beyond email and push (D-097), and roles and permissions beyond the single admin role (D-007). Every endpoint already has the authorization hook roles would use.
+
+### Clean-up of old reports, posts and uploads
+
+**What.** A script outside the engine, run by hand or by the VM's cron once in a while, that replaces Cloud Storage's lifecycle rule (D-104 point 8). It works from the database's records, not from the bucket: it expires every report built more than the retention period ago (by `reports.built_at`, a period to be chosen) by discard's steps (`discarding`, the copy to `a/`, the delete of the original) with `expired` at the end; it marks old `draft` and `rejected` local posts `expired` (a new status of a post; nothing that was ever sent is touched, D-094 point 2) and deletes their uploads, but only an upload that no open post or edit names in its `content`, `approved_content` or `base_content`, because copies and edits share uploads (D-101 point 3); and it lists the bucket with credentials of its own and deletes an object no row names once it is a day old (an upload is written before its row). It takes the same row locks as the engine, never touches a report that is `building` or `discarding`, and writes audit entries as `system:cleanup`. The archive (`a/`) is kept for good. `kMediaUsableFor` in `db/repo_local_posts.cpp` (360 days, and its message that the file "may be gone") follows the period the script deletes uploads after.
+
+**Touches:** D-085, D-094, D-101, D-104; `deploy/README.md` (how and when it runs, and the role that may list and delete).
 
 ### Report pages rendered outside the engine
 

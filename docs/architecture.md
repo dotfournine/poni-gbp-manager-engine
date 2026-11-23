@@ -54,7 +54,7 @@ A job is a row in `jobs` (`run_at`, backoff, idempotency keys, `FOR UPDATE SKIP 
 | Google My Business API (v4) | Reviews (list, batch get, reply); local posts (list, get, create, delete, and the update of the fields an approved edit names) | Same |
 | Business Profile Performance API (v1) | Daily metrics and monthly search keywords, read for a report or post help | Same |
 | Cloud Pub/Sub (REST) | Review notifications, by pull | Locally gcloud application-default credentials; in production the VM's service account |
-| Cloud Storage (JSON API) | Report pages and post media in one public bucket; uploads only | As Pub/Sub |
+| Cloud Storage (JSON API) | Report pages and post media in one public bucket; uploads, and a report page's move to the archive (copy, then delete; D-104) | As Pub/Sub |
 | LLM providers | Analysis, replies, go-live judge, report summaries, post help | An API key per provider |
 | Gmail API | Notifications and reports | OAuth of the sending mailbox, `gmail.send` (and `openid email` at connection, D-100) (D-066) |
 | Apple Push Notification service | Push to the phone app, over HTTP/2: one POST per device (D-097) | A provider token (ES256 JWT) signed with the APNs auth key from `PONI_APNS_KEY` |
@@ -100,7 +100,14 @@ Only enabled locations are synced (D-102): a location is switched on by a person
 
 A person ("Generate now", any finished period) or `reports.schedule` (every five minutes; daily is the day before, weekly the seven days before, monthly the previous month, in the schedule's time zone) writes a `building` row. `reports.build` reads the period's and the previous period's reviews and analyses; asks the Performance API for daily metrics and the month's keywords, storing nothing else (Google lags about three days: the report says the day its numbers reach and compares only whole periods; without an answer it is built without them); computes every figure in `domain/report.hpp`; asks the `summary` task for a few sentences, checked for links, addresses, phone numbers and length; and renders one HTML page without script (`domain/report_html.hpp`). Numbers and page (`reports.data`, `reports.html`) never change (D-085).
 
+> D-104 changes what follows a build and is not built yet (work-items, "Reports: one page, repeated sends, discard"). Until it ships, the next paragraph describes the code; the two after it describe D-104.
+
+
 A person reads the draft in a sandboxed frame and sends, regenerates or rejects it. Sending uploads `r/<token>.html` to the public bucket and raises `location_report`; revoking overwrites the object. "noindex" and the content security policy are `<meta>` elements; the bucket's lifecycle rule removes pages after 365 days.
+
+Under D-104 the page is not kept in the database: the build names its object on the row (`r/<32 random bytes>.<ext>`), uploads it, and marks the report `ready`; that address is the report's one link. Nothing waits for a decision. A person sends a `ready` report as often as they like, to the location's `location_report` recipients or some of them; the request blocks while each address gets its own Gmail message, and then one row per address is appended to `notification_deliveries` with its outcome. The client shows who had the report already and asks before sending again. A schedule with "send automatically" sends once: `auto_send_status` turns `done` in the transaction that marks the build `ready`, before the send, or stays `pending` when the send's checks fail.
+
+Discarding (`ready` or `failed`, never while `building`) marks the report `discarding`, copies its object to `a/<new token>.<ext>`, deletes the original and marks it `discarded`: the link stops working, and the dashboard loads the report from the archive only. It cannot be undone. The retention is ours: the bucket has no lifecycle rule, and a clean-up script outside the engine (work-items) expires reports by the same steps, ending in `expired`.
 
 ### 4.4 Local posts (D-088)
 
@@ -139,7 +146,7 @@ Migrations in `engine/migrations/`, applied by `poni-tools migrate`, from `0001_
 | Reviews | `reviews` (rating, original and translated text, language, script, reviewer, current reply), `review_events`, `review_analyses` |
 | Replies | `reply_drafts` (draft, scheduled, approved, posting, posted, published, rejected, cancelled, superseded; model text beside a person's edit), `reply_posts` (one per PUT, at most one open per review) |
 | Local posts | `local_posts` (draft, approved, sending, sent, unknown, failed, rejected, removed, beside Google's state), `local_post_media`, `local_post_edits` (the open edit of a post at Google: draft, approved, sending) |
-| Other | `cases`, `go_live_runs` (one location's test), `go_live_cases`, `notification_rules`, `notification_deliveries`, `reports` and `report_schedules` (each names a location), `report_share_links` |
+| Other | `cases`, `go_live_runs` (one location's test), `go_live_cases`, `notification_rules`, `notification_deliveries`, `reports` and `report_schedules` (each names a location), `report_share_links` (dropped by D-104) |
 | Knowledge base | `kb_meta`, `kb_industries`, `kb_common`, `kb_corpus_cases`, `kb_defaults`, `kb_voice_templates`, `kb_model_prices` (written only by `poni-tools seed`) |
 | Operations | `jobs`, `credentials` (encrypted, D-043), `integration_status`, `llm_calls`, `system_settings` (posting and email switches, the Google the database belongs to) |
 
