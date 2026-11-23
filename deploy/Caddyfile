@@ -23,13 +23,15 @@
 		# The one thing the dashboard frames is a report's page in the public
 		# bucket (D-104 point 3): a page without script, shown in a frame with
 		# an empty sandbox. The source ends in the bucket's name and a slash,
-		# so no other bucket's object can be framed. It is the last directive
-		# because the bucket's name is free text from the env file and the
-		# first directive of a name wins: a ";" in it can spoil frame-src
-		# alone (the frame stays blocked), never an earlier directive. Caddy
-		# puts the name in before it reads this file, so a quote in it would
-		# change the file itself: a bucket's name has none.
-		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.googleusercontent.com; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; frame-src https://storage.googleapis.com/{$PONI_PUBLIC_BUCKET}/"
+		# so no other bucket's object can be framed. It is the last directive:
+		# the first directive of a name wins, so the bucket's name cannot stand
+		# in for one the policy already has. It is {env.…}, not the {$…} of the
+		# site's address, because Caddy puts it in when it answers: whatever it
+		# holds stays inside this header's value and cannot change this file.
+		# Nothing checks the name: a space in it adds a frame source, and a ";"
+		# with a directive the policy lacks adds that directive. Read the header
+		# once after setting or changing it (deploy/README.md).
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://*.googleusercontent.com; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; frame-src https://storage.googleapis.com/{env.PONI_PUBLIC_BUCKET}/"
 		-Server
 	}
 
