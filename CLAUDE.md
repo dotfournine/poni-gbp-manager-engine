@@ -33,6 +33,7 @@ Engine, natively on macOS (from `engine/`; needs `export VCPKG_ROOT=~/vcpkg PATH
 
 ```bash
 docker compose -f ../deploy/docker-compose.dev.yml up -d --wait db   # PostgreSQL on 127.0.0.1:55432
+PONI_PUBLIC_FOLDER=/tmp/poni-public docker compose -f ../deploy/docker-compose.dev.yml --profile public up -d public   # the public folder on 127.0.0.1:8088 (D-105)
 scripts/build-locked.sh cmake --preset macos-llvm
 scripts/build-locked.sh cmake --build build/macos-llvm -j 4
 scripts/build-locked.sh ctest --test-dir build/macos-llvm -j 4   # all tests; -L unit or -L integration for one group

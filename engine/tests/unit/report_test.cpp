@@ -966,6 +966,20 @@ TEST(ObjectStore, AFolderStandsInForABucketOnADevelopersMachine) {
     std::filesystem::remove_all(folder);
 }
 
+TEST(ObjectStore, AFolderServedOnThisMachineIsReadAtItsServersAddress) {
+    const auto folder = std::filesystem::temp_directory_path() / std::format("poni-served-store-test-{}", ::getpid());
+    std::filesystem::remove_all(folder);
+    boost::asio::io_context io;
+    storage::FolderStore store(folder, "http://127.0.0.1:8088");
+    EXPECT_EQ(store.base_url(), "http://127.0.0.1:8088/");
+    ASSERT_TRUE(test::run(io, store.put({.name = "r/abc.html", .content_type = "text/html", .body = "page"})));
+    std::ifstream file(folder / "r" / "abc.html");
+    std::stringstream text;
+    text << file.rdbuf();
+    EXPECT_EQ(text.str(), "page");  // the engine still only writes into the folder
+    std::filesystem::remove_all(folder);
+}
+
 // ---- a report's page: copied to the archive and deleted (D-104) ---------------------------
 
 namespace {

@@ -5,6 +5,7 @@
 #
 # The Linux build of the engine (the same one CI runs) lives behind the
 # "linux" profile; use engine/scripts/linux.sh rather than calling it directly.
+# The server of the public folder lives behind the "public" profile (below).
 name: poni-gbp-dev
 
 services:
@@ -24,6 +25,21 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  # The folder that stands in for the public bucket in development, served on loopback so that the
+  # dashboard can show a report's page (D-104 point 3, D-105; the engine serves none). Start it with
+  #   docker compose -f deploy/docker-compose.dev.yml --profile public up -d public
+  # and give the engine PONI_PUBLIC_BUCKET=<the folder> and PONI_PUBLIC_FOLDER_URL=http://127.0.0.1:8088.
+  # Never in the production file: there the bucket is Cloud Storage.
+  public:
+    profiles: ["public"]
+    image: caddy:2
+    # No --browse: nothing is listed, an object's name is its secret here too.
+    command: ["caddy", "file-server", "--root", "/srv", "--listen", ":80"]
+    ports:
+      - "127.0.0.1:8088:80"
+    volumes:
+      - ${PONI_PUBLIC_FOLDER:-/tmp/poni-public}:/srv:ro
 
   # Ubuntu toolchain container: builds and tests the engine with clang,
   # and can run it. The repository is mounted read-only; build output goes to

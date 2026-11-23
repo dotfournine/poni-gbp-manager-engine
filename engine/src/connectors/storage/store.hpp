@@ -94,10 +94,12 @@ private:
 };
 
 // The files are small and this is for one developer's machine: it writes on
-// the calling thread.
+// the calling thread. `served_at` is where a local file server serves the
+// folder (D-105); without it an object's address is the file:// one.
 class FolderStore final : public ObjectStore {
 public:
-    explicit FolderStore(std::filesystem::path folder) : folder_(std::move(folder)) {}
+    explicit FolderStore(std::filesystem::path folder, std::string served_at = {})
+        : folder_(std::move(folder)), served_at_(std::move(served_at)) {}
 
     boost::asio::awaitable<Result<void>> put(Object object) override;
     boost::asio::awaitable<Result<void>> copy(std::string from, std::string to) override;
@@ -106,6 +108,7 @@ public:
 
 private:
     std::filesystem::path folder_;
+    std::string served_at_;
 };
 
 // A setting names a bucket ("xvisionmedia-gbp-public") or, with a slash in
