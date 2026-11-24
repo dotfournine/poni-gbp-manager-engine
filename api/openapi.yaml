@@ -2852,9 +2852,9 @@ paths:
           `escalation.assign` is done by the person who assigned it (the
           `actor`); `before.assignee_id` and `after.assignee_id` are user
           ids, and `after.assignee_id` is null when the assignment was
-          lifted. `GET /api/users` lists active users only, so the id of a
-          person who was disabled since does not resolve there: show the
-          id, or the `actor`'s address where it is the same person. `escalation.close` is done by the person
+          lifted. `GET /api/users` lists active users unless asked with
+          `status=all`, so ask with it to resolve the id of a person who was
+          disabled since; or show the `actor`'s address where it is the same person. `escalation.close` is done by the person
           who closed it; its `after` holds `status`, `reason` and `note`.
         - What was sent: `GET /api/notification-deliveries?escalation_id={id}`,
           one row per recipient and channel, the emails and the pushes, or
@@ -2945,8 +2945,19 @@ paths:
     get:
       operationId: listUsers
       summary: List staff
-      description: Everyone who has signed in and isn't disabled, by name. Used to assign an escalation.
+      description: |
+        Everyone who has signed in, by name, chosen by `status`. The default
+        is the people who can be assigned an escalation: those who are not
+        disabled. The list is not paged.
       tags: [session]
+      parameters:
+        - name: status
+          in: query
+          description: "`active` (the default): the people who can be assigned. `disabled`: the people who were disabled. `all`: both."
+          schema:
+            type: string
+            enum: [active, disabled, all]
+            default: active
       responses:
         "200":
           description: The users.
@@ -2954,6 +2965,8 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UserList"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
         "401":
           $ref: "#/components/responses/Unauthenticated"
 
@@ -3645,7 +3658,7 @@ components:
     User:
       type: object
       additionalProperties: false
-      required: [id, email, name, picture_url]
+      required: [id, email, name, picture_url, status]
       properties:
         id:
           type: integer
@@ -3656,6 +3669,10 @@ components:
           type: string
         picture_url:
           type: [string, "null"]
+        status:
+          type: string
+          enum: [active, disabled]
+          description: "`disabled`: the person has no session and cannot sign in or be assigned."
     SignInMethods:
       type: object
       description: The ways of signing in this engine offers.
