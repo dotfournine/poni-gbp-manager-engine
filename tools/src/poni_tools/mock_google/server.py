@@ -186,8 +186,12 @@ def make_handler(mock: MockGoogle) -> type[BaseHTTPRequestHandler]:
                 return self._send(Answer(400, {"error": "the body is not a JSON object"}))
             try:
                 # The removals and the restore take no body.
-                takes_form = name not in ("remove_review", "remove_directory_user", "restore_directory_user")
-                result = getattr(mock, name)(*ids, form) if takes_form else getattr(mock, name)(*ids)
+                bodiless = {
+                    "remove_review": mock.remove_review,
+                    "remove_directory_user": mock.remove_directory_user,
+                    "restore_directory_user": mock.restore_directory_user,
+                }
+                result = bodiless[name](*ids) if name in bodiless else getattr(mock, name)(*ids, form)
             except PortalError as error:
                 return self._send(Answer(400, {"error": str(error)}))
             self._send(Answer(200, result))
