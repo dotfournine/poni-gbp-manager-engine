@@ -43,6 +43,7 @@ _GET = [
         ),
         "search_keywords",
     ),
+    (re.compile(rf"^/admin\.googleapis\.com/admin/directory/v1/users/{_ID}$"), "directory_user"),
 ]
 _POST = [
     (re.compile(r"^/oauth2\.googleapis\.com/token$"), "token"),
@@ -55,6 +56,10 @@ _PORTAL = [
     (re.compile(rf"^/portal/reviews/{_ID}/edit$"), "edit_review"),
     (re.compile(rf"^/portal/reviews/{_ID}/remove$"), "remove_review"),
     (re.compile(r"^/portal/settings$"), "set_reply_delay"),
+    (re.compile(rf"^/portal/directory/{_ID}/suspend$"), "suspend_directory_user"),
+    (re.compile(rf"^/portal/directory/{_ID}/rename$"), "rename_directory_user"),
+    (re.compile(rf"^/portal/directory/{_ID}/remove$"), "remove_directory_user"),
+    (re.compile(rf"^/portal/directory/{_ID}/restore$"), "restore_directory_user"),
 ]
 
 
@@ -139,6 +144,8 @@ def make_handler(mock: MockGoogle) -> type[BaseHTTPRequestHandler]:
                     answer = mock.get_review(*ids)
                 case "daily_metrics":
                     answer = mock.daily_metrics(ids[0], query)
+                case "directory_user":
+                    answer = mock.directory_user(ids[0])
                 case _:
                     answer = mock.search_keywords(ids[0], query)
             self._send(answer)
@@ -178,7 +185,9 @@ def make_handler(mock: MockGoogle) -> type[BaseHTTPRequestHandler]:
             if form is None:
                 return self._send(Answer(400, {"error": "the body is not a JSON object"}))
             try:
-                result = getattr(mock, name)(*ids, form) if name != "remove_review" else mock.remove_review(*ids)
+                # The removals and the restore take no body.
+                takes_form = name not in ("remove_review", "remove_directory_user", "restore_directory_user")
+                result = getattr(mock, name)(*ids, form) if takes_form else getattr(mock, name)(*ids)
             except PortalError as error:
                 return self._send(Answer(400, {"error": str(error)}))
             self._send(Answer(200, result))

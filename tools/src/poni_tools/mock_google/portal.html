@@ -18,6 +18,7 @@
   .error { color: #b00; } .note { color: #555; font-size: 0.9em; }
   .mail { border: 1px solid #ddd; padding: 8px; margin: 8px 0; }
   .mail pre { white-space: pre-wrap; margin: 6px 0 0; }
+  .person { border: 1px solid #ddd; padding: 8px; margin: 8px 0; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
@@ -43,6 +44,10 @@ it runs with <code>PONI_GOOGLE_MOCK_URL</code>. The page refreshes every few sec
 
 <h2>Reviews</h2>
 <div id="reviews"></div>
+
+<h2>Workspace directory</h2>
+<p class="note">Made-up staff. The engine asks about one person at a time, by id.</p>
+<div id="directory"></div>
 
 <h2>Outbox</h2>
 <p class="note">What the engine sent through Gmail. It went nowhere.</p>
@@ -115,6 +120,44 @@ function reviewNode(review) {
   return box;
 }
 
+async function directoryAction(user, action, body) {
+  try { await call(`/portal/directory/${encodeURIComponent(user.id)}/${action}`, body); } catch (error) { alert(error.message); }
+  refresh();
+}
+
+function personNode(user) {
+  const box = el("div", undefined, "person");
+  const marks = [user.administrator && "administrator", user.suspended && "suspended", user.deleted && "deleted"].filter(Boolean);
+  const title = el("div");
+  title.append(user.deleted ? el("s", user.full_name) : el("strong", user.full_name));
+  if (marks.length) title.append(" ", el("span", `(${marks.join(", ")})`, "meta"));
+  box.append(title, el("div", user.primary_email), el("div", user.id, "meta"));
+  if (user.deleted) {
+    const restore = el("button", "Restore");
+    restore.onclick = () => directoryAction(user, "restore", {});
+    box.append(restore);
+    return box;
+  }
+  const suspend = el("button", user.suspended ? "Unsuspend" : "Suspend");
+  suspend.onclick = () => directoryAction(user, "suspend", { suspended: !user.suspended });
+  const rename = el("button", "Rename");
+  rename.onclick = () => {
+    const [given, ...family] = user.full_name.split(" ");
+    const givenName = prompt("Given name", given);
+    if (givenName === null) return;
+    const familyName = prompt("Family name", family.join(" "));
+    if (familyName === null) return;
+    directoryAction(user, "rename", { given_name: givenName, family_name: familyName });
+  };
+  const remove = el("button", "Delete");
+  remove.onclick = () => {
+    if (!confirm("Delete this account? The engine will be told the person is not found.")) return;
+    directoryAction(user, "remove", {});
+  };
+  box.append(suspend, " ", rename, " ", remove);
+  return box;
+}
+
 let firstLoad = true;
 async function refresh() {
   let state;
@@ -132,6 +175,8 @@ async function refresh() {
     reviews.append(el("div", `location ${loc.id} · ${loc.industry}`, "meta"));
     for (const review of loc.reviews) reviews.append(reviewNode(review));
   }
+  const directory = document.getElementById("directory");
+  directory.replaceChildren(...state.directory.map(personNode));
   const outbox = document.getElementById("outbox");
   outbox.replaceChildren();
   if (!state.outbox.length) outbox.append(el("p", "Nothing sent yet.", "note"));

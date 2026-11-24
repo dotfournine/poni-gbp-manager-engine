@@ -392,3 +392,151 @@ def test_a_reply_becomes_visible_once_the_delay_has_passed(tmp_path: Path) -> No
     assert "reviewReply" not in mock.get_review(ACCOUNT, location, posted["id"]).body
     time.sleep(1.1)
     assert mock.get_review(ACCOUNT, location, posted["id"]).body["reviewReply"]["comment"] == "Thanks"
+
+
+DIRECTORY = "/admin.googleapis.com/admin/directory/v1/users"
+
+
+def owner_id(google: Mock) -> str:
+    return next(u["id"] for u in google.mock.state["directory"] if u["primaryEmail"] == "mock-owner@example.com")
+
+
+def staff_id(google: Mock, index: int = 1) -> str:
+    return google.mock.state["directory"][index]["id"]
+
+
+def id_token_claims(tokens: dict) -> dict:
+    payload = tokens["id_token"].split(".")[1]
+    return json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+
+
+def test_a_directory_user_is_read_by_id_and_the_owner_is_a_delegated_administrator(google: Mock) -> None:
+    google.connect()
+    owner = owner_id(google)
+    assert len(owner) == 21 and owner.isdigit()
+    status, _, user = google.call("GET", f"{DIRECTORY}/{owner}")
+    assert status == 200
+    assert set(user) == {
+        "kind",
+        "id",
+        "primaryEmail",
+        "name",
+        "isAdmin",
+        "isDelegatedAdmin",
+        "suspended",
+        "archived",
+        "customerId",
+        "orgUnitPath",
+    }
+    assert user["kind"] == "admin#directory#user" and user["id"] == owner
+    assert user["primaryEmail"] == "mock-owner@example.com"
+    assert set(user["name"]) == {"givenName", "familyName", "fullName"}
+    assert user["name"]["fullName"] == f"{user['name']['givenName']} {user['name']['familyName']}"
+    assert user["isDelegatedAdmin"] is True and user["isAdmin"] is False
+    assert user["suspended"] is False and user["archived"] is False
+    assert user["customerId"] == "C0mock0001" and user["orgUnitPath"] == "/"
+    assert google.call("GET", f"{DIRECTORY}/mock-owner@example.com")[0] == 404, "the mock knows ids only"
+
+
+def test_the_directory_is_made_up_and_only_the_owner_is_an_administrator(google: Mock) -> None:
+    users = google.mock.state["directory"]
+    assert len(users) == 4
+    assert all(u["primaryEmail"].endswith("@example.com") for u in users)
+    assert all(not u["isAdmin"] for u in users)
+    assert [u["isDelegatedAdmin"] for u in users] == [True, False, False, False]
+
+
+def test_the_directory_wants_a_token(google: Mock) -> None:
+    assert google.call("GET", f"{DIRECTORY}/{owner_id(google)}")[0] == 401
+
+
+def test_an_unknown_user_is_not_found_in_the_directory_apis_own_error_shape(google: Mock) -> None:
+    google.connect()
+    status, _, body = google.call("GET", f"{DIRECTORY}/999999999999999999999")
+    assert status == 404
+    assert body["error"]["code"] == 404
+    assert body["error"]["errors"][0]["reason"] == "notFound"
+    assert "status" not in body["error"]
+
+
+def test_a_suspended_user_says_so_and_unsuspending_clears_it(google: Mock) -> None:
+    google.connect()
+    user = staff_id(google)
+    assert google.portal(f"/portal/directory/{user}/suspend", {"suspended": True})[0] == 200
+    assert google.call("GET", f"{DIRECTORY}/{user}")[2]["suspended"] is True
+    assert google.portal(f"/portal/directory/{user}/suspend", {"suspended": False})[0] == 200
+    assert google.call("GET", f"{DIRECTORY}/{user}")[2]["suspended"] is False
+    status, _, error = google.portal(f"/portal/directory/{user}/suspend", {"suspended": "yes"})
+    assert status == 400 and error["error"]
+
+
+def test_a_deleted_user_is_not_found_and_a_restored_one_answers_again_with_the_same_id(google: Mock) -> None:
+    google.connect()
+    user = staff_id(google, 2)
+    assert google.portal(f"/portal/directory/{user}/remove", {})[0] == 200
+    status, _, body = google.call("GET", f"{DIRECTORY}/{user}")
+    assert status == 404 and body["error"]["errors"][0]["reason"] == "notFound"
+    assert google.portal(f"/portal/directory/{user}/suspend", {"suspended": True})[0] == 400, "deleted: restore first"
+    assert google.portal(f"/portal/directory/{user}/restore", {})[0] == 200
+    status, _, again = google.call("GET", f"{DIRECTORY}/{user}")
+    assert status == 200 and again["id"] == user
+
+
+def test_a_renamed_user_shows_the_new_name(google: Mock) -> None:
+    google.connect()
+    user = staff_id(google)
+    names = {"given_name": "  Robin ", "family_name": "Fairweather"}
+    assert google.portal(f"/portal/directory/{user}/rename", names)[0] == 200
+    name = google.call("GET", f"{DIRECTORY}/{user}")[2]["name"]
+    assert name == {"givenName": "Robin", "familyName": "Fairweather", "fullName": "Robin Fairweather"}
+    for bad in ({"given_name": " ", "family_name": "X"}, {"given_name": "X", "family_name": "y" * 61}):
+        status, _, error = google.portal(f"/portal/directory/{user}/rename", bad)
+        assert status == 400 and error["error"], bad
+    assert google.call("GET", f"{DIRECTORY}/{user}")[2]["name"]["fullName"] == "Robin Fairweather"
+
+
+def test_a_portal_action_on_an_unknown_user_is_refused_and_needs_the_portals_header(google: Mock) -> None:
+    actions = (("suspend", {"suspended": True}), ("rename", {"given_name": "A", "family_name": "B"}), ("remove", {}))
+    for action, body in (*actions, ("restore", {})):
+        status, _, error = google.portal(f"/portal/directory/999999999999999999999/{action}", body)
+        assert status == 400 and error["error"] == "No such user.", action
+        assert google.portal(f"/portal/directory/{staff_id(google)}/{action}", body, header=False)[0] == 403, action
+
+
+def test_the_connections_id_token_names_the_owners_directory_id(google: Mock) -> None:
+    tokens = google.connect(scope=f"{SCOPE} openid email")
+    assert id_token_claims(tokens)["sub"] == owner_id(google)
+    tokens = google.connect(scope=f"{SCOPE} openid email", login_hint="host@x.example")
+    assert id_token_claims(tokens)["sub"] == "mock"
+
+
+def test_a_state_file_without_a_directory_gains_one_and_keeps_its_reviews(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    first = MockGoogle(path, REPOSITORY / "knowledge")
+    location = first.state["locations"][0]["id"]
+    first.post_review({"location_id": location, "reviewer": "Kept", "stars": 4, "comment": "Still here"})
+    old = json.loads(path.read_text(encoding="utf-8"))
+    del old["directory"]
+    path.write_text(json.dumps(old), encoding="utf-8")
+
+    again = MockGoogle(path, REPOSITORY / "knowledge")
+    assert [u["primaryEmail"] for u in again.state["directory"]][0] == "mock-owner@example.com"
+    assert {k: v for k, v in again.state.items() if k != "directory"} == old
+    assert "directory" in json.loads(path.read_text(encoding="utf-8")), "and it is saved"
+
+    again.remove_directory_user(again.state["directory"][1]["id"])
+    fresh = MockGoogle(path, REPOSITORY / "knowledge", reset=True)
+    assert len(fresh.state["directory"]) == 4 and not any(u["deleted"] for u in fresh.state["directory"])
+
+
+def test_the_portals_state_lists_the_directory_with_the_deleted_user_marked(google: Mock) -> None:
+    gone = staff_id(google, 2)
+    google.portal(f"/portal/directory/{gone}/remove", {})
+    directory = google.call("GET", "/portal/state", auth=False)[2]["directory"]
+    assert len(directory) == 4
+    assert all(
+        set(u) == {"id", "primary_email", "full_name", "suspended", "deleted", "administrator"} for u in directory
+    )
+    assert [u["deleted"] for u in directory] == [False, False, True, False]
+    assert [u["administrator"] for u in directory] == [True, False, False, False]
+    assert directory[0]["primary_email"] == "mock-owner@example.com"
