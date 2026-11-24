@@ -469,6 +469,16 @@ TEST_F(Connect, TheMailboxIsTheAccountThatSignedInWithPermissionToSend) {
     EXPECT_EQ(value<bool>("SELECT email_sending_enabled FROM system_settings"), false);
 }
 
+// A scope is one entry of Google's space-separated list, compared whole: one whose name holds the wanted one is another permission.
+TEST_F(Connect, TheMailboxsPermissionIsComparedWhole) {
+    const auto started = start("gmail");
+    google_accepts_the_mailbox(kMailbox, "https://www.googleapis.com/auth/gmail.send.other openid email");
+    EXPECT_EQ(location(finish("gmail", started)), "http://localhost:5173/#/status?account=gmail&connect_error=no_send_permission");
+    EXPECT_FALSE(stored(repo::kGmailCredential));
+    EXPECT_EQ(google_.requests.size(), 1u) << "only the exchange: the token was not tried";
+    EXPECT_EQ(count("audit_log WHERE action = 'credential.store'"), 0);
+}
+
 TEST_F(Connect, NoMailIsSentFromAMailboxWhoseAddressIsNotKnown) {
     const auto address = http::stored_mailbox_address(db());
     EXPECT_THAT(await(address()).error(), HasSubstr("the sending mailbox is not connected"));
@@ -501,6 +511,19 @@ TEST_F(Connect, TheTokenSourcesLoadWhatWasConnected) {
     ASSERT_TRUE(stored) << stored.error().message;
     EXPECT_EQ(stored->refresh_token, kRefreshToken);
     EXPECT_FALSE(load(&box_, http::kConnectGmail)) << "each account has its own token";
+}
+
+// A name the engine has no connection for never loads another account's token in its place.
+TEST_F(Connect, AnUnknownConnectionLoadsNothing) {
+    tx([&](pqxx::work& tx) {
+        repo::save_oauth_credentials(tx, box_, repo::kGbpCredential, {"client", "secret", std::string(kRefreshToken)}, std::nullopt,
+                                     clock_.now());
+    });
+    const auto loaded = await(http::stored_credentials(db(), &box_, "drive")());
+    ASSERT_FALSE(loaded);
+    EXPECT_EQ(loaded.error().kind, google::ApiError::Kind::not_configured);
+    EXPECT_EQ(loaded.error().message, "no such connection");
+    EXPECT_TRUE(await(http::stored_credentials(db(), &box_, http::kConnectGbp)())) << "the GBP token is there, and was not given";
 }
 
 TEST_F(Connect, TheStatusPageKnowsWhetherConnectingIsPossible) {

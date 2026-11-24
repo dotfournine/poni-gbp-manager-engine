@@ -303,7 +303,9 @@ int run(const core::Config& config) {
     // The token sources cache an access token for about an hour: without the invalidate the
     // engine would go on as the account that was replaced until it ran out.
     http::ConnectService connect(database, clock, http_client, limiter, config, [&](std::string_view account) {
-        (account == http::kConnectGmail ? gmail_tokens : gbp_tokens).invalidate();
+        // By name, each its own: a name that is none of these invalidates nothing.
+        if (account == http::kConnectGbp) gbp_tokens.invalidate();
+        if (account == http::kConnectGmail) gmail_tokens.invalidate();
     });
     if (!connect.configured()) {
         log::warn("Google accounts can't be connected from the dashboard: set PONI_GBP_OAUTH_CLIENT_ID, PONI_GBP_OAUTH_CLIENT_SECRET "

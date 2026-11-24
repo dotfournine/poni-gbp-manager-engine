@@ -12,7 +12,11 @@
 #include <boost/json/object.hpp>
 #include <boost/url/url.hpp>
 
+#include <algorithm>
+#include <array>
 #include <format>
+#include <ranges>
+#include <stdexcept>
 
 namespace poni::http {
 
@@ -30,9 +34,35 @@ constexpr std::string_view kGbpScope = "https://www.googleapis.com/auth/business
 
 std::string attempt_key(std::string_view secret) { return core::sha256_hex(std::format("poni-connect:attempt:{}", secret)); }
 
-bool known_account(std::string_view account) { return account == kConnectGbp || account == kConnectGmail; }
-
 constexpr std::string_view kNoMailbox = "the sending mailbox is not connected; connect it on the dashboard's status page";
+
+// One row per account that can be connected: what its sign-in asks Google for, the name its token is
+// stored under, the integration status its connection marks, and what its token source says while
+// nothing is connected. Every decision by account reads its row, so a name that has none is refused
+// and never falls through to another account's token.
+struct Account {
+    std::string_view name, scope, credential, status, missing;
+};
+constexpr std::array<Account, 2> kAccounts{{
+    {kConnectGbp, kGbpScope, repo::kGbpCredential, repo::kGbpTokenStatus,
+     "no GBP account is connected; connect it on the dashboard's status page"},
+    {kConnectGmail, notify::kGmailSendScope, repo::kGmailCredential, repo::kEmailStatus, kNoMailbox},
+}};
+
+// The row of `name`, or null.
+const Account* account_named(std::string_view name) {
+    const auto found = std::ranges::find(kAccounts, name, &Account::name);
+    return found == kAccounts.end() ? nullptr : &*found;
+}
+
+bool known_account(std::string_view account) { return account_named(account) != nullptr; }
+
+// Whether `scope` is one of the space-separated entries of `scopes`, compared whole: a scope whose
+// name merely contains it (".../gmail.send.other") is another permission.
+bool granted(std::string_view scopes, std::string_view scope) {
+    return std::ranges::any_of(scopes | std::views::split(' '),
+                               [&](const auto entry) { return std::string_view(entry.begin(), entry.end()) == scope; });
+}
 
 // The address of the account that signed in: the "email" claim of the ID token that came with the
 // engine's own code exchange (D-091 point 12), if Google says it is verified; empty otherwise.
@@ -89,14 +119,19 @@ asio::awaitable<std::expected<void, std::string>> check_gmail(Client& http, core
 }  // namespace
 
 google::CredentialsLoader stored_credentials(db::Database& db, const core::SecretBox* box, std::string_view account) {
-    const bool gmail = account == kConnectGmail;
-    return [&db, box, name = std::string(gmail ? repo::kGmailCredential : repo::kGbpCredential),
-            missing = std::string(gmail ? kNoMailbox : "no GBP account is connected; connect it on the dashboard's status page")]()
-               -> asio::awaitable<google::Result<google::OAuthCredentials>> {
+    const Account* row = account_named(account);
+    if (!row) {
+        // A programming error: never another account's token in its place.
+        return []() -> asio::awaitable<google::Result<google::OAuthCredentials>> {
+            co_return std::unexpected(google::not_configured("no such connection"));
+        };
+    }
+    // The row is a constant: it outlives the loader.
+    return [&db, box, row]() -> asio::awaitable<google::Result<google::OAuthCredentials>> {
         if (!box) co_return std::unexpected(google::not_configured("PONI_SECRET_KEY is not set"));
-        auto loaded = co_await db.tx([box, &name](pqxx::work& tx) { return repo::load_oauth_credentials(tx, *box, name); });
+        auto loaded = co_await db.tx([box, name = row->credential](pqxx::work& tx) { return repo::load_oauth_credentials(tx, *box, name); });
         if (!loaded) co_return std::unexpected(google::not_configured(loaded.error()));
-        if (!*loaded) co_return std::unexpected(google::not_configured(missing));
+        if (!*loaded) co_return std::unexpected(google::not_configured(std::string(row->missing)));
         co_return std::move(**loaded);
     };
 }
@@ -173,7 +208,7 @@ asio::awaitable<Response> ConnectService::start(const Request& request) {
     params.append({"redirect_uri", redirect_uri(account)});
     params.append({"response_type", "code"});
     // openid and email only to learn which account signed in (D-100); the token is used for its own scope alone.
-    params.append({"scope", std::format("{} openid email", account == kConnectGmail ? notify::kGmailSendScope : kGbpScope)});
+    params.append({"scope", std::format("{} openid email", account_named(account)->scope)});
     // offline + consent: Google only returns a refresh token on a fresh consent. The chooser, always: the
     // account connected is the one picked there, also when the browser is signed in to another.
     params.append({"access_type", "offline"});
@@ -226,7 +261,9 @@ asio::awaitable<Response> ConnectService::callback(const Request& request) {
 
 asio::awaitable<std::optional<std::string>> ConnectService::connect(const Attempt& attempt, std::string code, std::string verifier,
                                                                     std::string ip) {
-    const bool gmail = attempt.account == kConnectGmail;
+    // start and callback refuse a name without a row: an attempt is only ever for one of them.
+    const Account* account = account_named(attempt.account);
+    if (!account) throw std::logic_error("an attempt to connect an account the engine does not know");
     const auto refuse = [&](std::string_view error, std::string_view reason) {
         log::warn("a Google account was not connected", {{"account", attempt.account}, {"error", error}, {"reason", reason}});
         return std::optional<std::string>(std::string(error));
@@ -245,21 +282,24 @@ asio::awaitable<std::optional<std::string>> ConnectService::connect(const Attemp
 
     const google::OAuthCredentials credentials{client_id, client_secret, *tokens.refresh_token};
     boost::json::object stored{{"source", "dashboard"}, {"account_email", account_email}};
-    if (gmail) {
-        if (!tokens.scope || !tokens.scope->contains(notify::kGmailSendScope)) {
+    // Each account's own check. No branch is a default: a row without a check stores nothing.
+    if (account->name == kConnectGmail) {
+        if (!tokens.scope || !granted(*tokens.scope, notify::kGmailSendScope)) {
             co_return refuse("no_send_permission", "the gmail.send scope was not granted");
         }
         const auto works = co_await check_gmail(http_, limiter_, credentials);
         if (!works) co_return refuse("refused", works.error());
-    } else {
+    } else if (account->name == kConnectGbp) {
         const auto seen = co_await check_gbp(http_, clock_, limiter_, credentials);
         if (!seen) co_return refuse("no_access", seen.error());
         stored["accounts"] = seen->accounts;
         stored["locations"] = seen->locations;
+    } else {
+        throw std::logic_error("no check for the account being connected");
     }
 
-    const std::string name(gmail ? repo::kGmailCredential : repo::kGbpCredential);
-    const std::string status(gmail ? repo::kEmailStatus : repo::kGbpTokenStatus);
+    const std::string name(account->credential);
+    const std::string status(account->status);
     const auto who = audit::Actor::user(attempt.started_by.user_id, attempt.started_by.email, std::move(ip));
     co_await db_.audited(who, clock_.now(), [this, name, status, credentials, account_email = std::move(account_email),
                                              stored = std::move(stored)](pqxx::work& tx, audit::Writer& audit) {
