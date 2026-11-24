@@ -1,0 +1,19 @@
+{
+  "kind": "admin#directory#users",
+  "etag": "\"made-up-etag-2\"",
+  "users": [
+    {
+      "kind": "admin#directory#user",
+      "id": "104000000000000000004",
+      "etag": "\"made-up-etag-user-4\"",
+      "primaryEmail": "casey.owner@example.com",
+      "name": {"givenName": "Casey", "familyName": "Owner", "fullName": "Casey Owner"},
+      "isAdmin": true,
+      "isDelegatedAdmin": false,
+      "suspended": false,
+      "archived": false,
+      "customerId": "C00made0up",
+      "orgUnitPath": "/"
+    }
+  ]
+}
