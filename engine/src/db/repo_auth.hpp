@@ -24,6 +24,7 @@ namespace poni::repo {
 // ---- credentials ---------------------------------------------------------------
 
 inline constexpr std::string_view kGbpCredential = "gbp";
+inline constexpr std::string_view kWorkspaceCredential = "workspace";
 
 struct StoredCredential {
     std::string ciphertext;  // core::SecretBox::seal output
@@ -36,7 +37,7 @@ void save_credential(pqxx::transaction_base& tx, std::string_view name, const St
                      core::TimePoint now);
 std::optional<StoredCredential> load_credential(pqxx::transaction_base& tx, std::string_view name);
 
-// An OAuth client and refresh token stored under `name` ("gbp", "gmail"),
+// An OAuth client and refresh token stored under `name` ("gbp", "gmail", "workspace"),
 // encrypted with `box`, with the address of the account they belong to,
 // which replaces the one stored before (none: unknown). Loading returns
 // nothing if none is stored, and an error message if the stored value can't
@@ -59,6 +60,7 @@ std::expected<std::optional<google::OAuthCredentials>, std::string> load_gbp_cre
 // ---- integration status --------------------------------------------------------
 
 inline constexpr std::string_view kGbpTokenStatus = "gbp_token";
+inline constexpr std::string_view kWorkspaceStatus = "workspace";
 inline constexpr std::string_view kDiscoveryStatus = "location_discovery";
 inline constexpr std::string_view kPubsubStatus = "pubsub";
 

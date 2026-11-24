@@ -462,6 +462,13 @@ model::SystemStatus system_status(pqxx::transaction_base& tx, core::TimePoint no
     status.ai = ai_status(tx);
     status.posting = posting_status(tx);
     status.email = email_status(tx, now);
+    const auto directory = integration(tx, kWorkspaceStatus);
+    const auto workspace = load_credential(tx, kWorkspaceCredential);
+    status.workspace = {.connected = workspace.has_value(),
+                        .account_email = workspace ? workspace->account_email : std::nullopt,
+                        .last_ok_at = directory.last_ok_at,
+                        .last_error = directory.last_error,
+                        .last_error_at = directory.last_error_at};
 
     status.locations = db::rows_as<model::LocationSyncStatus>(
         tx, std::format(

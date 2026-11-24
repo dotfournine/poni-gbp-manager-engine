@@ -322,8 +322,12 @@ paths:
       summary: Start connecting a Google account
       description: |
         Returns the address at Google where the person signs in with the
-        account to connect: the GBP managing account (`gbp`), or the mailbox
-        notifications are sent from (`gmail`). Open it as a page
+        account to connect: the GBP managing account (`gbp`), the mailbox
+        notifications are sent from (`gmail`), or an administrator of the
+        Google Workspace (`workspace`). For `workspace` the engine asks
+        Google for read-only access to the Workspace's users and for
+        nothing that can change them; the account should hold an admin role
+        with "Users: Read" only. Open it as a page
         (`location.assign`). Google sends the browser back to
         `/api/connections/{account}/callback`, which belongs to this attempt
         for 10 minutes and to the browser that started it.
@@ -372,7 +376,11 @@ paths:
         Where Google sends the browser back. The engine exchanges the code,
         learns the account's address from Google's answer, checks the
         account (the GBP account sees at least one location; the mailbox
-        granted permission to send), encrypts the token and stores it with
+        granted permission to send; the Workspace administrator granted
+        permission to read the Workspace's users, has an address of the
+        sign-in domains, and the directory's list, read with the new token,
+        holds the account as an administrator), encrypts the token and
+        stores it with
         the address, with an audit entry in the name of the person who
         started. It then redirects to the status page:
         `/#/status?connected=<account>`, or
@@ -382,9 +390,10 @@ paths:
         - `expired`: the attempt took too long, was used already, or the person signed out meanwhile; start again
         - `refused`: Google did not accept the sign-in
         - `no_refresh_token`: Google returned no refresh token; remove the app's access in the Google account and start again
-        - `no_access`: the account can't list Business Profile accounts and locations, or sees no location
+        - `no_access`: the account can't do what the connection is for: (`gbp`) it can't list Business Profile accounts and locations, or sees no location; (`workspace`) its address is not of the sign-in domains, or it can't read the Workspace directory's list of users (which needs an admin role with Users: Read and the Admin SDK API enabled), or the list does not hold the account as an administrator
         - `no_email`: Google did not name a verified address for the account that signed in
         - `no_send_permission`: the permission to send email was not granted
+        - `no_directory_permission`: the permission to read the Workspace's users was not granted
         - `failed`: anything else
 
         Nothing is stored unless every check passed.
@@ -3322,7 +3331,8 @@ paths:
       summary: System status
       description: |
         The state of the engine's integrations: whether the GBP token works,
-        when locations were last discovered, the last review sync of every
+        the Workspace administrator's connection, when locations were last
+        discovered, the last review sync of every
         location, Pub/Sub notifications, the analysis pipeline, and jobs that
         failed.
       tags: [system]
@@ -3392,10 +3402,14 @@ components:
       name: account
       in: path
       required: true
-      description: Which Google account. `gbp`, the GBP managing account; `gmail`, the mailbox notifications are sent from.
+      description: >-
+        Which Google account. `gbp`, the GBP managing account; `gmail`, the
+        mailbox notifications are sent from; `workspace`, an administrator
+        of the Google Workspace, whose directory tells the engine who has
+        left.
       schema:
         type: string
-        enum: [gbp, gmail]
+        enum: [gbp, gmail, workspace]
     CsrfToken:
       name: X-CSRF-Token
       in: header
@@ -4315,6 +4329,7 @@ components:
         - ai
         - posting
         - email
+        - workspace
         - locations
         - jobs
       properties:
@@ -4341,6 +4356,8 @@ components:
           $ref: "#/components/schemas/PostingStatus"
         email:
           $ref: "#/components/schemas/EmailStatus"
+        workspace:
+          $ref: "#/components/schemas/WorkspaceStatus"
         locations:
           type: array
           items:
@@ -4403,6 +4420,27 @@ components:
           type: [string, "null"]
           format: date-time
           description: The last time Google accepted the token.
+        last_error:
+          type: [string, "null"]
+        last_error_at:
+          type: [string, "null"]
+          format: date-time
+    WorkspaceStatus:
+      type: object
+      description: The Workspace administrator's connection.
+      additionalProperties: false
+      required: [connected, account_email, last_ok_at, last_error, last_error_at]
+      properties:
+        connected:
+          type: boolean
+          description: A token is stored. Whether Google still accepts it shows in the other fields.
+        account_email:
+          type: [string, "null"]
+          description: The address of the connected administrator, as Google named it when the account was connected (D-100). Null while nothing is connected.
+        last_ok_at:
+          type: [string, "null"]
+          format: date-time
+          description: The last time Google answered the engine through this connection.
         last_error:
           type: [string, "null"]
         last_error_at:

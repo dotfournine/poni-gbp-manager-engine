@@ -81,6 +81,10 @@ inline domain::SessionLifetimes session_lifetimes(const core::Config& config) {
 // organization and email address both belong to `domains`.
 bool domain_allowed(const identity::Identity& identity, std::span<const std::string> domains);
 
+// True if the part of `email` after its last "@" is one of `domains`,
+// without regard to case: an address of the sign-in domains.
+bool address_in_domains(std::string_view email, std::span<const std::string> domains);
+
 class AuthService {
 public:
     // `provider` may be null: Google sign-in is then not configured. Reads the

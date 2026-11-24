@@ -419,6 +419,8 @@ TEST_F(Api, SystemStatusShowsTokenSyncAndFailedJobs) {
     discover_spa_and_buffet();
     auto status = read("/api/system/status");
     EXPECT_FALSE(status.at("gbp").at("connected").as_bool());
+    EXPECT_FALSE(status.at("workspace").at("connected").as_bool());
+    EXPECT_TRUE(status.at("workspace").at("account_email").is_null());
     EXPECT_TRUE(status.at("database").at("reachable").as_bool());
     EXPECT_FALSE(status.at("pubsub").at("enabled").as_bool());
     EXPECT_FALSE(status.at("location_discovery").at("last_ok_at").is_null());

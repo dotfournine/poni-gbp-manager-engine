@@ -1,7 +1,8 @@
-// Connecting the GBP managing account and the sending mailbox from the
-// dashboard (D-079), over a real PostgreSQL and a scripted Google: the
-// engine's own HTTP layer as it runs, with FakeHttp standing in for
-// accounts.google.com and the Business Profile APIs. No test reaches
+// Connecting the GBP managing account, the sending mailbox and the
+// Workspace administrator from the dashboard (D-079, D-106 point 2), over a
+// real PostgreSQL and a scripted Google: the engine's own HTTP layer as it
+// runs, with FakeHttp standing in for accounts.google.com, the Business
+// Profile APIs and the Workspace directory. No test reaches
 // Google; the owner does the real sign-in.
 
 #include "api_fixture.hpp"
@@ -9,6 +10,7 @@
 #include "core/rate_limiter.hpp"
 #include "connectors/gbp/reader.hpp"
 #include "connectors/google/auth.hpp"
+#include "connectors/workspace/directory.hpp"
 #include "db/repo_auth.hpp"
 #include "db/repo_notifications.hpp"
 #include "http/connect.hpp"
@@ -28,13 +30,19 @@ constexpr std::string_view kMailbox = "host@xvisionmediaus.com";
 constexpr std::string_view kManager = "gbp-manager@xvisionmediaus.com";
 constexpr std::string_view kRefreshToken = "1//refresh-token-of-the-account";
 constexpr std::string_view kClientSecret = "the-oauth-client-secret";
+// The Workspace administrator, made up: its address is of the sign-in domains the fixture configures, and its id is
+// the `sub` of its sign-in and its Directory id (D-106 point 2).
+constexpr std::string_view kAdministrator = "directory-admin@example.com";
+constexpr std::string_view kAdministratorId = "104000000000000000042";
+constexpr std::string_view kDirectoryScopes = "https://www.googleapis.com/auth/admin.directory.user.readonly openid email";
+constexpr std::string_view kDirectoryList = "https://admin.googleapis.com/admin/directory/v1/users?customer=my_customer&maxResults=500";
 
 class Connect : public test::ApiTest {
 protected:
     void SetUp() override {
         ApiTest::SetUp();
         if (HasFatalFailure()) return;
-        for (const auto api : {google::kOAuthApi, gbp::kAccountsApi, gbp::kLocationsApi}) {
+        for (const auto api : {google::kOAuthApi, gbp::kAccountsApi, gbp::kLocationsApi, workspace::kDirectoryApi}) {
             limiter_.configure(std::string(api), {.per_minute = 6000, .burst = 100});
         }
         rebuild(true, true);
@@ -51,6 +59,7 @@ protected:
         connect_config_.gbp_oauth_client_id = with_client ? "client-id.apps.googleusercontent.com" : "";
         connect_config_.gbp_oauth_client_secret = with_client ? std::string(kClientSecret) : "";
         connect_config_.google_mock_url = std::move(google_mock_url);
+        connect_config_.signin_domains = {"example.com"};
         connect_ = std::make_unique<http::ConnectService>(db(), clock_, google_, limiter_, connect_config_,
                                                           [this](std::string_view account) { connected_.emplace_back(account); });
         connect_->add_routes(*router_);
@@ -101,13 +110,40 @@ protected:
         google_.reply(200, R"({"locations": [{"name": "locations/9001", "title": "One"}, {"name": "locations/9002", "title": "Two"}]})");
     }
     // An ID token as Google's token endpoint returns it; only its payload is read.
-    static std::string id_token(std::string_view email, std::string_view verified = "true") {
-        return "header." + core::base64url_encode(std::format(R"({{"email": "{}", "email_verified": {}}})", email, verified)) + ".signature";
+    static std::string id_token(std::string_view email, std::string_view verified = "true", std::string_view sub = {}) {
+        const auto subject = sub.empty() ? std::string() : std::format(R"(, "sub": "{}")", sub);
+        return "header." + core::base64url_encode(std::format(R"({{"email": "{}", "email_verified": {}{}}})", email, verified, subject)) +
+               ".signature";
     }
     // The members of the token endpoint's answer that carry it.
     static std::string with_id_token(std::string_view email) { return std::format(R"(, "id_token": "{}")", id_token(email)); }
     void google_accepts_the_mailbox(std::string_view email, std::string_view scope = "https://www.googleapis.com/auth/gmail.send openid email") {
         google_accepts_the_code(std::format(R"(, "scope": "{}", "id_token": "{}")", scope, id_token(email)));
+    }
+
+    // The code exchange of a Workspace administrator: its ID token names `sub` (none if empty) and `email`.
+    void google_accepts_the_administrator(std::string_view sub = kAdministratorId, std::string_view scope = kDirectoryScopes,
+                                          std::string_view email = kAdministrator) {
+        google_accepts_the_code(std::format(R"(, "scope": "{}", "id_token": "{}")", scope, id_token(email, "true", sub)));
+    }
+    // One entry of the directory's list, a delegated administrator unless `flags` says otherwise.
+    static std::string directory_user(std::string_view id, std::string_view email, std::string_view flags = R"(, "isDelegatedAdmin": true)") {
+        return std::format(R"({{"id": "{}", "primaryEmail": "{}"{}}})", id, email, flags);
+    }
+    // The directory's list with `entry` second, between a super administrator and a colleague, and the page token if any.
+    static std::string directory_with(std::string_view entry, std::string_view next_page = {}) {
+        const auto next = next_page.empty() ? std::string() : std::format(R"(, "nextPageToken": "{}")", next_page);
+        const auto first = directory_user("104000000000000000041", "first-admin@example.com", R"(, "isAdmin": true)");
+        const auto last = directory_user("104000000000000000043", "colleague@example.com", "");
+        return std::format(R"({{"users": [{}, {}, {}]{}}})", first, entry, last, next);
+    }
+    // The requests that went to the directory's host.
+    std::vector<http::ClientRequest> directory_requests() const {
+        std::vector<http::ClientRequest> out;
+        for (const auto& request : google_.requests) {
+            if (request.url.host() == "admin.googleapis.com") out.push_back(request);
+        }
+        return out;
     }
 
     std::optional<google::OAuthCredentials> stored(std::string_view name) {
@@ -469,6 +505,16 @@ TEST_F(Connect, TheMailboxIsTheAccountThatSignedInWithPermissionToSend) {
     EXPECT_EQ(value<bool>("SELECT email_sending_enabled FROM system_settings"), false);
 }
 
+// A scope is one entry of Google's space-separated list, compared whole: one whose name holds the wanted one is another permission.
+TEST_F(Connect, TheMailboxsPermissionIsComparedWhole) {
+    const auto started = start("gmail");
+    google_accepts_the_mailbox(kMailbox, "https://www.googleapis.com/auth/gmail.send.other openid email");
+    EXPECT_EQ(location(finish("gmail", started)), "http://localhost:5173/#/status?account=gmail&connect_error=no_send_permission");
+    EXPECT_FALSE(stored(repo::kGmailCredential));
+    EXPECT_EQ(google_.requests.size(), 1u) << "only the exchange: the token was not tried";
+    EXPECT_EQ(count("audit_log WHERE action = 'credential.store'"), 0);
+}
+
 TEST_F(Connect, NoMailIsSentFromAMailboxWhoseAddressIsNotKnown) {
     const auto address = http::stored_mailbox_address(db());
     EXPECT_THAT(await(address()).error(), HasSubstr("the sending mailbox is not connected"));
@@ -479,6 +525,216 @@ TEST_F(Connect, NoMailIsSentFromAMailboxWhoseAddressIsNotKnown) {
     EXPECT_THAT(await(address()).error(), HasSubstr("connect it again"));
     EXPECT_TRUE(status().at("email").at("connected").as_bool());
     EXPECT_TRUE(status().at("email").at("account_email").is_null());
+}
+
+// ---- the Workspace administrator ----------------------------------------------------------
+
+TEST_F(Connect, TheWorkspaceAccountIsAnAdministratorThatCanReadTheDirectory) {
+    EXPECT_FALSE(status().at("workspace").at("connected").as_bool());
+    const auto started = start("workspace");
+    // Read-only access to the users, and nothing that can change them.
+    EXPECT_EQ(started.param("scope"), kDirectoryScopes);
+    EXPECT_EQ(started.param("prompt"), "select_account consent");
+    EXPECT_EQ(started.param("include_granted_scopes"), "") << "a token carries what was asked for and nothing more";
+    EXPECT_EQ(started.param("redirect_uri"), "http://localhost:5173/api/connections/workspace/callback");
+
+    google_accepts_the_administrator();
+    google_refreshes();
+    google_.reply(200, directory_with(directory_user(kAdministratorId, "Directory-Admin@Example.com")));
+    const auto response = finish("workspace", started);
+    EXPECT_EQ(location(response), "http://localhost:5173/#/status?connected=workspace");
+
+    // The exchange, the refresh, and one read: the GET of the list. The account is found by its id, not taken first.
+    ASSERT_EQ(google_.requests.size(), 3u);
+    EXPECT_THAT(sent(1), HasSubstr("grant_type=refresh_token"));
+    const auto read = directory_requests();
+    ASSERT_EQ(read.size(), 1u);
+    EXPECT_EQ(read[0].method, http::ClientMethod::get);
+    EXPECT_EQ(read[0].url.buffer(), kDirectoryList);
+
+    const auto credentials = stored(repo::kWorkspaceCredential);
+    ASSERT_TRUE(credentials);
+    EXPECT_EQ(credentials->refresh_token, kRefreshToken);
+    EXPECT_EQ(value<std::string>("SELECT account_email FROM credentials WHERE name = 'workspace'"), kAdministrator);
+    const auto shown = status().at("workspace");
+    EXPECT_TRUE(shown.at("connected").as_bool());
+    EXPECT_EQ(shown.at("account_email").as_string(), kAdministrator);
+    EXPECT_FALSE(shown.at("last_ok_at").is_null());
+    EXPECT_TRUE(shown.at("last_error").is_null());
+    EXPECT_THAT(connected_, testing::ElementsAre("workspace"));
+    EXPECT_EQ(count("audit_log WHERE action = 'credential.store' AND object_type = 'credential' AND object_id = 'workspace' "
+                    "AND actor = 'staff@xvisionmediaus.com'"),
+              1);
+    const auto after = value<std::string>("SELECT after::text FROM audit_log WHERE action = 'credential.store'");
+    EXPECT_THAT(after, HasSubstr("\"source\": \"dashboard\""));
+    EXPECT_THAT(after, HasSubstr(std::string(kAdministrator)));
+    EXPECT_THAT(after, Not(HasSubstr(std::string(kRefreshToken))));
+    EXPECT_THAT(after, Not(HasSubstr(std::string(kAdministratorId)))) << "the sub is stored nowhere";
+    EXPECT_FALSE(stored(repo::kGbpCredential));
+    EXPECT_FALSE(stored(repo::kGmailCredential));
+}
+
+TEST_F(Connect, ConnectingTheWorkspaceLeavesTheOtherTwoAlone) {
+    auto started = start("gbp");
+    google_accepts_the_code();
+    google_refreshes();
+    google_lists_one_account_with_two_locations();
+    ASSERT_EQ(location(finish("gbp", started)), "http://localhost:5173/#/status?connected=gbp");
+    started = start("gmail");
+    google_accepts_the_mailbox(kMailbox);
+    google_refreshes();
+    ASSERT_EQ(location(finish("gmail", started)), "http://localhost:5173/#/status?connected=gmail");
+
+    const auto row = [&](std::string_view table, std::string_view name) {
+        return value<std::string>(std::format("SELECT row_to_json(t)::text FROM {} t WHERE name = '{}'", table, name));
+    };
+    const auto before = std::vector{row("credentials", "gbp"), row("credentials", "gmail"), row("integration_status", "gbp_token"),
+                                    row("integration_status", "email")};
+    clock_.advance(1h);
+
+    started = start("workspace");
+    google_accepts_the_administrator();
+    google_refreshes();
+    google_.reply(200, directory_with(directory_user(kAdministratorId, kAdministrator)));
+    ASSERT_EQ(location(finish("workspace", started)), "http://localhost:5173/#/status?connected=workspace");
+    EXPECT_EQ((std::vector{row("credentials", "gbp"), row("credentials", "gmail"), row("integration_status", "gbp_token"),
+                           row("integration_status", "email")}),
+              before);
+    EXPECT_EQ(stored(repo::kGbpCredential)->refresh_token, kRefreshToken);
+    EXPECT_THAT(connected_, testing::ElementsAre("gbp", "gmail", "workspace")) << "only the Workspace's cached token is let go";
+
+    // And the other way round: connecting the managing account again leaves the Workspace's token as it is.
+    const auto workspace = std::vector{row("credentials", "workspace"), row("integration_status", "workspace")};
+    clock_.advance(1h);
+    started = start("gbp");
+    google_accepts_the_code();
+    google_refreshes();
+    google_lists_one_account_with_two_locations();
+    ASSERT_EQ(location(finish("gbp", started)), "http://localhost:5173/#/status?connected=gbp");
+    EXPECT_EQ((std::vector{row("credentials", "workspace"), row("integration_status", "workspace")}), workspace);
+}
+
+TEST_F(Connect, TheWorkspaceNeedsThePermissionToReadUsers) {
+    // The person unticked it at Google, or a scope list holds only one whose name contains it.
+    for (const auto scope : {"openid email", "https://www.googleapis.com/auth/admin.directory.user.readonly.more openid email"}) {
+        SCOPED_TRACE(scope);
+        const auto started = start("workspace");
+        google_accepts_the_administrator(kAdministratorId, scope);
+        EXPECT_EQ(location(finish("workspace", started)),
+                  "http://localhost:5173/#/status?account=workspace&connect_error=no_directory_permission");
+    }
+    EXPECT_EQ(google_.requests.size(), 2u) << "only the exchanges: the token was not tried";
+    EXPECT_FALSE(stored(repo::kWorkspaceCredential));
+    EXPECT_FALSE(status().at("workspace").at("connected").as_bool());
+    EXPECT_EQ(count("audit_log WHERE action = 'credential.store'"), 0);
+}
+
+TEST_F(Connect, TheWorkspaceAccountMustBeInTheList) {
+    using Answer = std::optional<std::pair<unsigned, std::string>>;  // none: the request goes out and nothing comes back
+    const auto refused = [&](std::string_view why, std::string_view sub, std::vector<Answer> answers) {
+        SCOPED_TRACE(why);
+        const auto started = start("workspace");
+        google_accepts_the_administrator(sub);
+        if (!answers.empty()) google_refreshes();
+        for (const auto& answer : answers) {
+            if (answer) google_.reply(answer->first, answer->second);
+            else google_.fail();
+        }
+        EXPECT_EQ(location(finish("workspace", started)), "http://localhost:5173/#/status?account=workspace&connect_error=no_access");
+    };
+    const std::string denied = R"({"error": {"code": 403, "status": "PERMISSION_DENIED", "message": "Not Authorized to access this resource/api"}})";
+    refused("no sub", "", {});
+    refused("a sub that is not a plain id", "104.000/42", {});
+    refused("the list answers 403", kAdministratorId, {Answer{{403, denied}}});
+    refused("the list answers 404", kAdministratorId, {Answer{{404, R"({"error": {"code": 404, "message": "Not Found"}})"}}});
+    refused("no entry with the id, though another entry has the address", kAdministratorId,
+            {Answer{{200, directory_with(directory_user("104000000000000000099", kAdministrator))}}});
+    refused("the entry has another address", kAdministratorId,
+            {Answer{{200, directory_with(directory_user(kAdministratorId, "someone-else@example.com"))}}});
+    refused("suspended", kAdministratorId,
+            {Answer{{200, directory_with(directory_user(kAdministratorId, kAdministrator, R"(, "isDelegatedAdmin": true, "suspended": true)"))}}});
+    refused("archived", kAdministratorId,
+            {Answer{{200, directory_with(directory_user(kAdministratorId, kAdministrator, R"(, "isDelegatedAdmin": true, "archived": true)"))}}});
+    refused("the second page fails after the account was on the first", kAdministratorId,
+            {Answer{{200, directory_with(directory_user(kAdministratorId, kAdministrator), "made-up-page-2")}},
+             Answer{{503, R"({"error": {"code": 503, "message": "Backend Error"}})"}}});
+    refused("the read fails on the network", kAdministratorId, {Answer{}});
+
+    EXPECT_FALSE(stored(repo::kWorkspaceCredential));
+    EXPECT_FALSE(status().at("workspace").at("connected").as_bool());
+    EXPECT_EQ(count("audit_log WHERE action = 'credential.store'"), 0);
+    EXPECT_TRUE(connected_.empty());
+    const auto read = directory_requests();
+    EXPECT_EQ(read.size(), 9u) << "one read for each case that got that far, and the second page";
+    for (const auto& request : read) {
+        EXPECT_EQ(request.method, http::ClientMethod::get);
+        EXPECT_THAT(std::string(request.url.buffer()), testing::StartsWith(std::string(kDirectoryList)));
+    }
+    EXPECT_TRUE(google_.refused.empty());
+}
+
+TEST_F(Connect, TheWorkspaceAccountMustBeAnAdministrator) {
+    auto started = start("workspace");
+    google_accepts_the_administrator();
+    google_refreshes();
+    google_.reply(200, directory_with(directory_user(kAdministratorId, kAdministrator, "")));
+    EXPECT_EQ(location(finish("workspace", started)), "http://localhost:5173/#/status?account=workspace&connect_error=no_access");
+    EXPECT_FALSE(stored(repo::kWorkspaceCredential));
+
+    // An administrator with a role, and a super administrator: the token can only read either way.
+    for (const auto flags : {R"(, "isDelegatedAdmin": true)", R"(, "isAdmin": true)"}) {
+        SCOPED_TRACE(flags);
+        started = start("workspace");
+        google_accepts_the_administrator();
+        google_refreshes();
+        google_.reply(200, directory_with(directory_user(kAdministratorId, kAdministrator, flags)));
+        EXPECT_EQ(location(finish("workspace", started)), "http://localhost:5173/#/status?connected=workspace");
+    }
+    EXPECT_TRUE(stored(repo::kWorkspaceCredential));
+    EXPECT_EQ(count("audit_log WHERE action = 'credential.store' AND object_id = 'workspace'"), 2);
+}
+
+// A test tenant picked by mistake in Google's account chooser would pass every other check, and the engine would then
+// find none of the staff in its directory.
+TEST_F(Connect, AnAdministratorOfAnotherWorkspaceIsRefused) {
+    const auto started = start("workspace");
+    google_accepts_the_administrator(kAdministratorId, kDirectoryScopes, "admin@test-tenant.example.org");
+    EXPECT_EQ(location(finish("workspace", started)), "http://localhost:5173/#/status?account=workspace&connect_error=no_access");
+    EXPECT_EQ(google_.requests.size(), 1u) << "only the exchange";
+    EXPECT_TRUE(directory_requests().empty()) << "the directory was not asked";
+    EXPECT_FALSE(stored(repo::kWorkspaceCredential));
+    EXPECT_EQ(count("audit_log WHERE action = 'credential.store'"), 0);
+}
+
+TEST_F(Connect, TheWorkspaceTokenIsLoadedUnderItsOwnName) {
+    const auto none = await(http::stored_credentials(db(), &box_, http::kConnectWorkspace)());
+    ASSERT_FALSE(none);
+    EXPECT_EQ(none.error().kind, google::ApiError::Kind::not_configured);
+    EXPECT_THAT(none.error().message, HasSubstr("no Workspace administrator is connected"));
+
+    const auto started = start("workspace");
+    google_accepts_the_administrator();
+    google_refreshes();
+    google_.reply(200, directory_with(directory_user(kAdministratorId, kAdministrator)));
+    ASSERT_EQ(location(finish("workspace", started)), "http://localhost:5173/#/status?connected=workspace");
+
+    const auto workspace = await(http::stored_credentials(db(), &box_, http::kConnectWorkspace)());
+    ASSERT_TRUE(workspace) << workspace.error().message;
+    EXPECT_EQ(workspace->refresh_token, kRefreshToken);
+    const auto gbp = await(http::stored_credentials(db(), &box_, http::kConnectGbp)());
+    ASSERT_FALSE(gbp) << "the Workspace's token is not the managing account's";
+    EXPECT_THAT(gbp.error().message, HasSubstr("no GBP account is connected"));
+    // Sealed under its own name: the same ciphertext opens under no other.
+    tx([&](pqxx::work& tx) { tx.exec("UPDATE credentials SET name = 'gbp' WHERE name = 'workspace'"); });
+    EXPECT_FALSE(await(http::stored_credentials(db(), &box_, http::kConnectGbp)()));
+}
+
+TEST_F(Connect, AgainstTheGoogleMockTheWorkspaceGoesToTheMocksConsentPage) {
+    rebuild(true, true, "http://127.0.0.1:8090");
+    const auto started = start("workspace");
+    EXPECT_THAT(started.url, testing::StartsWith("http://127.0.0.1:8090/accounts.google.com/o/oauth2/v2/auth?"));
+    EXPECT_EQ(started.param("scope"), kDirectoryScopes);
+    EXPECT_EQ(started.param("redirect_uri"), "http://localhost:5173/api/connections/workspace/callback");
 }
 
 // CORE-3: what the engine's token sources load.
@@ -501,6 +757,19 @@ TEST_F(Connect, TheTokenSourcesLoadWhatWasConnected) {
     ASSERT_TRUE(stored) << stored.error().message;
     EXPECT_EQ(stored->refresh_token, kRefreshToken);
     EXPECT_FALSE(load(&box_, http::kConnectGmail)) << "each account has its own token";
+}
+
+// A name the engine has no connection for never loads another account's token in its place.
+TEST_F(Connect, AnUnknownConnectionLoadsNothing) {
+    tx([&](pqxx::work& tx) {
+        repo::save_oauth_credentials(tx, box_, repo::kGbpCredential, {"client", "secret", std::string(kRefreshToken)}, std::nullopt,
+                                     clock_.now());
+    });
+    const auto loaded = await(http::stored_credentials(db(), &box_, "drive")());
+    ASSERT_FALSE(loaded);
+    EXPECT_EQ(loaded.error().kind, google::ApiError::Kind::not_configured);
+    EXPECT_EQ(loaded.error().message, "no such connection");
+    EXPECT_TRUE(await(http::stored_credentials(db(), &box_, http::kConnectGbp)())) << "the GBP token is there, and was not given";
 }
 
 TEST_F(Connect, TheStatusPageKnowsWhetherConnectingIsPossible) {
