@@ -605,6 +605,10 @@ try {
   }
   check("GET /api/users?status=all", "/api/users", "GET", await call("GET", "/api/users?status=all"));
   expectStatus("GET /api/users?status=odd", await call("GET", "/api/users?status=odd"), 400, "invalid_request");
+  // The engine of the check has no Workspace administrator connected: both answer the 409 `workspace_not_connected` (D-106 point 8).
+  check("GET /api/users/directory?q=ab", "/api/users/directory", "GET", await call("GET", "/api/users/directory?q=ab"));
+  check("POST /api/users", "/api/users", "POST", await call("POST", "/api/users", { body: { directory_id: "123" } }));
+  expectStatus("GET /api/users/directory?q=a", await call("GET", "/api/users/directory?q=a"), 400, "invalid_request");
   if (seededLocation) {
     const body = { event_type: "approval_needed", location_id: seededLocation.id, recipients: ["contract-check@example.com"] };
     const rule = await call("POST", "/api/notification-rules", { body });
