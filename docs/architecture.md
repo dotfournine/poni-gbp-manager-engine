@@ -30,7 +30,7 @@ The engine owns every external integration (D-003). Its API has two clients, eac
 
 ### 2.1 Process and layers
 
-One binary, `poni-gbp-engine`, a daemon with no commands (D-079): API, scheduler, job workers and Pub/Sub subscriber. At start it checks that no migration is pending, a knowledge base is seeded and the database belongs to the Google it is configured for (D-087). Migrations and seeding are `poni-tools` (section 9). A signed-in person connects the managing account and the sending mailbox with the "Connect" buttons of the status page (`http/connect`); each is the Google account that person signs in with, and the status page shows its address (D-100). One `io_context` thread runs all coroutines and database calls go to the `Database`'s pool, so engine state needs no locks. A rate limiter per external API is shared by every caller of that API, because Google's quotas are per project. The layers (`core`, `db`, `jobs`, `connectors`, `domain`, `http`) are described in CLAUDE.md's "Layout".
+One binary, `poni-gbp-engine`, a daemon with no commands (D-079): API, scheduler, job workers and Pub/Sub subscriber. At start it checks that no migration is pending, a knowledge base is seeded and the database belongs to the Google it is configured for (D-087). Migrations and seeding are `poni-tools` (section 9). A signed-in person connects the managing account, the sending mailbox and the Workspace administrator with the "Connect" buttons of the status page (`http/connect`); each is the Google account that person signs in with, and the status page shows its address (D-100). One `io_context` thread runs all coroutines and database calls go to the `Database`'s pool, so engine state needs no locks. A rate limiter per external API is shared by every caller of that API, because Google's quotas are per project. The layers (`core`, `db`, `jobs`, `connectors`, `domain`, `http`) are described in CLAUDE.md's "Layout".
 
 ### 2.2 Jobs
 
@@ -56,6 +56,7 @@ A job is a row in `jobs` (`run_at`, backoff, idempotency keys, `FOR UPDATE SKIP 
 | Cloud Pub/Sub (REST) | Review notifications, by pull | Locally gcloud application-default credentials; in production the VM's service account |
 | Cloud Storage (JSON API) | Report pages and post media in one public bucket; uploads, and a report page's move to the archive (copy, then delete; D-104) | As Pub/Sub |
 | LLM providers | Analysis, replies, go-live judge, report summaries, post help | An API key per provider |
+| Admin SDK Directory API | Who has left (D-106) | OAuth of a Workspace administrator, `admin.directory.user.readonly` (and `openid email` at connection) |
 | Gmail API | Notifications and reports | OAuth of the sending mailbox, `gmail.send` (and `openid email` at connection, D-100) (D-066) |
 | Apple Push Notification service | Push to the phone app, over HTTP/2: one POST per device (D-097) | A provider token (ES256 JWT) signed with the APNs auth key from `PONI_APNS_KEY` |
 | Google OpenID Connect | Sign-in, dashboard and app | The engine's OAuth client |

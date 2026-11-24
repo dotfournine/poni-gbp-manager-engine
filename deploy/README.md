@@ -51,15 +51,16 @@ The existing app is "External" and "In production" with only the `business.manag
 
 ### Connecting the GBP managing account and the sending mailbox (dashboard)
 
-Both accounts are connected in the dashboard, on **System status**, by a signed-in person (D-079). **Connect** sends the browser to Google; the engine receives Google's redirect, exchanges the code, checks the account, encrypts the refresh token and stores it, with an audit entry in the name of the person who clicked. The client secret, the token and the encryption key never reach the browser. Nothing is stored unless every check passed: Google must name the account's verified address; the GBP account must be able to list its locations; the mailbox must have granted the permission to send. Each connection is the account the person picks in Google's account chooser, and no setting names it (D-100): the status page shows the address of each, the GBP one being the address clients invite to manage their profiles. To move to another account, connect that one: there is one connection of each kind, and the new one replaces the old token. Locations the new GBP account does not manage show as lost after two discoveries.
+The three accounts (the GBP managing account, the sending mailbox and the Workspace administrator) are connected in the dashboard, on **System status**, by a signed-in person (D-079). **Connect** sends the browser to Google; the engine receives Google's redirect, exchanges the code, checks the account, encrypts the refresh token and stores it, with an audit entry in the name of the person who clicked. The client secret, the token and the encryption key never reach the browser. Nothing is stored unless every check passed: Google must name the account's verified address; the GBP account must be able to list its locations; the mailbox must have granted the permission to send; the Workspace administrator, below, must pass its own checks. Each connection is the account the person picks in Google's account chooser, and no setting names it (D-100): the status page shows the address of each, the GBP one being the address clients invite to manage their profiles. To move to another account, connect that one: there is one connection of each kind, and the new one replaces the old token. Locations the new GBP account does not manage show as lost after two discoveries.
 
 This needs one OAuth client of type **Web application** in the same Google Auth Platform (**Clients → Create client**), with these **Authorized redirect URIs**:
 
 - `https://<the dashboard address>/api/connections/gbp/callback`
 - `https://<the dashboard address>/api/connections/gmail/callback`
-- `http://localhost:5173/api/connections/gbp/callback` and `http://localhost:5173/api/connections/gmail/callback` (local development)
+- `https://<the dashboard address>/api/connections/workspace/callback`
+- `http://localhost:5173/api/connections/gbp/callback`, `http://localhost:5173/api/connections/gmail/callback` and `http://localhost:5173/api/connections/workspace/callback` (local development)
 
-Its ID and secret go into `PONI_GBP_OAUTH_CLIENT_ID` and `PONI_GBP_OAUTH_CLIENT_SECRET`. The dashboard's sign-in client above could carry these addresses too, but a client of its own keeps the two purposes apart: a refresh token belongs to the client that issued it, so replacing this client means connecting both accounts again, and nothing else. A "Desktop app" client, as the removed `auth` command used, does not work here. A token that is already stored in a database stays valid as long as its client exists; the token the spike obtained through the OAuth Playground can no longer be imported (`auth --import-env` is gone): connect the account in the dashboard instead.
+Its ID and secret go into `PONI_GBP_OAUTH_CLIENT_ID` and `PONI_GBP_OAUTH_CLIENT_SECRET`. The dashboard's sign-in client above could carry these addresses too, but a client of its own keeps the two purposes apart: a refresh token belongs to the client that issued it, so replacing this client means connecting the three accounts again, and nothing else. A "Desktop app" client, as the removed `auth` command used, does not work here. A token that is already stored in a database stays valid as long as its client exists; the token the spike obtained through the OAuth Playground can no longer be imported (`auth --import-env` is gone): connect the account in the dashboard instead.
 
 Until the status page's **Connect** was used, the engine syncs nothing and the status page says so. Any signed-in staff member can connect or replace an account; each time is in the audit log (`credential.store`).
 
@@ -77,6 +78,24 @@ Then, in the dashboard: **System status → Notification email → Connect**. Pi
 Last, in the dashboard: add at least one rule under **Notification rules** (for example event "System problems", all clients, your own address), switch on **Send notification emails** under **Posting and sending**, and press **Send test email** on the **Delivery log** page. The test message should arrive within a few seconds and show as sent in the log.
 
 The `reports@` send-as alias (FR-7) is not set up: mail comes from `host@` itself. Mail is sent from the connected mailbox's own address; an alias would need a way to name it, which is not built.
+
+#### The Workspace administrator the staff check asks as
+
+The staff check (D-106) reads the Workspace directory's list of users as an administrator of the Workspace connected on the status page. The engine can read the directory and never change it: it asks Google for `https://www.googleapis.com/auth/admin.directory.user.readonly` and for nothing that can write. The account should hold a custom admin role with **Users → Read** and nothing more, not be a super admin: the engine accepts either, because the token can only read, but the role is what keeps the account itself small. Its address must be of the sign-in domains (`PONI_SIGNIN_DOMAINS`), or the connection is refused.
+
+In the Google Cloud console of the project, signed in as someone who can edit it:
+
+1. **APIs & Services → Library**: find **Admin SDK API** and enable it.
+2. **Google Auth Platform → Data access → Add or remove scopes**: add `https://www.googleapis.com/auth/admin.directory.user.readonly` and save. If Google lists it as a sensitive scope, the consent screen shows the same "Google hasn't verified this app" warning as for `gmail.send`, which is acceptable for one account of our own.
+
+In the Google Admin console, as a super administrator of the Workspace:
+
+3. **Account → Admin roles → Create new role**: a custom role with the Admin console privilege **Users → Read** only. Assign it to the account that will connect, **for the whole organization** (the top organizational unit). A role given for one organizational unit lists only that unit, and the staff check disables everyone the list does not hold.
+4. If third-party apps are restricted, mark the app's client ID as trusted (**Security → API controls → App access control**).
+
+Before connecting, everyone who uses the engine signs in once with their account of the Workspace being connected: within five minutes of the connection, the staff check disables every user whose account is not in that Workspace's list, including anyone still signing in with an account of another Workspace, such as today's testing domains.
+
+Then, in the dashboard: **System status → Workspace directory → Connect**, and sign in as that account. The engine checks that the permission was granted, that the address is of the sign-in domains, and that the directory's list, read with the new token, holds the account as an administrator, and only then stores the token encrypted under its own name (the other two tokens are not touched).
 
 ### The VM
 

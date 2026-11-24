@@ -28,6 +28,7 @@ PONI_SECRET_KEY=$(openssl rand -base64 32)
 PONI_GOOGLE_MOCK_URL=http://127.0.0.1:8090
 PONI_GBP_OAUTH_CLIENT_ID=mock-client
 PONI_GBP_OAUTH_CLIENT_SECRET=mock-secret
+PONI_SIGNIN_DOMAINS=example.com
 PONI_LOCATION_DISCOVERY_INTERVAL_S=60
 PONI_REVIEW_POLL_TICK_S=10
 PONI_REVIEW_FULL_SYNC_INTERVAL_S=300
@@ -36,6 +37,8 @@ PONI_PUBLIC_BUCKET=$HOME/.local/state/poni-gbp/mock-public
 PONI_PUBLIC_FOLDER_URL=http://127.0.0.1:8088
 EOF
 ```
+
+`PONI_SIGNIN_DOMAINS=example.com` is for the Workspace directory's connection, which is refused for an address outside the sign-in domains; the mock's administrator is `mock-owner@example.com`, and development sign-in does not read the setting. A `mock.env` made before needs that one line added.
 
 The public folder is served on 127.0.0.1:8088 so that the dashboard can show a report's page (D-105). Start the server once (from the repository's root):
 
@@ -80,7 +83,7 @@ The test portal is http://127.0.0.1:8090/, the dashboard http://localhost:5174. 
 
 ## Walk through
 
-1. **Connect the accounts.** Dashboard, development sign-in, **System status**: **Connect** on the GBP token card. The mock's consent page approves at once and sends the browser back; the card says connected. Do the same on the Notification email card. The mock signs both in as `mock-owner@example.com`, which each card shows as the connected account.
+1. **Connect the accounts.** Dashboard, development sign-in, **System status**: **Connect** on the GBP token card. The mock's consent page approves at once and sends the browser back; the card says connected. Do the same on the Notification email card. The mock signs both in as `mock-owner@example.com`, which each card shows as the connected account. Then **Connect** on the Workspace directory card: the mock signs in as `mock-owner@example.com` again, a delegated administrator, whom the engine finds in the made-up directory's list before it stores the token; the portal's "Workspace directory" section lists the made-up staff. Until the dashboard has that card, start the connection by hand in the same browser: `POST /api/connections/workspace/start`, signed in and with the CSRF token (from the browser's developer tools, for example), and open the `authorization_url` it answers.
 2. **Switch the locations on.** Within a minute **Locations** lists the mock's businesses, all switched off: a location does nothing until a person switches it on (D-102). Give each its industry (`food_beverage` for Golden Harbor Buffet, `wellness` for Willow Moon Head Spa) and switch it on; no client is needed (a client only groups locations, if you want one). Switching on starts a full sync, which brings in the made-up reviews, two of them with a reply the owner wrote, which the engine never posts over.
 3. **Post a review** in the portal: location, a made-up name, stars, text (or none). The engine finds it at the location's next poll (its poll interval, one minute at the shortest; set it on the location) and analyzes it and writes a draft (**Reviews**, **Approval queue**).
 4. **Approve and post.** Switch **Post replies and posts to Google** on under **Posting and sending** (off after installation, also in a mock database), then approve the draft in the **Approval queue**. The reply shows in the portal under the review, marked as posted by the engine, and the engine confirms it on its next read. To see the engine wait for a reply Google has not shown yet, set the portal's delay to, say, 120 seconds first.

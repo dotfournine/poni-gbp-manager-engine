@@ -41,16 +41,6 @@ The app's requests are in the app repository (`poni-gbp-manager-ios/docs/design/
 
 Decided in D-106. The items are built in the order listed; the last is the owner's.
 
-### The `workspace` connection
-
-**What and why.** D-106 point 2: the third account a signed-in person connects on the status page, the Workspace administrator whose directory the staff check reads.
-
-**What to build:** a third account in `http/connect`, asking for the read-only directory scope and for `openid email`; stored (D-043, D-100) only if the scope was granted, the address is of the sign-in domains (D-053), and the list, read with the new token, holds the account under the `sub` of its own ID token, with the same address, neither suspended nor archived, as an administrator. `WorkspaceStatus` on the status page, with the account's address; the spec and the contract first.
-
-**Done when:** an account connects against the mock and shows on the status page; a refused account stores nothing and leaves the other two tokens alone.
-
-**Touches:** D-043, D-079, D-100; the rule on connecting Google accounts in `CLAUDE.md`.
-
 ### The staff check
 
 **What and why.** D-106 points 1 and 4 to 7: a person may use the engine while their Workspace account is active, and the engine follows the directory by itself, so that a person who left loses their sessions within five minutes.
