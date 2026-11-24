@@ -27,10 +27,15 @@ void save_credential(pqxx::transaction_base& tx, std::string_view name, const St
 }
 
 std::optional<StoredCredential> load_credential(pqxx::transaction_base& tx, std::string_view name) {
-    const auto rows =
-        tx.exec("SELECT ciphertext, key_id, account_email FROM credentials WHERE name = $1", pqxx::params{std::string(name)});
+    const auto rows = tx.exec(std::format("SELECT ciphertext, key_id, account_email, {} AS updated_at FROM credentials WHERE name = $1",
+                                          db::iso("updated_at")),
+                              pqxx::params{std::string(name)});
     if (rows.empty()) return std::nullopt;
-    return StoredCredential{rows[0][0].as<std::string>(), rows[0][1].as<std::string>(), rows[0][2].as<std::optional<std::string>>()};
+    const auto row = rows[0];
+    return StoredCredential{.ciphertext = row["ciphertext"].as<std::string>(),
+                            .key_id = row["key_id"].as<std::string>(),
+                            .account_email = row["account_email"].as<std::optional<std::string>>(),
+                            .updated_at = row["updated_at"].as<std::string>()};
 }
 
 void save_oauth_credentials(pqxx::transaction_base& tx, const core::SecretBox& box, std::string_view name,

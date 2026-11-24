@@ -41,16 +41,6 @@ The app's requests are in the app repository (`poni-gbp-manager-ios/docs/design/
 
 Decided in D-106. The items are built in the order listed; the last is the owner's.
 
-### The staff check
-
-**What and why.** D-106 points 1 and 4 to 7: a person may use the engine while their Workspace account is active, and the engine follows the directory by itself, so that a person who left loses their sessions within five minutes.
-
-**What to build:** a job, every `PONI_STAFF_CHECK_INTERVAL_S` seconds (300, at least 60), reads the list and is the only thing that changes `users.status`: it disables every user the list does not show as active (point 5), deletes that person's sessions and unspent one-time codes, enables a disabled user the list holds active, and refreshes names. A run that could not read the list whole, or whose list does not hold the connected administrator, changes nothing and says so on the status page; staff are told once a day. Audit as `system:workspace`, a `system_problem` for each change. No migration.
-
-**Done when:** integration tests cover every way the check disables, enables or changes nothing, a disabled user's sessions are gone and the row stays, and development-sign-in users are never judged.
-
-**Touches:** D-095 point 5; the new rule on `users.status` in `CLAUDE.md`; the new `system_problem` subjects, added to the list in the description of `NotificationEventType` in `api/openapi.yaml`.
-
 ### People from the directory before their first sign-in
 
 **What and why.** D-106 point 8: an escalation can be assigned to a person who has not signed in yet.

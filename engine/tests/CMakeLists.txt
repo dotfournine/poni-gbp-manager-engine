@@ -78,6 +78,7 @@ add_executable(poni_integration_tests
   integration/push_test.cpp
   integration/reports_test.cpp
   integration/sql_test.cpp
+  integration/staff_check_test.cpp
   integration/sync_test.cpp
   integration/users_api_test.cpp
 )

@@ -123,6 +123,7 @@ add_library(poni_engine STATIC
   src/jobs/queue.cpp
   src/jobs/reports.cpp
   src/jobs/scheduler.cpp
+  src/jobs/staff_check.cpp
   src/jobs/sync.cpp
   src/jobs/worker.cpp
 )
