@@ -12,6 +12,7 @@ import email.policy
 import hashlib
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -294,31 +295,55 @@ class MockGoogle:
 
     # ---- the Admin SDK Directory API ----------------------------------------------------------
 
+    @staticmethod
+    def _directory_user_json(user: dict) -> dict:
+        """One user as users.get and users.list answer it."""
+        return {
+            "kind": "admin#directory#user",
+            "id": user["id"],
+            "primaryEmail": user["primaryEmail"],
+            "name": {
+                "givenName": user["givenName"],
+                "familyName": user["familyName"],
+                "fullName": f"{user['givenName']} {user['familyName']}",
+            },
+            "isAdmin": user["isAdmin"],
+            "isDelegatedAdmin": user["isDelegatedAdmin"],
+            "suspended": user["suspended"],
+            "archived": user["archived"],
+            "customerId": "C0mock0001",
+            "orgUnitPath": "/",
+        }
+
     def directory_user(self, user_id: str) -> Answer:
         """users.get by id only: Google also takes an address, but the engine never sends one."""
         with self.lock:
             user = self._directory_find("id", user_id)
             if user is None or user["deleted"]:
                 return directory_error(404, "notFound", "Resource Not Found: userKey")
-            return Answer(
-                200,
-                {
-                    "kind": "admin#directory#user",
-                    "id": user["id"],
-                    "primaryEmail": user["primaryEmail"],
-                    "name": {
-                        "givenName": user["givenName"],
-                        "familyName": user["familyName"],
-                        "fullName": f"{user['givenName']} {user['familyName']}",
-                    },
-                    "isAdmin": user["isAdmin"],
-                    "isDelegatedAdmin": user["isDelegatedAdmin"],
-                    "suspended": user["suspended"],
-                    "archived": user["archived"],
-                    "customerId": "C0mock0001",
-                    "orgUnitPath": "/",
-                },
-            )
+            return Answer(200, self._directory_user_json(user))
+
+    def list_directory_users(self, query: dict[str, str]) -> Answer:
+        """users.list of the connected account's own customer, the one way the engine asks it.
+
+        Suspended and archived users are listed with their flags, as at Google; deleted ones are not.
+        """
+        if query.get("customer") != "my_customer":
+            return directory_error(400, "invalid", "Invalid Input")
+        try:
+            size = int(query.get("maxResults") or 100)
+        except ValueError:
+            return directory_error(400, "invalid", "Invalid Input")
+        with self.lock:
+            users = [user for user in self.state["directory"] if not user["deleted"]]
+            page, token = self._page(users, query.get("pageToken"), size)
+            body: dict = {"kind": "admin#directory#users"}
+            # Google leaves an empty list out.
+            if page:
+                body["users"] = [self._directory_user_json(user) for user in page]
+            if token:
+                body["nextPageToken"] = token
+            return Answer(200, body)
 
     # ---- the Performance API ------------------------------------------------------------------
 
@@ -499,6 +524,39 @@ class MockGoogle:
             self._save()
             return {"id": review_id}
 
+    def add_directory_user(self, form: dict) -> dict:
+        """A new hire: a made-up person at example.com, under an id no user of the directory has or had."""
+        given, family, address = form.get("given_name"), form.get("family_name"), form.get("address")
+        if not all(isinstance(value, str) for value in (given, family, address)):
+            raise PortalError("A given name, a family name and an address are text.")
+        given, family, address = given.strip(), family.strip(), address.strip().lower()
+        if not (1 <= len(given) <= 60 and 1 <= len(family) <= 60):
+            raise PortalError("A given name and a family name are 1 to 60 characters each.")
+        if not re.fullmatch(r"[a-z0-9._-]{1,40}@example\.com", address):
+            raise PortalError(
+                "The address is at example.com, with 1 to 40 letters, digits, dots, dashes or underscores before the @."
+            )
+        with self.lock:
+            if self._directory_find("primaryEmail", address) is not None:
+                raise PortalError("A user of the directory has or had that address.")
+            # Not next_id: the reviews and the Outbox share it, so it could give a made-up user's id again.
+            user_id = str(max(int(user["id"]) for user in self.state["directory"]) + 1)
+            self.state["directory"].append(
+                {
+                    "id": user_id,
+                    "primaryEmail": address,
+                    "givenName": given,
+                    "familyName": family,
+                    "suspended": False,
+                    "archived": False,
+                    "deleted": False,
+                    "isAdmin": False,
+                    "isDelegatedAdmin": False,
+                }
+            )
+            self._save()
+            return {"id": user_id}
+
     def suspend_directory_user(self, user_id: str, form: dict) -> dict:
         suspended = form.get("suspended")
         if not isinstance(suspended, bool):
@@ -527,7 +585,7 @@ class MockGoogle:
             return {"id": user_id}
 
     def remove_directory_user(self, user_id: str) -> dict:
-        """An administrator deleted the account: the get answers 404."""
+        """An administrator deleted the account: the get answers 404, and it leaves the list."""
         with self.lock:
             user = self._directory_find("id", user_id)
             if user is None:

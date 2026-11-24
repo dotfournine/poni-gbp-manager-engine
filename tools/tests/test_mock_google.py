@@ -540,3 +540,126 @@ def test_the_portals_state_lists_the_directory_with_the_deleted_user_marked(goog
     assert [u["deleted"] for u in directory] == [False, False, True, False]
     assert [u["administrator"] for u in directory] == [True, False, False, False]
     assert directory[0]["primary_email"] == "mock-owner@example.com"
+
+
+def list_directory(google: Mock, query: str = "customer=my_customer&maxResults=500"):
+    return google.call("GET", f"{DIRECTORY}?{query}")
+
+
+def test_the_directory_lists_its_users(google: Mock) -> None:
+    google.connect()
+    status, _, body = list_directory(google)
+    assert status == 200
+    assert set(body) == {"kind", "users"}, "no nextPageToken"
+    assert body["kind"] == "admin#directory#users"
+    assert [u["id"] for u in body["users"]] == [u["id"] for u in google.mock.state["directory"]]
+    for user in body["users"]:
+        assert user == google.call("GET", f"{DIRECTORY}/{user['id']}")[2]
+
+
+def test_the_directory_list_is_paged(google: Mock) -> None:
+    google.connect()
+    status, _, first = list_directory(google, "customer=my_customer&maxResults=2")
+    assert status == 200 and len(first["users"]) == 2 and first["nextPageToken"]
+    status, _, rest = list_directory(google, f"customer=my_customer&maxResults=2&pageToken={first['nextPageToken']}")
+    assert status == 200 and len(rest["users"]) == 2 and "nextPageToken" not in rest
+    ids = [u["id"] for u in first["users"] + rest["users"]]
+    assert ids == [u["id"] for u in google.mock.state["directory"]]
+
+
+def test_an_empty_directory_page_has_no_users_member(google: Mock) -> None:
+    google.connect()
+    for user in list(google.mock.state["directory"]):
+        assert google.portal(f"/portal/directory/{user['id']}/remove", {})[0] == 200
+    status, _, body = list_directory(google)
+    assert status == 200 and body == {"kind": "admin#directory#users"}
+
+
+def test_the_directory_list_wants_my_customer_and_a_token(google: Mock) -> None:
+    assert list_directory(google)[0] == 401
+    google.connect()
+    for query in ("maxResults=500", "customer=C0mock0001", "customer=", "customer=my_customer&maxResults=many"):
+        status, _, body = list_directory(google, query)
+        assert status == 400, query
+        assert body["error"]["code"] == 400 and body["error"]["errors"][0]["reason"] == "invalid", query
+        assert "status" not in body["error"], query
+
+
+def test_a_deleted_user_leaves_the_list_and_a_suspended_one_stays_flagged(google: Mock) -> None:
+    google.connect()
+    gone, away = staff_id(google, 2), staff_id(google, 3)
+    assert google.portal(f"/portal/directory/{gone}/remove", {})[0] == 200
+    assert google.portal(f"/portal/directory/{away}/suspend", {"suspended": True})[0] == 200
+    users = {u["id"]: u for u in list_directory(google)[2]["users"]}
+    assert gone not in users and len(users) == 3
+    assert users[away]["suspended"] is True
+
+
+def new_hire(**changes: object) -> dict:
+    return {"given_name": "Robin", "family_name": "Newhire", "address": "robin.newhire@example.com", **changes}
+
+
+def test_a_person_added_in_the_portal_is_listed_and_read_by_id(google: Mock) -> None:
+    google.connect()
+    before = {u["id"] for u in google.mock.state["directory"]}
+    status, _, added = google.portal("/portal/directory", new_hire(address="  Robin.Newhire@Example.com "))
+    assert status == 200
+    new_id = added["id"]
+    assert len(new_id) == 21 and new_id.isdigit() and new_id not in before
+    listed = list_directory(google)[2]["users"]
+    assert listed[-1]["id"] == new_id and len(listed) == 5
+    status, _, user = google.call("GET", f"{DIRECTORY}/{new_id}")
+    assert status == 200 and user == listed[-1]
+    assert user["primaryEmail"] == "robin.newhire@example.com"
+    assert user["name"] == {"givenName": "Robin", "familyName": "Newhire", "fullName": "Robin Newhire"}
+    assert not any(user[flag] for flag in ("isAdmin", "isDelegatedAdmin", "suspended", "archived"))
+    portal = google.call("GET", "/portal/state", auth=False)[2]["directory"]
+    assert portal[-1] == {
+        "id": new_id,
+        "primary_email": "robin.newhire@example.com",
+        "full_name": "Robin Newhire",
+        "suspended": False,
+        "deleted": False,
+        "administrator": False,
+    }
+
+
+def test_an_added_persons_id_is_new_even_after_the_last_user_was_deleted(google: Mock) -> None:
+    last = google.mock.state["directory"][-1]["id"]
+    assert google.portal(f"/portal/directory/{last}/remove", {})[0] == 200
+    new_id = google.portal("/portal/directory", new_hire())[2]["id"]
+    assert int(new_id) == int(last) + 1
+
+
+def test_adding_a_person_is_refused_with_a_reason(google: Mock) -> None:
+    deleted = google.mock.state["directory"][3]
+    assert google.portal(f"/portal/directory/{deleted['id']}/remove", {})[0] == 200
+    refused = [
+        new_hire(address="avery.stone@example.com"),
+        new_hire(address=deleted["primaryEmail"]),
+        new_hire(address="robin@other.example"),
+        new_hire(address="robin newhire@example.com"),
+        new_hire(address="@example.com"),
+        new_hire(address="r" * 41 + "@example.com"),
+        new_hire(given_name="  "),
+        new_hire(family_name="y" * 61),
+        new_hire(given_name=7),
+        new_hire(address=None),
+        {"given_name": "Robin", "family_name": "Newhire"},
+    ]
+    for body in refused:
+        status, _, error = google.portal("/portal/directory", body)
+        assert status == 400 and isinstance(error["error"], str) and error["error"], body
+    assert len(google.mock.state["directory"]) == 4, "nothing was added"
+    assert google.portal("/portal/directory", new_hire())[0] == 200
+    status, _, error = google.portal("/portal/directory", new_hire())
+    assert status == 400 and error["error"] == "A user of the directory has or had that address."
+    assert google.portal("/portal/directory", new_hire(address="x@example.com"), header=False)[0] == 403
+
+
+def test_an_added_person_survives_a_restart(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    first = MockGoogle(path, REPOSITORY / "knowledge")
+    new_id = first.add_directory_user(new_hire())["id"]
+    again = MockGoogle(path, REPOSITORY / "knowledge")
+    assert again.directory_user(new_id).body["primaryEmail"] == "robin.newhire@example.com"

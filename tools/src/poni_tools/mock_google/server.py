@@ -43,6 +43,7 @@ _GET = [
         ),
         "search_keywords",
     ),
+    (re.compile(r"^/admin\.googleapis\.com/admin/directory/v1/users$"), "list_directory_users"),
     (re.compile(rf"^/admin\.googleapis\.com/admin/directory/v1/users/{_ID}$"), "directory_user"),
 ]
 _POST = [
@@ -56,6 +57,7 @@ _PORTAL = [
     (re.compile(rf"^/portal/reviews/{_ID}/edit$"), "edit_review"),
     (re.compile(rf"^/portal/reviews/{_ID}/remove$"), "remove_review"),
     (re.compile(r"^/portal/settings$"), "set_reply_delay"),
+    (re.compile(r"^/portal/directory$"), "add_directory_user"),
     (re.compile(rf"^/portal/directory/{_ID}/suspend$"), "suspend_directory_user"),
     (re.compile(rf"^/portal/directory/{_ID}/rename$"), "rename_directory_user"),
     (re.compile(rf"^/portal/directory/{_ID}/remove$"), "remove_directory_user"),
@@ -144,6 +146,8 @@ def make_handler(mock: MockGoogle) -> type[BaseHTTPRequestHandler]:
                     answer = mock.get_review(*ids)
                 case "daily_metrics":
                     answer = mock.daily_metrics(ids[0], query)
+                case "list_directory_users":
+                    answer = mock.list_directory_users(single)
                 case "directory_user":
                     answer = mock.directory_user(ids[0])
                 case _:
