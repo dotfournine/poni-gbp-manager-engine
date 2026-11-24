@@ -76,6 +76,7 @@ add_library(poni_engine STATIC
   src/db/repo_reports.cpp
   src/db/repo_reviews.cpp
   src/db/repo_settings.cpp
+  src/db/repo_users.cpp
   src/domain/dates.cpp
   src/domain/go_live.cpp
   src/domain/image_info.cpp

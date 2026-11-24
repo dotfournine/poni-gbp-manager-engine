@@ -13,6 +13,9 @@
 
 #include <gmock/gmock.h>
 
+#include <format>
+#include <optional>
+
 
 using namespace poni;
 using namespace std::chrono_literals;
@@ -409,6 +412,62 @@ TEST_F(RepliesApi, EscalationsAreListedAssignedAndClosed) {
     EXPECT_EQ(get("/api/escalations/9999", browser_).status, 404u);
     EXPECT_EQ(audited("escalation.assign"), 2);
     EXPECT_EQ(audited("escalation.close"), 1);
+}
+
+TEST_F(RepliesApi, ADisabledAssigneeStaysAssignedAndShowsSo) {
+    llm_.analyzer = FakeLlm::always(kSevere);
+    draft_for("hurt", "ONE", "The therapist pressed so hard that my neck has hurt for a week.");
+    const auto id = read("/api/escalations").at("items").at(0).at("id").as_int64();
+    const auto path = "/api/escalations/" + std::to_string(id);
+    sign_in(staff("other@xvisionmediaus.com"));
+    const auto colleague = value<std::int64_t>("SELECT id FROM users WHERE email = 'other@xvisionmediaus.com'");
+    const auto assign = boost::json::serialize(boost::json::object{{"assignee_id", colleague}});
+    ASSERT_EQ(post(path + "/assign", assign).status, 200u);
+    EXPECT_EQ(read(path).at("assignee").at("status").as_string(), "active");
+
+    exec("UPDATE users SET status = 'disabled' WHERE email = 'other@xvisionmediaus.com'");
+    const auto shown = read(path);
+    EXPECT_EQ(shown.at("assignee").at("id").as_int64(), colleague) << "still assigned";
+    EXPECT_EQ(shown.at("assignee").at("status").as_string(), "disabled");
+    EXPECT_EQ(read("/api/escalations").at("items").at(0).at("assignee").at("status").as_string(), "disabled");
+    EXPECT_EQ(error_code(post(path + "/assign", assign)), "user_not_found") << "nothing new for a disabled user, the same included";
+}
+
+// The owner's rule: a disabled person stays visible to their colleagues wherever they did something.
+TEST_F(RepliesApi, ADisabledPersonStillNamesWhatTheyDid) {
+    constexpr std::string_view kColleague = "other@xvisionmediaus.com";
+    const auto draft_id = draft_for();
+    llm_.analyzer = FakeLlm::always(kSevere);
+    draft_for("hurt", "ONE", "The therapist pressed so hard that my neck has hurt for a week.");
+    const auto escalation = read("/api/escalations").at("items").at(0).at("id").as_int64();
+    const auto draft_path = "/api/drafts/" + std::to_string(draft_id);
+    const auto escalation_path = "/api/escalations/" + std::to_string(escalation);
+
+    const auto colleague = sign_in(staff(std::string(kColleague)));
+    const auto colleague_id = value<std::int64_t>(std::format("SELECT id FROM users WHERE email = '{}'", kColleague));
+    ASSERT_EQ(post(escalation_path + "/assign", boost::json::serialize(boost::json::object{{"assignee_id", colleague_id}})).status, 200u);
+    const auto rejected = call(verb::post, draft_path + "/reject", colleague, body_of("reason", "The owner answers this guest herself."));
+    ASSERT_EQ(rejected.status, 200u) << rejected.body;
+    const auto closed = call(verb::post, escalation_path + "/close", colleague, R"({"reason": "resolved"})");
+    ASSERT_EQ(closed.status, 200u) << closed.body;
+    const auto actor = std::format("/api/audit-log?actor={}", kColleague);
+    const auto entries = read(actor).at("total").as_int64();
+    EXPECT_GE(entries, 2) << "the rejection and the close, in their name";
+
+    exec(std::format("UPDATE users SET status = 'disabled' WHERE email = '{}'", kColleague));
+    EXPECT_EQ(read(draft_path).at("decided_by").as_string(), kColleague);
+    EXPECT_EQ(read(escalation_path).at("closed_by").as_string(), kColleague);
+    const auto theirs = read("/api/escalations?assignee_id=" + std::to_string(colleague_id));
+    ASSERT_EQ(theirs.at("total").as_int64(), 1);
+    EXPECT_EQ(theirs.at("items").at(0).at("assignee").at("status").as_string(), "disabled");
+    const auto log = read(actor);
+    EXPECT_EQ(log.at("total").as_int64(), entries) << "none of their entries is dropped";
+    for (const auto& entry : log.at("items").as_array()) EXPECT_EQ(entry.at("actor").as_string(), kColleague);
+    std::optional<std::string> status;
+    for (const auto& user : read("/api/users?status=all").at("items").as_array()) {
+        if (user.at("id").as_int64() == colleague_id) status = std::string(user.at("status").as_string());
+    }
+    EXPECT_EQ(status, "disabled");
 }
 
 TEST_F(RepliesApi, NotificationRulesAreManagedAndTheLogShowsWhatHappened) {

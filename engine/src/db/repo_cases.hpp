@@ -54,7 +54,4 @@ Result<model::Escalation> assign_escalation(pqxx::transaction_base& tx, audit::W
 Result<model::Escalation> close_escalation(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const std::string& reason,
                                            const std::string& note);
 
-// Everyone who can be assigned: users that aren't disabled, by name.
-model::UserList list_users(pqxx::transaction_base& tx);
-
 }  // namespace poni::repo

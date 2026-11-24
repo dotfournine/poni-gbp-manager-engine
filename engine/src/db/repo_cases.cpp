@@ -30,7 +30,7 @@ std::string case_select() {
     return std::format(R"sql(
         SELECT k.id, k.review_id, k.status, k.severity_flags,
                CASE WHEN a.id IS NOT NULL
-                    THEN jsonb_build_object('id', a.id, 'email', a.email, 'name', a.name, 'picture_url', a.picture_url) END AS assignee,
+                    THEN jsonb_build_object('id', a.id, 'email', a.email, 'name', a.name, 'picture_url', a.picture_url, 'status', a.status) END AS assignee,
                {} AS assigned_at, k.close_reason, k.close_note, (SELECT u.email FROM users u WHERE u.id = k.closed_by) AS closed_by,
                {} AS closed_at, {} AS opened_at, {} AS updated_at
           FROM cases k
@@ -167,11 +167,6 @@ Result<model::Escalation> close_escalation(pqxx::transaction_base& tx, audit::Wr
                  {.before = {{"status", "open"}},
                   .after = {{"status", "closed"}, {"reason", reason}, {"note", cleaned_note}}});
     return *get_escalation(tx, id);
-}
-
-model::UserList list_users(pqxx::transaction_base& tx) {
-    return {.items = db::rows_as<model::User>(
-                tx, "SELECT id, email, name, picture_url FROM users WHERE status = 'active' ORDER BY lower(name), id")};
 }
 
 }  // namespace poni::repo
