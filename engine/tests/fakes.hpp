@@ -15,6 +15,7 @@
 #include "connectors/llm/client.hpp"
 #include "connectors/pubsub/subscriber.hpp"
 #include "connectors/storage/store.hpp"
+#include "connectors/workspace/directory.hpp"
 #include "core/json.hpp"
 #include "core/mapped_file.hpp"
 #include "domain/local_post.hpp"
@@ -789,6 +790,24 @@ public:
             sent.push_back(std::move(push));
         }
         co_return out;
+    }
+};
+
+// The Workspace directory's list, as the staff check reads it: the users it
+// holds or a failure, and how often it was read.
+class FakeDirectory final : public workspace::Directory {
+public:
+    std::vector<workspace::DirectoryUser> users;
+    std::optional<google::ApiError> failure;
+    int lists = 0;
+    // Called on every read before it answers: a test connects another account there, or throws.
+    std::function<void()> on_list;
+
+    boost::asio::awaitable<google::Result<std::vector<workspace::DirectoryUser>>> list_users() override {
+        ++lists;
+        if (on_list) on_list();
+        if (failure) co_return std::unexpected(*failure);
+        co_return users;
     }
 };
 

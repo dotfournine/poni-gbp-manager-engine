@@ -1,12 +1,18 @@
-// The staff check (D-106 points 4 to 7) against a real PostgreSQL: who is
-// disabled and enabled for what the Workspace directory's list says, what a
-// disable ends, and every way a run changes nothing.
+// The staff check (D-106 points 4 to 7) against a real PostgreSQL and a fake
+// Workspace directory: who is disabled and enabled for what the directory's
+// list says, what a disable ends, and every way a run changes nothing.
 
 #include "core/crypto.hpp"
 #include "db/repo_auth.hpp"
 #include "db/repo_users.hpp"
 #include "engine_fixture.hpp"
+#include "fakes.hpp"
+#include "jobs/scheduler.hpp"
+#include "jobs/staff_check.hpp"
+#include "jobs/worker.hpp"
 
+#include <boost/asio/error.hpp>
+#include <boost/system/system_error.hpp>
 #include <gtest/gtest.h>
 
 #include <format>
@@ -28,7 +34,21 @@ protected:
         if (HasFatalFailure()) return;
         connect(kAdmin);
         admin_ = add_user("100", kAdmin, "Ada Admin");
+        // The connected administrator, as a custom role shows them.
+        directory_.users.push_back({.id = "100", .primary_email = std::string(kAdmin), .full_name = "Ada Admin", .is_delegated_admin = true});
+        check_.emplace(db(), clock_, directory_, 300s);
     }
+
+    // The directory's entry for a person.
+    void list(std::string_view id, std::string_view email, std::string_view full_name, bool suspended = false, bool archived = false) {
+        directory_.users.push_back({.id = std::string(id),
+                                    .primary_email = std::string(email),
+                                    .full_name = std::string(full_name),
+                                    .suspended = suspended,
+                                    .archived = archived});
+    }
+
+    void run() { await(check_->run()); }
 
     // The Workspace administrator's connection, as the connect callback stores it, at the clock's now.
     void connect(std::string_view email) {
@@ -91,9 +111,12 @@ protected:
 
     core::SecretBox box_ = core::SecretBox::from_base64_key(core::base64_encode(std::string(32, 'k'))).value();
     std::int64_t admin_ = 0;
+    test::FakeDirectory directory_;
+    std::optional<jobs::StaffCheck> check_;
 };
 
 class StaffCheckApply : public StaffCheckTest {};
+class StaffCheck : public StaffCheckTest {};
 
 }  // namespace
 
@@ -291,4 +314,205 @@ TEST_F(StaffCheckApply, ADisableIsOneAuditEntryByTheWorkspaceWithItsReasonAndThe
                                 "(after->>'sessions_ended')::int = 2",
                                 sam)),
               1);
+}
+
+// ---- the job, with the fake directory ---------------------------------------------------------
+
+TEST_F(StaffCheck, OneRunReadsTheListOnceAndDisablesASuspendedUser) {
+    const auto sam = add_user("200", "sam@example.com", "Sam Staff");
+    sign_in_everywhere(sam);
+    list("200", "sam@example.com", "Sam Staff", /*suspended=*/true);
+
+    run();
+
+    EXPECT_EQ(directory_.lists, 1) << "one list, every page, and no get of one user";
+    EXPECT_EQ(status(sam), "disabled");
+    EXPECT_EQ(sessions_of(sam), 0);
+    EXPECT_EQ(status(admin_), "active");
+    EXPECT_EQ(entries("user.disable", sam), 1);
+    EXPECT_EQ(notices("A staff account was disabled: sam@example.com"), 1);
+    // The status page shows the run's outcome under workspace.
+    tx([&](pqxx::work& tx) {
+        const auto workspace = repo::integration(tx, repo::kWorkspaceStatus);
+        EXPECT_TRUE(workspace.last_ok_at);
+        EXPECT_FALSE(workspace.last_error);
+    });
+    EXPECT_EQ(count("integration_status WHERE name = 'workspace' AND (detail->>'listed')::int = 2 AND (detail->>'disabled')::int = 1 "
+                    "AND (detail->>'enabled')::int = 0"),
+              1);
+}
+
+TEST_F(StaffCheck, AUserMissingFromTheListIsDisabledWhateverTheirDomain) {
+    const auto own = add_user("200", "sam@example.com", "Sam Staff");
+    const auto other = add_user("201", "kim@nobody-listed.example", "Kim Staff");
+    run();
+    EXPECT_EQ(status(own), "disabled");
+    EXPECT_EQ(status(other), "disabled");
+    EXPECT_EQ(status(admin_), "active");
+}
+
+TEST_F(StaffCheck, ANewUserMissingFromTheListIsDisabledAndEnabledOnceTheListHoldsThem) {
+    clock_.advance(1h);
+    const auto fresh = add_user("200", "new@example.com", "New Hire");
+    clock_.advance(1min);
+
+    run();
+    EXPECT_EQ(status(fresh), "disabled") << "no grace for a new user (the owner)";
+
+    list("200", "new@example.com", "New Hire");
+    clock_.advance(5min);
+    run();
+    EXPECT_EQ(status(fresh), "active");
+    EXPECT_EQ(entries("user.enable", fresh), 1);
+}
+
+TEST_F(StaffCheck, AListThatCouldNotBeReadChangesNobody) {
+    const auto active = add_user("200", "sam@example.com", "Sam Staff");  // missing from the list
+    const auto disabled = add_user("201", "kim@example.com", "Kim Staff", "disabled");
+    list("201", "kim@example.com", "Kim Staff");  // listed active
+
+    const std::vector<google::ApiError> failures{
+        {google::ApiError::Kind::permission_denied, 403, "HTTP 403 Not Authorized to access this resource/api"},
+        google::not_configured("no Workspace administrator is connected; connect one on the dashboard's status page"),
+        {google::ApiError::Kind::unavailable, 500, "HTTP 500"},
+    };
+    for (const auto& failure : failures) {
+        directory_.failure = failure;
+        run();
+        EXPECT_EQ(status(active), "active") << failure.message;
+        EXPECT_EQ(status(disabled), "disabled") << failure.message;
+        EXPECT_EQ(value<std::string>("SELECT last_error FROM integration_status WHERE name = 'workspace'"), failure.message);
+        clock_.advance(5min);
+    }
+    // A network failure: google::guarded makes it an error.
+    directory_.failure.reset();
+    directory_.on_list = [] { throw boost::system::system_error(boost::asio::error::connection_reset); };
+    run();
+    EXPECT_EQ(status(active), "active");
+    EXPECT_EQ(status(disabled), "disabled");
+    EXPECT_EQ(count("integration_status WHERE name = 'workspace' AND last_error LIKE 'network error: %'"), 1);
+
+    EXPECT_EQ(count("audit_log WHERE actor = 'system:workspace'"), 0);
+    const auto unreadable = "notification_deliveries WHERE subject = 'The staff check could not use the Workspace directory'";
+    EXPECT_EQ(count(unreadable), 1) << "one notice a day";
+    EXPECT_EQ(count(std::string(unreadable) + " AND body LIKE 'The staff check could not read the Workspace directory''s list%' AND "
+                                              "body LIKE '%Nobody is disabled or enabled until it works again%'"),
+              1);
+    clock_.advance(24h);
+    run();
+    EXPECT_EQ(count(unreadable), 2) << "and one the next day";
+}
+
+TEST_F(StaffCheck, AListThatDoesNotHoldTheAdministratorAsAnActiveAdministratorChangesNobody) {
+    const auto active = add_user("200", "sam@example.com", "Sam Staff");  // missing from every list below
+    const auto disabled = add_user("201", "kim@example.com", "Kim Staff", "disabled");
+    const workspace::DirectoryUser kim{.id = "201", .primary_email = "kim@example.com", .full_name = "Kim Staff"};
+    const auto admin = directory_.users.front();
+    auto suspended_admin = admin;
+    suspended_admin.suspended = true;
+    auto archived_admin = admin;
+    archived_admin.archived = true;
+    auto plain_admin = admin;
+    plain_admin.is_delegated_admin = false;
+
+    const std::vector<std::vector<workspace::DirectoryUser>> lists{
+        {kim},                   // the administrator is not in it
+        {suspended_admin, kim},  // suspended
+        {archived_admin, kim},   // archived
+        {plain_admin, kim},      // no administrator
+        {},                      // an empty list
+    };
+    for (const auto& users : lists) {
+        directory_.users = users;
+        run();
+        EXPECT_EQ(status(active), "active");
+        EXPECT_EQ(status(disabled), "disabled");
+        EXPECT_EQ(status(admin_), "active");
+        EXPECT_EQ(value<std::string>("SELECT last_error FROM integration_status WHERE name = 'workspace'"),
+                  "the directory's list does not hold the connected administrator as an active administrator");
+    }
+    EXPECT_EQ(count("audit_log WHERE actor = 'system:workspace'"), 0);
+    EXPECT_EQ(count("notification_deliveries WHERE subject = 'The staff check could not use the Workspace directory' AND "
+                    "body LIKE 'The Workspace directory''s list was read, but it does not hold the connected administrator%' AND "
+                    "body LIKE '%Connect another administrator of this Workspace%' AND body LIKE '%Waiting does not help.'"),
+              1);
+}
+
+TEST_F(StaffCheck, TheAdministratorIsFoundByAddressWhateverItsCaseAndAsASuperAdministrator) {
+    const auto sam = add_user("200", "sam@example.com", "Sam Staff");
+    directory_.users.front().primary_email = "Admin@Example.com";
+    directory_.users.front().is_delegated_admin = false;
+    directory_.users.front().is_admin = true;
+    list("200", "sam@example.com", "Sam Staff", false, /*archived=*/true);
+    run();
+    EXPECT_EQ(status(sam), "disabled");
+}
+
+TEST_F(StaffCheck, ARowFromDevelopmentSignInIsNeverJudged) {
+    const auto dev = stored(std::format("INSERT INTO users (google_sub, email, name, created_at, last_login_at) VALUES "
+                                        "('dev:someone@localhost', 'someone@localhost', 'Someone', '{0}', '{0}') RETURNING id",
+                                        db::to_timestamptz(clock_.now())));
+    run();
+    EXPECT_EQ(status(dev), "active");
+    EXPECT_EQ(count("audit_log WHERE action = 'user.disable'"), 0);
+}
+
+TEST_F(StaffCheck, NothingConnectedReadsNothingAndRecordsNothing) {
+    const auto sam = add_user("200", "sam@example.com", "Sam Staff");
+    exec("DELETE FROM credentials WHERE name = 'workspace'");
+    run();
+    // A connection without an address (stored before D-100) is none either.
+    exec("INSERT INTO credentials (name, ciphertext, key_id, created_at, updated_at) VALUES ('workspace', 'x', 'k', now(), now())");
+    run();
+
+    EXPECT_EQ(directory_.lists, 0);
+    EXPECT_EQ(status(sam), "active");
+    EXPECT_EQ(count("integration_status WHERE name = 'workspace'"), 0);
+    EXPECT_EQ(all_entries(), 0);
+    EXPECT_EQ(all_notices(), 0);
+}
+
+TEST_F(StaffCheck, AnotherAccountConnectedWhileTheListIsReadChangesNothing) {
+    const auto sam = add_user("200", "sam@example.com", "Sam Staff");
+    list("200", "sam@example.com", "Sam Staff", /*suspended=*/true);
+    const auto before = all_entries();
+    directory_.on_list = [&] {
+        clock_.advance(1s);
+        connect("other-admin@example.com");
+    };
+
+    run();
+
+    EXPECT_EQ(directory_.lists, 1);
+    EXPECT_EQ(status(sam), "active");
+    EXPECT_EQ(all_entries(), before);
+    EXPECT_EQ(all_notices(), 0);
+    EXPECT_EQ(count("integration_status WHERE name = 'workspace'"), 0) << "nothing is recorded";
+}
+
+TEST_F(StaffCheck, TheSchedulerAndAWorkerCarryARunAtTheInterval) {
+    const auto sam = add_user("200", "sam@example.com", "Sam Staff");
+    list("200", "sam@example.com", "Sam Staff", /*suspended=*/true);
+    jobs::Registry registry;
+    jobs::install(registry, *check_);
+    jobs::Scheduler scheduler(io_.get_executor(), queue(), registry.recurring(), {});
+    jobs::Worker worker(io_.get_executor(), queue(), registry, {.id = "test-worker"});
+    const auto run_all = [&] {
+        await(scheduler.tick());
+        while (await(worker.run_once())) {
+        }
+    };
+
+    run_all();
+    EXPECT_EQ(directory_.lists, 1);
+    EXPECT_EQ(status(sam), "disabled");
+    run_all();
+    EXPECT_EQ(directory_.lists, 1) << "one run per slot";
+
+    directory_.users.back().suspended = false;
+    clock_.advance(300s);
+    run_all();
+    EXPECT_EQ(directory_.lists, 2);
+    EXPECT_EQ(status(sam), "active");
+    EXPECT_EQ(count("jobs WHERE kind = 'workspace.check_staff' AND status = 'failed'"), 0);
 }

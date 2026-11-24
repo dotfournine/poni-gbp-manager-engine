@@ -51,6 +51,7 @@
 #include "jobs/queue.hpp"
 #include "jobs/reports.hpp"
 #include "jobs/scheduler.hpp"
+#include "jobs/staff_check.hpp"
 #include "jobs/sync.hpp"
 #include "jobs/worker.hpp"
 
@@ -204,6 +205,11 @@ int run(const core::Config& config) {
         clock, google::refresh_fetch(http_client, limiter, http::stored_credentials(database, box, http::kConnectGmail)));
     notify::GmailChannel email_channel({http_client, gmail_tokens, limiter}, config.email_from_name, http::stored_mailbox_address(database));
 
+    // The Workspace administrator (D-106 point 2): its token reads the directory's list of users and nothing else.
+    google::CachedTokenSource workspace_tokens(
+        clock, google::refresh_fetch(http_client, limiter, http::stored_credentials(database, box, http::kConnectWorkspace)));
+    workspace::HttpDirectory directory({http_client, workspace_tokens, limiter});
+
     // Push to the phone app (D-097), with the APNs settings only.
     std::optional<notify::ApnsSender> apns;
     if (config.apns) {
@@ -271,6 +277,8 @@ int run(const core::Config& config) {
     jobs::Reporter reporter(database, clock, performance_reader, llm_client, email_channel, public_store.get());
     // Ideas and texts for local posts, when a person asks (D-088 point 11). Nothing schedules it.
     jobs::PostAdvisor post_advisor(database, clock, llm_client, performance_reader);
+    // Who may use the engine, from the directory's list (D-106 point 4). Also against the mock: it judges only Google ids.
+    jobs::StaffCheck staff_check(database, clock, directory, config.staff_check_interval);
 
     jobs::Registry registry;
     jobs::install_builtin(registry, database, queue,
@@ -284,6 +292,7 @@ int run(const core::Config& config) {
     jobs::install(registry, go_live_tester);
     jobs::install(registry, notifier);
     jobs::install(registry, reporter);
+    jobs::install(registry, staff_check);
 
     // ---- inbound: the dashboard's API ------------------------------------------
     std::optional<identity::GoogleProvider> google_signin;
@@ -306,7 +315,7 @@ int run(const core::Config& config) {
         // By name, each its own: a name that is none of these invalidates nothing.
         if (account == http::kConnectGbp) gbp_tokens.invalidate();
         if (account == http::kConnectGmail) gmail_tokens.invalidate();
-        // kConnectWorkspace: nothing caches a Workspace token until the staff check exists.
+        if (account == http::kConnectWorkspace) workspace_tokens.invalidate();
     });
     if (!connect.configured()) {
         log::warn("Google accounts can't be connected from the dashboard: set PONI_GBP_OAUTH_CLIENT_ID, PONI_GBP_OAUTH_CLIENT_SECRET "
