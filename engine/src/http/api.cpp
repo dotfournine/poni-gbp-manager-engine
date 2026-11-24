@@ -17,7 +17,8 @@ using boost::beast::http::verb;
 using namespace api_support;
 
 void add_api_routes(Router& router, db::Database& db, const core::Clock& clock, ApiOptions options, jobs::ReviewPipeline& pipeline,
-                    jobs::Reporter& reporter, storage::ObjectStore* public_store, jobs::PostAdvisor& advisor) {
+                    jobs::Reporter& reporter, storage::ObjectStore* public_store, jobs::PostAdvisor& advisor,
+                    workspace::Directory& directory, std::span<const std::string> signin_domains) {
     const Api api{db, clock, std::move(options)};
 
     // ---- clients -----------------------------------------------------------------
@@ -179,6 +180,7 @@ void add_api_routes(Router& router, db::Database& db, const core::Clock& clock, 
     add_go_live_routes(router, api);
     add_local_post_routes(router, api, public_store, advisor);
     add_report_routes(router, api, reporter);
+    add_user_routes(router, api, directory, signin_domains);
 }
 
 }  // namespace poni::http

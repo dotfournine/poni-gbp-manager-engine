@@ -336,7 +336,7 @@ int run(const core::Config& config) {
                           .connect_configured = connect.configured(),
                           .google_mock = config.google_mock(),
                           .push_environment = config.apns ? std::optional(config.apns->environment) : std::nullopt},
-                         pipeline, reporter, public_store.get(), post_advisor);
+                         pipeline, reporter, public_store.get(), post_advisor, directory, config.signin_domains);
 
     std::optional<http::Server> server;
     try {

@@ -105,6 +105,7 @@ add_library(poni_engine STATIC
   src/http/api_replies.cpp
   src/http/api_local_posts.cpp
   src/http/api_reports.cpp
+  src/http/api_users.cpp
   src/http/auth.cpp
   src/http/client.cpp
   src/http/connect.cpp

@@ -65,6 +65,7 @@ const std::map<std::string, std::string> kRoutesWithBody = {
     {"POST /api/locations/{id}/local-post-drafts", "topic_type"},
     {"POST /api/escalations/{id}/assign", ""},
     {"POST /api/escalations/{id}/close", "reason"},
+    {"POST /api/users", "directory_id"},
     {"POST /api/notification-rules", "event_type"},
     {"PATCH /api/notification-rules/{id}", "recipients"},
     {"POST /api/notifications/test", "recipient"},

@@ -53,7 +53,7 @@ protected:
         if (!api_advisor_ && !own_advisor_) own_advisor_.emplace(db(), clock_, own_llm_, own_performance_);
         http::add_api_routes(*router_, db(), clock_, api_options_, api_pipeline_ ? *api_pipeline_ : *own_pipeline_,
                              api_reporter_ ? *api_reporter_ : *own_reporter_, api_public_store_,
-                             api_advisor_ ? *api_advisor_ : *own_advisor_);
+                             api_advisor_ ? *api_advisor_ : *own_advisor_, directory_, config_.signin_domains);
     }
 
     // What the engine was started with; set before build().
@@ -265,6 +265,8 @@ protected:
     }
 
     FakeIdentityProvider provider_;
+    // The Workspace directory the users' routes read (D-106 point 8); empty unless a test lists people in it.
+    FakeDirectory directory_;
     // What the services of fakes stand on, for a test that brings none of its own.
     FakeLlm own_llm_;
     FakePerformance own_performance_;

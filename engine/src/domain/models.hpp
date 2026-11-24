@@ -681,6 +681,20 @@ struct UserList {
 };
 BOOST_DESCRIBE_STRUCT(UserList, (), (items))
 
+// A person of the Workspace directory, as the search finds them (D-106 point 8).
+struct DirectoryPerson {
+    std::string directory_id;
+    std::string email;
+    std::string name;
+    std::optional<std::int64_t> user_id;  // the engine's user for this person; none while they are no user
+};
+BOOST_DESCRIBE_STRUCT(DirectoryPerson, (), (directory_id, email, name, user_id))
+
+struct DirectoryPersonList {
+    std::vector<DirectoryPerson> items;
+};
+BOOST_DESCRIBE_STRUCT(DirectoryPersonList, (), (items))
+
 // A review that needs a person: the simplest form of a case (D-054).
 struct Escalation {
     std::int64_t id = 0;

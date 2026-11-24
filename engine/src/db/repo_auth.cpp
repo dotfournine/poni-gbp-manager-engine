@@ -117,6 +117,13 @@ Integration integration(pqxx::transaction_base& tx, std::string_view name) {
 }
 
 UpsertedUser upsert_user(pqxx::transaction_base& tx, const NewUser& user, core::TimePoint now) {
+    // A row made from the Workspace directory has no sign-in time (D-106 point 8): its person's first sign-in is still one,
+    // although the upsert below finds the row. Locked, so that two sign-ins at once cannot both call themselves the first;
+    // FOR NO KEY UPDATE is the lock the upsert takes anyway, and unlike FOR UPDATE it does not wait for the inserts that name
+    // the user (a session, an audit entry), as in apply_staff_check.
+    const auto before = tx.exec("SELECT last_login_at IS NULL AS never_signed_in FROM users WHERE google_sub = $1 FOR NO KEY UPDATE",
+                                pqxx::params{user.google_sub});
+    const bool never_signed_in = !before.empty() && before[0]["never_signed_in"].as<bool>();
     const auto row = tx.exec(
                            R"sql(
         INSERT INTO users (google_sub, email, name, picture_url, created_at, last_login_at)
@@ -132,7 +139,7 @@ UpsertedUser upsert_user(pqxx::transaction_base& tx, const NewUser& user, core::
                  .email = row[1].as<std::string>(),
                  .name = row[2].as<std::string>(),
                  .picture_url = row[3].as<std::optional<std::string>>()},
-        .created = row[5].as<bool>(),
+        .created = row[5].as<bool>() || never_signed_in,
         .disabled = row[4].as<std::string>() != "active",
     };
 }

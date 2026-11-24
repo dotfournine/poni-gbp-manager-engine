@@ -81,6 +81,7 @@ add_executable(poni_integration_tests
   integration/staff_check_test.cpp
   integration/sync_test.cpp
   integration/users_api_test.cpp
+  integration/users_directory_test.cpp
 )
 target_include_directories(poni_integration_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(poni_integration_tests PRIVATE
