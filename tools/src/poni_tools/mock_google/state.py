@@ -20,7 +20,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 
-from .data import initial_state, rfc3339
+from .data import directory_users, initial_state, rfc3339
 
 STARS = {1: "ONE", 2: "TWO", 3: "THREE", 4: "FOUR", 5: "FIVE"}
 PAGE_SIZE = 50
@@ -40,6 +40,24 @@ class Answer:
 def google_error(status: int, code: str, message: str) -> Answer:
     """Google's error shape, which the engine's describe_failure reads."""
     return Answer(status, {"error": {"code": status, "message": message, "status": code}})
+
+
+def directory_error(status: int, reason: str, message: str) -> Answer:
+    """The Admin SDK Directory API's error shape, which has no status word.
+
+    From memory of Google's answers, not from its documentation, which describes no 404 for users.get. So the
+    engine must tell "gone" from the HTTP status alone, never from a member of this body.
+    """
+    return Answer(
+        status,
+        {
+            "error": {
+                "code": status,
+                "message": message,
+                "errors": [{"domain": "global", "reason": reason, "message": message}],
+            }
+        },
+    )
 
 
 def not_found(what: str = "Requested entity was not found.") -> Answer:
@@ -64,6 +82,10 @@ class MockGoogle:
             self._save()
         else:
             self.state = json.loads(path.read_text(encoding="utf-8"))
+            # A state file from before the directory: it gains one, and nothing else of it changes.
+            if "directory" not in self.state:
+                self.state["directory"] = directory_users()
+                self._save()
 
     # ---- storage ------------------------------------------------------------------------
 
@@ -85,6 +107,10 @@ class MockGoogle:
             ),
             None,
         )
+
+    def _directory_find(self, key: str, value: str) -> dict | None:
+        """The directory user whose member `key` is `value`, deleted or not. Takes no lock: the caller holds it."""
+        return next((user for user in self.state["directory"] if user[key] == value), None)
 
     # ---- Google's JSON ------------------------------------------------------------------
 
@@ -167,7 +193,10 @@ class MockGoogle:
                 body = self._access(grant_info["scope"])
                 body["refresh_token"] = refresh
                 if "openid" in grant_info["scope"].split():
-                    body["id_token"] = _id_token(grant_info["email"])
+                    # Google's sub is the account's directory id; an address the directory does not hold is "mock".
+                    user = self._directory_find("primaryEmail", grant_info["email"])
+                    sub = user["id"] if user and not user["deleted"] else "mock"
+                    body["id_token"] = _id_token(grant_info["email"], sub)
                 return Answer(200, body)
             if grant == "refresh_token":
                 known = self.state["refresh_tokens"].get(form.get("refresh_token", ""))
@@ -262,6 +291,34 @@ class MockGoogle:
             }
             self._save()
             return Answer(200, {"comment": comment, "updateTime": updated})
+
+    # ---- the Admin SDK Directory API ----------------------------------------------------------
+
+    def directory_user(self, user_id: str) -> Answer:
+        """users.get by id only: Google also takes an address, but the engine never sends one."""
+        with self.lock:
+            user = self._directory_find("id", user_id)
+            if user is None or user["deleted"]:
+                return directory_error(404, "notFound", "Resource Not Found: userKey")
+            return Answer(
+                200,
+                {
+                    "kind": "admin#directory#user",
+                    "id": user["id"],
+                    "primaryEmail": user["primaryEmail"],
+                    "name": {
+                        "givenName": user["givenName"],
+                        "familyName": user["familyName"],
+                        "fullName": f"{user['givenName']} {user['familyName']}",
+                    },
+                    "isAdmin": user["isAdmin"],
+                    "isDelegatedAdmin": user["isDelegatedAdmin"],
+                    "suspended": user["suspended"],
+                    "archived": user["archived"],
+                    "customerId": "C0mock0001",
+                    "orgUnitPath": "/",
+                },
+            )
 
     # ---- the Performance API ------------------------------------------------------------------
 
@@ -378,6 +435,17 @@ class MockGoogle:
                 "reply_delay_s": self.state["reply_delay_s"],
                 "locations": locations,
                 "outbox": self.state["outbox"],
+                "directory": [
+                    {
+                        "id": user["id"],
+                        "primary_email": user["primaryEmail"],
+                        "full_name": f"{user['givenName']} {user['familyName']}",
+                        "suspended": user["suspended"],
+                        "deleted": user["deleted"],
+                        "administrator": user["isAdmin"] or user["isDelegatedAdmin"],
+                    }
+                    for user in self.state["directory"]
+                ],
             }
 
     def post_review(self, form: dict) -> dict:
@@ -430,6 +498,53 @@ class MockGoogle:
             review["deleted"] = True
             self._save()
             return {"id": review_id}
+
+    def suspend_directory_user(self, user_id: str, form: dict) -> dict:
+        suspended = form.get("suspended")
+        if not isinstance(suspended, bool):
+            raise PortalError("suspended is true or false.")
+        with self.lock:
+            user = self._directory_find("id", user_id)
+            if user is None:
+                raise PortalError("No such user.")
+            if user["deleted"]:
+                raise PortalError("The user is deleted; restore them first.")
+            user["suspended"] = suspended
+            self._save()
+            return {"id": user_id}
+
+    def rename_directory_user(self, user_id: str, form: dict) -> dict:
+        given = str(form.get("given_name") or "").strip()
+        family = str(form.get("family_name") or "").strip()
+        if not (1 <= len(given) <= 60 and 1 <= len(family) <= 60):
+            raise PortalError("A given name and a family name are 1 to 60 characters each.")
+        with self.lock:
+            user = self._directory_find("id", user_id)
+            if user is None:
+                raise PortalError("No such user.")
+            user["givenName"], user["familyName"] = given, family
+            self._save()
+            return {"id": user_id}
+
+    def remove_directory_user(self, user_id: str) -> dict:
+        """An administrator deleted the account: the get answers 404."""
+        with self.lock:
+            user = self._directory_find("id", user_id)
+            if user is None:
+                raise PortalError("No such user.")
+            user["deleted"] = True
+            self._save()
+            return {"id": user_id}
+
+    def restore_directory_user(self, user_id: str) -> dict:
+        """The account was undeleted: it answers again under the same id, as at Google."""
+        with self.lock:
+            user = self._directory_find("id", user_id)
+            if user is None:
+                raise PortalError("No such user.")
+            user["deleted"] = False
+            self._save()
+            return {"id": user_id}
 
     def set_reply_delay(self, form: dict) -> dict:
         try:
@@ -488,13 +603,13 @@ def _plausible(location_id: str, metric: str, day: date) -> int:
     return int(scale * weekend * (0.6 + 0.8 * jitter))
 
 
-def _id_token(email_address: str) -> str:
-    """An unsigned ID token: the engine reads its email claim from what its own token request returned."""
+def _id_token(email_address: str, sub: str) -> str:
+    """An unsigned ID token: the engine reads its claims from what its own token request returned."""
 
     def part(value: dict) -> str:
         return base64.urlsafe_b64encode(json.dumps(value).encode()).rstrip(b"=").decode()
 
-    claims = {"iss": "https://accounts.google.com", "email": email_address, "email_verified": True, "sub": "mock"}
+    claims = {"iss": "https://accounts.google.com", "email": email_address, "email_verified": True, "sub": sub}
     return f"{part({'alg': 'none', 'typ': 'JWT'})}.{part(claims)}.mock"
 
 

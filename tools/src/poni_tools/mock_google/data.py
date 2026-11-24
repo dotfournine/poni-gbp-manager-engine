@@ -103,6 +103,34 @@ def _test_clients(knowledge_dir: Path) -> list[tuple[str, str]]:
     return out
 
 
+def directory_users() -> list[dict]:
+    """The made-up Workspace directory: the person the consent page signs in as, and three staff.
+
+    Ids are 21 decimal digits, the form a Google account's id has. The owner is a delegated administrator and no
+    super administrator (Google's isAdmin), the kind of account the engine's connection is meant to be made with.
+    """
+
+    def user(number: int, email: str, given: str, family: str, *, delegated: bool = False) -> dict:
+        return {
+            "id": f"1{number:020d}",
+            "primaryEmail": email,
+            "givenName": given,
+            "familyName": family,
+            "suspended": False,
+            "archived": False,
+            "deleted": False,
+            "isAdmin": False,
+            "isDelegatedAdmin": delegated,
+        }
+
+    return [
+        user(1, "mock-owner@example.com", "Mock", "Owner", delegated=True),
+        user(2, "avery.stone@example.com", "Avery", "Stone"),
+        user(3, "jordan.park@example.com", "Jordan", "Park"),
+        user(4, "casey.moreno@example.com", "Casey", "Moreno"),
+    ]
+
+
 def initial_state(knowledge_dir: Path, now: datetime) -> dict:
     state: dict = {
         "account": {"id": ACCOUNT_ID, "name": ACCOUNT_NAME},
@@ -113,6 +141,7 @@ def initial_state(knowledge_dir: Path, now: datetime) -> dict:
         "outbox": [],
         "codes": {},
         "refresh_tokens": {},
+        "directory": directory_users(),
     }
     number = 0
     clients = _test_clients(knowledge_dir) or [("generic", "Example Business")]
