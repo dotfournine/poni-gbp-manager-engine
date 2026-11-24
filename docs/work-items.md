@@ -81,7 +81,7 @@ The system runs locally only. The owner postponed the first deployment (D-052); 
 
 ### What only a deployment can prove
 
-**What.** Things tried only locally or against stand-ins: a real Let's Encrypt certificate; the dashboard under the Content-Security-Policy in a browser; Pub/Sub and the metadata server from a container on the VM; the Cloud Storage upload, a public read without listing, the move of a report's page to `a/` (D-104) and the service account's role; a post with a video sent by the engine itself (needs the public bucket); sign-in from a phone with a real account.
+**What.** Things tried only locally or against stand-ins: a real Let's Encrypt certificate; the dashboard under the Content-Security-Policy in a browser, where it frames a report's page from the public bucket and another bucket's object is blocked; Pub/Sub and the metadata server from a container on the VM; the Cloud Storage upload, a public read without listing, the move of a report's page to `a/` (D-104) and the service account's role; a post with a video sent by the engine itself (needs the public bucket); sign-in from a phone with a real account.
 
 **Done when:** each is seen working once and `deploy/README.md` says so.
 
