@@ -2,7 +2,9 @@
 // delivery log. An event is raised with emit() inside the transaction that
 // caused it, so a message exists exactly when its cause was committed; a
 // job (jobs/notifications.hpp) then sends each delivery and records the
-// outcome. Blocking calls on a transaction the caller owns.
+// outcome. A report's send is the exception (D-104): it sends first and then
+// writes each address's row as it ended, sent or failed, with nothing queued.
+// Blocking calls on a transaction the caller owns.
 #pragma once
 
 #include "core/body.hpp"
@@ -145,6 +147,9 @@ BOOST_DESCRIBE_STRUCT(RulePatch, (), (recipients, enabled))
 // Good enough to keep a typo and a header injection out: one '@', a dot in
 // the domain, no spaces, control characters or angle brackets.
 bool valid_email(std::string_view address);
+// An address as a rule stores it: the ends trimmed and ASCII lower-cased. An address
+// someone asks for is compared with stored ones in this form.
+std::string normal_address(std::string_view raw);
 
 model::NotificationRuleList list_rules(pqxx::transaction_base& tx);
 std::optional<model::NotificationRule> get_rule(pqxx::transaction_base& tx, std::int64_t id);
@@ -157,10 +162,31 @@ struct DeliveryFilter {
     std::string event_type;  // one of kEventTypes; empty: any
     std::string status;      // one of kDeliveryStatuses; empty: any
     std::optional<std::int64_t> escalation_id;  // the deliveries of one escalation's events
+    std::optional<std::int64_t> report_id;      // the deliveries of one report's sends
     db::Page page;
 };
 model::NotificationDeliveryList list_deliveries(pqxx::transaction_base& tx, const DeliveryFilter& filter);
 std::optional<model::NotificationDelivery> get_delivery(pqxx::transaction_base& tx, std::int64_t id);
+
+// ---- a report's sends (D-104) --------------------------------------------------
+
+// The addresses of the location's enabled location_report rules for email, sorted, each once.
+std::vector<std::string> report_recipients(pqxx::transaction_base& tx, std::int64_t location_id);
+
+// What came of one address of a send.
+struct ReportDelivery {
+    std::string recipient;
+    bool sent = false;
+    std::optional<std::string> reason;  // why it failed
+};
+// One row per address, as it ended: sent or failed, one attempt, nothing queued. `event_key` is
+// new for every send, so a row that is there already is a bug, and throws. `requested_by` is the
+// person who asked for the send; nothing for its schedule.
+void record_report_deliveries(pqxx::transaction_base& tx, std::int64_t report_id, std::int64_t location_id,
+                              std::optional<std::int64_t> requested_by, std::string_view event_key, std::string_view subject,
+                              std::string_view body, const std::vector<ReportDelivery>& deliveries, core::TimePoint now);
+// Every row of the report's sends, newest first.
+std::vector<model::NotificationDelivery> report_deliveries(pqxx::transaction_base& tx, std::int64_t report_id);
 
 // ---- the switches ----------------------------------------------------------------
 

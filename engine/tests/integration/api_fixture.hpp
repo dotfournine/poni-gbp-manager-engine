@@ -49,7 +49,7 @@ protected:
         auth_->add_routes(*router_);
         // The engine always has the three services; a test that does not bring its own gets one made of fakes.
         if (!api_pipeline_ && !own_pipeline_) own_pipeline_.emplace(db(), clock_, own_llm_, queue(), jobs::AnalysisOptions{});
-        if (!api_reporter_ && !own_reporter_) own_reporter_.emplace(db(), clock_, own_performance_, own_llm_, &own_store_);
+        if (!api_reporter_ && !own_reporter_) own_reporter_.emplace(db(), clock_, own_performance_, own_llm_, own_channel_, &own_store_);
         if (!api_advisor_ && !own_advisor_) own_advisor_.emplace(db(), clock_, own_llm_, own_performance_);
         http::add_api_routes(*router_, db(), clock_, api_options_, api_pipeline_ ? *api_pipeline_ : *own_pipeline_,
                              api_reporter_ ? *api_reporter_ : *own_reporter_, api_public_store_,
@@ -270,6 +270,8 @@ protected:
     FakePerformance own_performance_;
     // Without a bucket a report is not even started (D-104).
     FakeStore own_store_;
+    // Where its reports' emails go.
+    FakeChannel own_channel_;
     std::optional<jobs::ReviewPipeline> own_pipeline_;
     std::optional<jobs::Reporter> own_reporter_;
     std::optional<jobs::PostAdvisor> own_advisor_;

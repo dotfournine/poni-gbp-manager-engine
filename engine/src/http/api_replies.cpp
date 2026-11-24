@@ -269,6 +269,7 @@ void add_reply_routes(Router& router, const Api& api, jobs::ReviewPipeline& pipe
                    read_choice(query, "event_type", repo::kEventTypes, filter.event_type, bad);
                    read_choice(query, "status", repo::kDeliveryStatuses, filter.status, bad);
                    filter.escalation_id = query.integer("escalation_id", bad);
+                   filter.report_id = query.integer("report_id", bad);
                    if (!read_page(query, filter.page, bad)) co_return bad_query();
                    co_return ok(co_await api.query([filter](pqxx::work& tx) { return repo::list_deliveries(tx, filter); }));
                });

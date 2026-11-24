@@ -2,8 +2,10 @@
 
 #include "db/database.hpp"
 #include "db/repo_knowledge.hpp"
+#include "domain/dates.hpp"
 #include "domain/posting_schedule.hpp"
 #include "domain/reply_settings.hpp"
+#include "domain/report_html.hpp"
 #include "jobs/queue.hpp"
 
 #include <boost/json/parse.hpp>
@@ -11,6 +13,7 @@
 #include <boost/json/value_from.hpp>
 #include <boost/json/value_to.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <format>
 
@@ -217,16 +220,81 @@ std::optional<std::string> name_report_page(pqxx::transaction_base& tx, std::int
     return rows[0][0].as<std::string>();
 }
 
-bool store_built_report(pqxx::transaction_base& tx, std::int64_t report_id, const domain::ReportData& data, core::TimePoint now) {
-    return !tx.exec("UPDATE reports SET status = 'ready', data = $2::jsonb, error = NULL, built_at = $3::timestamptz, "
-                    "updated_at = $3::timestamptz WHERE id = $1 AND status = 'building' RETURNING id",
-                    pqxx::params{report_id, boost::json::serialize(boost::json::value_from(data)), to_timestamptz(now)})
-                .empty();
+std::optional<ReportMail> store_built_report(pqxx::transaction_base& tx, std::int64_t report_id, const domain::ReportData& data,
+                                             std::string_view link_base, core::TimePoint now) {
+    const auto rows = tx.exec("UPDATE reports SET status = 'ready', data = $2::jsonb, error = NULL, built_at = $3::timestamptz, "
+                              "updated_at = $3::timestamptz WHERE id = $1 AND status = 'building' RETURNING auto_send_status",
+                              pqxx::params{report_id, boost::json::serialize(boost::json::value_from(data)), to_timestamptz(now)});
+    if (rows.empty() || rows[0][0].as<std::string>() != "pending") return std::nullopt;
+    // Checked here, so that `done` is written before any email and in the one run that made the report ready:
+    // a schedule's send happens at most once, and nothing is checked again between `done` and the send.
+    auto mail = prepare_report_send(tx, report_id, std::nullopt, link_base);
+    if (!mail) return std::nullopt;  // pending: a person can send it, and the 409 they would get says why
+    tx.exec("UPDATE reports SET auto_send_status = 'done' WHERE id = $1", pqxx::params{report_id}).no_rows();
+    return std::move(*mail);
 }
 
 void fail_report(pqxx::transaction_base& tx, std::int64_t report_id, const std::string& error, core::TimePoint now) {
     tx.exec("UPDATE reports SET status = 'failed', error = $2, updated_at = $3::timestamptz WHERE id = $1 AND status = 'building'",
             pqxx::params{report_id, error, to_timestamptz(now)});
+}
+
+// ---- sending -------------------------------------------------------------------------
+
+Result<ReportMail> prepare_report_send(pqxx::transaction_base& tx, std::int64_t report_id,
+                                       const std::optional<std::vector<std::string>>& only, std::string_view link_base) {
+    if (only && only->empty()) return invalid("\"recipients\" must name at least one address; leave it out to send to all.");
+    const auto rows = tx.exec("SELECT p.status, p.location_id, l.enabled, p.page_object, p.data::text "
+                              "FROM reports p JOIN locations l ON l.id = p.location_id WHERE p.id = $1 FOR UPDATE OF p",
+                              pqxx::params{report_id});
+    if (rows.empty()) return not_found("report");
+    const auto row = rows[0];
+    if (row[0].as<std::string>() != "ready") return conflict("report_not_ready", "Only a report that is ready can be sent.");
+    const auto location_id = row[1].as<std::int64_t>();
+    if (!row[2].as<bool>()) return conflict("location_not_enabled", "The location is switched off, so its reports are not sent.");
+    if (!tx.query_value<bool>("SELECT email_sending_enabled FROM system_settings")) {
+        return conflict("sending_off", "Email sending is switched off, so the report would reach nobody. Switch it on first.");
+    }
+    // What the Gmail channel needs before it sends (http::stored_mailbox_address). Whether its token still works shows
+    // as each address's failure.
+    if (!tx.query_value<bool>("SELECT EXISTS (SELECT 1 FROM credentials WHERE name = $1 AND account_email IS NOT NULL)",
+                              pqxx::params{kGmailCredential})) {
+        return conflict("sending_off", "No sending mailbox is connected, so the report would reach nobody. Connect it on the status page first.");
+    }
+    if (link_base.empty()) {
+        return conflict("no_public_bucket", "No public bucket is configured (PONI_PUBLIC_BUCKET), so the report has no page to link to.");
+    }
+    auto recipients = report_recipients(tx, location_id);
+    if (recipients.empty()) return conflict("no_recipients", "This location has no recipients for its reports. Add them first.");
+    if (only) {
+        std::vector<std::string> wanted;
+        for (const auto& raw : *only) {
+            auto address = normal_address(raw);
+            if (!std::ranges::binary_search(recipients, address)) {
+                return invalid(std::format("\"{}\" is not a recipient of this location's reports.", address));
+            }
+            wanted.push_back(std::move(address));
+        }
+        // What is left stays sorted and holds each address once, however often it was asked for.
+        std::erase_if(recipients, [&wanted](const std::string& address) { return !std::ranges::contains(wanted, address); });
+    }
+    const auto data = boost::json::value_to<domain::ReportData>(boost::json::parse(row[4].as<std::string>()));
+    return ReportMail{.location_id = location_id,
+                      .recipients = std::move(recipients),
+                      .subject = std::format("Your Google reviews and visibility report, {}", domain::period_label(data.period_start, data.period_end)),
+                      .body = domain::render_report_email(data, std::string(link_base) + row[3].as<std::string>())};
+}
+
+Result<model::Report> record_report_send(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t report_id, const ReportMail& mail,
+                                         const std::vector<ReportDelivery>& outcomes, std::string_view event_key,
+                                         std::string_view link_base) {
+    record_report_deliveries(tx, report_id, mail.location_id, audit.person_id(), event_key, mail.subject, mail.body, outcomes, audit.now());
+    const auto tried = static_cast<std::int64_t>(outcomes.size());
+    const auto sent = static_cast<std::int64_t>(std::ranges::count_if(outcomes, &ReportDelivery::sent));
+    // Counts only: the addresses are in the delivery rows.
+    audit.record("report.send", "report", report_id,
+                 {.after = boost::json::object{{"recipients", tried}, {"sent", sent}, {"failed", tried - sent}}});
+    return *get_report(tx, report_id, link_base);
 }
 
 // ---- reading -------------------------------------------------------------------------
@@ -236,11 +304,17 @@ model::ReportList list_reports(pqxx::transaction_base& tx, const ReportFilter& f
     const auto base = where.bind(std::string(link_base));
     if (filter.location_id) where.add("p.location_id = " + where.bind(*filter.location_id));
     if (!filter.status.empty()) where.add("p.status = " + where.bind(filter.status));
-    return db::page<model::Report>(tx, report_select(base), std::move(where), "p.id DESC", filter.page);
+    return db::page<model::Report>(tx, report_select(base), std::move(where), "p.id DESC", filter.page,
+                                   db::FilledLater{"recipients", "deliveries"});
 }
 
 std::optional<model::Report> get_report(pqxx::transaction_base& tx, std::int64_t id, std::string_view link_base) {
-    return db::row_as<model::Report>(tx, report_select("$2") + " WHERE p.id = $1", pqxx::params{id, std::string(link_base)});
+    auto report = db::row_as<model::Report>(tx, report_select("$2") + " WHERE p.id = $1", pqxx::params{id, std::string(link_base)},
+                                            db::FilledLater{"recipients", "deliveries"});
+    if (!report) return report;
+    report->recipients = report_recipients(tx, report->location_id);
+    report->deliveries = report_deliveries(tx, id);
+    return report;
 }
 
 // ---- schedules ------------------------------------------------------------------------

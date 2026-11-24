@@ -142,7 +142,8 @@ void configure_limits(core::RateLimiter& limiter) {
         {identity::kSignInApi, {.per_minute = 30, .burst = 5}},
         {pubsub::kPubsubApi, {.per_minute = 120, .burst = 10}},
         {storage::kStorageApi, {.per_minute = 120, .burst = 10}},
-        {notify::kGmailApi, {.per_minute = 60, .burst = 5}},
+        // A report's send emails each recipient apart, and the notifications share the slots (D-104 point 9).
+        {notify::kGmailApi, {.per_minute = 120, .burst = 5}},
         // One slot per connection to Apple's push service, which carries one delivery's pushes.
         {notify::kApnsApi, {.per_minute = 120, .burst = 10}},
         {llm::kLlmApi, {.per_minute = 120, .burst = 10}},
@@ -265,7 +266,7 @@ int run(const core::Config& config) {
     jobs::Notifier notifier(database, clock, {.public_url = config.public_url, .lifetimes = http::session_lifetimes(config)});
     notifier.add_channel(email_channel);
     if (apns) notifier.set_push(*apns);
-    jobs::Reporter reporter(database, clock, performance_reader, llm_client, public_store.get());
+    jobs::Reporter reporter(database, clock, performance_reader, llm_client, email_channel, public_store.get());
     // Ideas and texts for local posts, when a person asks (D-088 point 11). Nothing schedules it.
     jobs::PostAdvisor post_advisor(database, clock, llm_client, performance_reader);
 

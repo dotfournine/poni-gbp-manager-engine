@@ -718,6 +718,9 @@ struct NotificationDelivery {
     std::optional<std::int64_t> location_id;
     std::optional<std::int64_t> review_id;
     std::optional<std::int64_t> escalation_id;
+    // The report the email carried, and the email of the person who asked for that send (nothing: its schedule) (D-104).
+    std::optional<std::int64_t> report_id;
+    std::optional<std::string> requested_by;
     std::string channel;
     std::string recipient;
     std::string subject;
@@ -729,8 +732,8 @@ struct NotificationDelivery {
     std::optional<std::string> sent_at;
 };
 BOOST_DESCRIBE_STRUCT(NotificationDelivery, (),
-                      (id, event_type, location_id, review_id, escalation_id, channel, recipient, subject, body, status,
-                       status_reason, attempts, created_at, sent_at))
+                      (id, event_type, location_id, review_id, escalation_id, report_id, requested_by, channel, recipient, subject,
+                       body, status, status_reason, attempts, created_at, sent_at))
 
 using NotificationDeliveryList = Paged<NotificationDelivery>;
 
@@ -978,11 +981,15 @@ struct Report {
     std::optional<std::string> summary;
     std::optional<std::string> summary_note;
     std::string created_at;
+    // The addresses a send can go to now (the location's enabled location_report rule), sorted, each once,
+    // and the report's rows of the delivery log, newest first. Both empty in a list.
+    std::vector<std::string> recipients;
+    std::vector<NotificationDelivery> deliveries;
 };
 BOOST_DESCRIBE_STRUCT(Report, (),
                       (id, location_id, location_title, period_start, period_end, time_zone, schedule_id, requested_by, status, error,
                        url, archive_url, auto_send_status, new_reviews, average_rating, response_rate, summary, summary_note,
-                       created_at))
+                       created_at, recipients, deliveries))
 
 using ReportList = Paged<Report>;
 

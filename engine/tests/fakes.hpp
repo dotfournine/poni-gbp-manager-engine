@@ -37,6 +37,7 @@
 #include <map>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -745,9 +746,12 @@ public:
     std::vector<notify::Message> sent;
     // Errors handed out, one per call, before sends succeed.
     std::deque<notify::SendError> failures;
+    // Every send throws, as a database failure under the channel would.
+    bool broken = false;
 
     std::string_view name() const override { return "email"; }
     boost::asio::awaitable<std::expected<void, notify::SendError>> send(notify::Message message) override {
+        if (broken) throw std::runtime_error("the channel broke");
         if (!failures.empty()) {
             auto failure = std::move(failures.front());
             failures.pop_front();

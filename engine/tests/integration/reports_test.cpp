@@ -55,7 +55,7 @@ protected:
 
     // (Re)starts the report service and the API, with or without the public bucket.
     void start(bool with_bucket = true) {
-        reporter_.emplace(db(), clock_, performance_, llm_, with_bucket ? &public_ : nullptr);
+        reporter_.emplace(db(), clock_, performance_, llm_, channel_, with_bucket ? &public_ : nullptr);
         api_reporter_ = &*reporter_;
         api_options_.llm_providers = {"anthropic", "dashscope"};
         build({});
@@ -127,6 +127,13 @@ protected:
     }
     // What a person does on the settings page; in this test's throwaway database.
     void sending_on() { exec("UPDATE system_settings SET email_sending_enabled = true"); }
+    // A sending mailbox as connecting it stores one, with its address (D-100); in this test's throwaway database.
+    // Nothing reads the token here: the channel is a fake.
+    void connect_mailbox() {
+        exec(std::format("INSERT INTO credentials (name, ciphertext, key_id, account_email, created_at, updated_at) "
+                         "VALUES ('{}', 'sealed', 'key', 'reports@poni.example', now(), now())",
+                         repo::kGmailCredential));
+    }
 
     std::int64_t schedule(std::int64_t location, const std::string& rest) {
         const auto response = post("/api/report-schedules", std::format(R"({{"location_id": {}, {}}})", location, rest));
@@ -535,13 +542,13 @@ TEST_F(Reports, HostileReviewTextIsTextOnThePage) {
 TEST_F(Reports, NothingOfAReportIsServedWithoutASession) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
     generate(chelsea_);
-    // The routes of reports, from the router's table: the 7 there are (D-104) and every one added since.
-    EXPECT_GE(expect_session_and_csrf({"/reports", "/report-schedules"}, R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"), 7u);
+    // The routes of reports, from the router's table: the 8 there are (D-104) and every one added since.
+    EXPECT_GE(expect_session_and_csrf({"/reports", "/report-schedules"}, R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"), 8u);
     // There is no route for a token at all: the engine does not host reports' pages.
     EXPECT_EQ(get("/r/anything.html").status, 404u);
-    // Nor for the page, its share links, sending it the old way or rejecting it, even signed in.
-    for (const auto& response : {get("/api/reports/1/html", browser_), post("/api/reports/1/send"), post("/api/reports/1/reject"),
-                                 post("/api/reports/1/share-links"), post("/api/report-share-links/1/revoke")}) {
+    // Nor for the page, its share links or rejecting it, even signed in.
+    for (const auto& response : {get("/api/reports/1/html", browser_), post("/api/reports/1/reject"), post("/api/reports/1/share-links"),
+                                 post("/api/report-share-links/1/revoke")}) {
         EXPECT_EQ(response.status, 404u);
         EXPECT_EQ(error_code(response), "not_found");
     }
@@ -803,6 +810,290 @@ TEST_F(Reports, AReportWhoseJobIsGoneDoesNotStayBuildingForEver) {
     EXPECT_THAT(std::string(failed.at("error").as_string()), HasSubstr("did not finish"));
 }
 
+// ---- sending (D-104) ----------------------------------------------------------------
+
+TEST_F(Reports, OnlyAReadyReportIsSent) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    recipients(chelsea_, R"(["owner@spa.example"])");
+    sending_on();
+    connect_mailbox();
+    const auto discarded = generate(chelsea_);
+    exec(std::format("UPDATE reports SET status = 'discarded' WHERE id = {}", discarded));
+    const auto failed = generate(chelsea_);
+    exec(std::format("UPDATE reports SET status = 'failed', error = 'broken' WHERE id = {}", failed));
+    const auto building = json(post(std::format("/api/locations/{}/reports", chelsea_),
+                                    R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"))
+                              .at("id")
+                              .as_int64();
+    for (const auto id : {building, failed, discarded}) {
+        const auto refused = post(std::format("/api/reports/{}/send", id));
+        EXPECT_EQ(refused.status, 409u) << id;
+        EXPECT_EQ(error_code(refused), "report_not_ready") << id;
+        EXPECT_EQ(error_message(refused), "Only a report that is ready can be sent.");
+    }
+    const auto unknown = post("/api/reports/999999/send");
+    EXPECT_EQ(unknown.status, 404u);
+    EXPECT_EQ(error_code(unknown), "not_found");
+    EXPECT_TRUE(channel_.sent.empty());
+    EXPECT_EQ(count("notification_deliveries"), 0);
+    EXPECT_EQ(count("audit_log WHERE action = 'report.send'"), 0);
+}
+
+TEST_F(Reports, ASendNeedsItsLocationSendingAMailboxAndABucket) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    recipients(chelsea_, R"(["owner@spa.example"])");
+    const auto id = generate(chelsea_);
+    const auto path = std::format("/api/reports/{}/send", id);
+    const auto refused = [&](std::string_view code, std::string_view message) {
+        const auto response = post(path);
+        EXPECT_EQ(response.status, 409u) << response.body;
+        EXPECT_EQ(error_code(response), code);
+        EXPECT_THAT(error_message(response), HasSubstr(std::string(message)));
+    };
+
+    refused("sending_off", "Email sending is switched off");  // as after installation
+    sending_on();
+    refused("sending_off", "No sending mailbox is connected");
+    connect_mailbox();
+    switch_location(chelsea_, false);
+    refused("location_not_enabled", "The location is switched off");
+    switch_location(chelsea_, true);
+    // The same report, read by an engine that has no bucket any more: its page has no address.
+    start(false);
+    refused("no_public_bucket", "No public bucket is configured");
+    EXPECT_TRUE(channel_.sent.empty());
+    EXPECT_EQ(count("notification_deliveries"), 0);
+    EXPECT_EQ(count("audit_log WHERE action = 'report.send'"), 0);
+}
+
+TEST_F(Reports, ASendGoesOnlyToTheRecipientsOfTheReportsLocation) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    const auto id = generate(chelsea_);
+    const auto path = std::format("/api/reports/{}/send", id);
+    sending_on();
+    connect_mailbox();
+    recipients(uptown_, R"(["uptown@spa.example"])");  // the list of the client's other location is not this location's
+    EXPECT_EQ(error_code(post(path)), "no_recipients");
+    recipients(chelsea_, R"(["owner@spa.example"])");
+    exec(std::format("UPDATE notification_rules SET enabled = false WHERE location_id = {}", chelsea_));
+    EXPECT_EQ(error_code(post(path)), "no_recipients");  // a rule that is switched off names nobody
+    exec(std::format("UPDATE notification_rules SET enabled = true WHERE location_id = {}", chelsea_));
+
+    // An address the rule does not name, the other location's among them, is refused and named.
+    const auto outsider = post(path, R"({"recipients": ["owner@spa.example", " Uptown@Spa.example "]})");
+    EXPECT_EQ(outsider.status, 400u) << outsider.body;
+    EXPECT_EQ(error_code(outsider), "invalid_request");
+    EXPECT_EQ(error_message(outsider), "\"uptown@spa.example\" is not a recipient of this location's reports.");
+    const auto empty = post(path, R"({"recipients": []})");
+    EXPECT_EQ(empty.status, 400u);
+    EXPECT_THAT(error_message(empty), HasSubstr("must name at least one address"));
+    // Before anything is looked up.
+    EXPECT_EQ(post("/api/reports/999999/send", R"({"recipients": []})").status, 400u);
+    EXPECT_EQ(post(path, R"({"recipients": null})").status, 400u);
+    EXPECT_EQ(post(path, R"({"recipients": [5]})").status, 400u);
+    EXPECT_EQ(post(path, R"({"to": ["owner@spa.example"]})").status, 400u);
+    EXPECT_TRUE(channel_.sent.empty());
+    EXPECT_EQ(count("notification_deliveries"), 0);
+}
+
+TEST_F(Reports, AReportIsSentToEachRecipientOfItsLocationApart) {
+    const auto review = add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "WORDS-OF-A-REVIEWER", std::nullopt, "NAME-OF-A-REVIEWER");
+    analyze(review, "positive", R"([{"id": "treatment_quality", "polarity": "positive"}])");
+    const auto id = generate(chelsea_);
+    recipients(chelsea_, R"(["owner@spa.example", "manager@spa.example"])");
+    recipients(uptown_, R"(["uptown@spa.example"])");
+    recipients(buffet_, R"(["owner@buffet.example"])");
+    sending_on();
+    connect_mailbox();
+    const auto row = [&] {
+        return value<std::string>(
+            std::format("SELECT status || ' ' || updated_at::text || ' ' || auto_send_status FROM reports WHERE id = {}", id));
+    };
+    const auto before = row();
+    const std::string url(report(id).at("url").as_string());
+    clock_.advance(1min);
+
+    // Without a body: every recipient.
+    const auto sent = call(verb::post, std::format("/api/reports/{}/send", id), browser_, "");
+    ASSERT_EQ(sent.status, 200u) << sent.body;
+    ASSERT_EQ(channel_.sent.size(), 2u);
+    EXPECT_EQ(channel_.sent[0].recipient, "manager@spa.example");
+    EXPECT_EQ(channel_.sent[1].recipient, "owner@spa.example");
+    for (const auto& message : channel_.sent) {
+        EXPECT_EQ(message.subject, "Your Google reviews and visibility report, October 1 to 31, 2026");
+        EXPECT_THAT(message.body, HasSubstr(url));
+        EXPECT_THAT(message.body, HasSubstr("New reviews: 1"));
+        // The business is not sent to the dashboard, and no review text or reviewer's name is in an email.
+        EXPECT_THAT(message.body, Not(HasSubstr("dashboard")));
+        EXPECT_THAT(message.body, Not(HasSubstr("WORDS-OF-A-REVIEWER")));
+        EXPECT_THAT(message.body, Not(HasSubstr("NAME-OF-A-REVIEWER")));
+    }
+
+    // The answer carries this send's rows, newest first; the report itself is as it was.
+    const auto answer = json(sent);
+    EXPECT_EQ(answer.at("status").as_string(), "ready");
+    EXPECT_EQ(boost::json::serialize(answer.at("recipients")), R"(["manager@spa.example","owner@spa.example"])");
+    const auto& deliveries = answer.at("deliveries").as_array();
+    ASSERT_EQ(deliveries.size(), 2u);
+    EXPECT_EQ(deliveries[0].at("recipient").as_string(), "owner@spa.example");
+    EXPECT_EQ(deliveries[1].at("recipient").as_string(), "manager@spa.example");
+    for (const auto& delivery : deliveries) {
+        EXPECT_EQ(delivery.at("event_type").as_string(), "location_report");
+        EXPECT_EQ(delivery.at("report_id").as_int64(), id);
+        EXPECT_EQ(delivery.at("location_id").as_int64(), chelsea_);
+        EXPECT_EQ(delivery.at("requested_by").as_string(), "staff@xvisionmediaus.com");
+        EXPECT_EQ(delivery.at("channel").as_string(), "email");
+        EXPECT_EQ(delivery.at("status").as_string(), "sent");
+        EXPECT_TRUE(delivery.at("status_reason").is_null());
+        EXPECT_EQ(delivery.at("attempts").as_int64(), 1);
+        EXPECT_FALSE(delivery.at("sent_at").is_null());
+        EXPECT_THAT(std::string(delivery.at("body").as_string()), HasSubstr(url));
+    }
+    EXPECT_EQ(count(std::format("notification_deliveries WHERE report_id = {}", id)), 2);
+    EXPECT_EQ(count("notification_deliveries"), 2);
+    EXPECT_EQ(count(std::format("(SELECT DISTINCT event_key FROM notification_deliveries WHERE report_id = {}) k", id)), 1);
+    EXPECT_EQ(count("jobs WHERE kind = 'notifications.deliver'"), 0);  // nothing is queued
+    EXPECT_EQ(row(), before);
+    EXPECT_EQ(report(id).at("deliveries"), answer.at("deliveries"));
+
+    // The audit entry counts and names no address.
+    EXPECT_EQ(value<std::string>(std::format("SELECT after::text FROM audit_log WHERE action = 'report.send' AND object_id = '{}' "
+                                             "AND actor = 'staff@xvisionmediaus.com'",
+                                             id)),
+              R"({"sent": 2, "failed": 0, "recipients": 2})");
+    EXPECT_EQ(count("audit_log WHERE action = 'report.send' AND after::text LIKE '%@%'"), 0);
+}
+
+TEST_F(Reports, ASendToSomeRecipientsReachesOnlyThem) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    const auto id = generate(chelsea_);
+    recipients(chelsea_, R"(["owner@spa.example", "manager@spa.example"])");
+    sending_on();
+    connect_mailbox();
+    const auto sent = post(std::format("/api/reports/{}/send", id), R"({"recipients": ["  Owner@SPA.example ", "owner@spa.example"]})");
+    ASSERT_EQ(sent.status, 200u) << sent.body;
+    ASSERT_EQ(channel_.sent.size(), 1u);
+    EXPECT_EQ(channel_.sent[0].recipient, "owner@spa.example");
+    ASSERT_EQ(json(sent).at("deliveries").as_array().size(), 1u);
+    EXPECT_EQ(json(sent).at("deliveries").at(0).at("recipient").as_string(), "owner@spa.example");
+    // Every recipient is still one a send can go to.
+    EXPECT_EQ(json(sent).at("recipients").as_array().size(), 2u);
+}
+
+TEST_F(Reports, AReportSentTwiceIsTwoEmailsAndTwoRows) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    const auto id = generate(chelsea_);
+    recipients(chelsea_, R"(["owner@spa.example"])");
+    sending_on();
+    connect_mailbox();
+    const auto path = std::format("/api/reports/{}/send", id);
+    ASSERT_EQ(post(path).status, 200u);
+    clock_.advance(1min);
+    // The engine does not check earlier sends: the client asks the person.
+    const auto again = post(path);
+    ASSERT_EQ(again.status, 200u);
+    EXPECT_EQ(channel_.sent.size(), 2u);
+    EXPECT_EQ(count(std::format("notification_deliveries WHERE report_id = {} AND status = 'sent'", id)), 2);
+    EXPECT_EQ(count(std::format("(SELECT DISTINCT event_key FROM notification_deliveries WHERE report_id = {}) k", id)), 2);
+    // Newest first.
+    const auto answer = json(again);
+    const auto& deliveries = answer.at("deliveries").as_array();
+    ASSERT_EQ(deliveries.size(), 2u);
+    EXPECT_GT(std::string(deliveries[0].at("created_at").as_string()), std::string(deliveries[1].at("created_at").as_string()));
+    EXPECT_EQ(count("audit_log WHERE action = 'report.send'"), 2);
+}
+
+TEST_F(Reports, AnAddressGmailDoesNotTakeIsFailedAndTheOthersAreStillTried) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    const auto id = generate(chelsea_);
+    recipients(chelsea_, R"(["a@spa.example", "b@spa.example", "c@spa.example"])");
+    sending_on();
+    connect_mailbox();
+    channel_.failures = {{.kind = notify::SendError::Kind::permanent, .message = "Gmail refused the address"},
+                         {.kind = notify::SendError::Kind::transient, .message = "Gmail is limiting the mailbox"}};
+    const auto sent = post(std::format("/api/reports/{}/send", id));
+    ASSERT_EQ(sent.status, 200u) << sent.body;
+    ASSERT_EQ(channel_.sent.size(), 1u);
+    EXPECT_EQ(channel_.sent[0].recipient, "c@spa.example");
+    const auto outcome = [&](std::string_view address) {
+        return value<std::string>(std::format("SELECT status || ': ' || coalesce(status_reason, '') FROM notification_deliveries "
+                                              "WHERE report_id = {} AND recipient = '{}'",
+                                              id, address));
+    };
+    EXPECT_EQ(outcome("a@spa.example"), "failed: Gmail refused the address");
+    EXPECT_EQ(outcome("b@spa.example"), "failed: Gmail is limiting the mailbox");
+    EXPECT_EQ(outcome("c@spa.example"), "sent: ");
+    EXPECT_EQ(count(std::format("notification_deliveries WHERE report_id = {} AND status = 'failed' AND sent_at IS NULL", id)), 2);
+    // Nothing is retried.
+    run_jobs();
+    EXPECT_EQ(channel_.sent.size(), 1u);
+    EXPECT_EQ(count(std::format("notification_deliveries WHERE report_id = {} AND attempts = 1", id)), 3);
+    EXPECT_EQ(value<std::string>("SELECT after::text FROM audit_log WHERE action = 'report.send'"),
+              R"({"sent": 1, "failed": 2, "recipients": 3})");
+}
+
+TEST_F(Reports, AChannelThatThrowsLeavesEachAddressFailed) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    const auto id = generate(chelsea_);
+    recipients(chelsea_, R"(["owner@spa.example", "manager@spa.example"])");
+    sending_on();
+    connect_mailbox();
+    channel_.broken = true;
+    const auto sent = post(std::format("/api/reports/{}/send", id));
+    ASSERT_EQ(sent.status, 200u) << sent.body;
+    const auto answer = json(sent);
+    ASSERT_EQ(answer.at("deliveries").as_array().size(), 2u);
+    for (const auto& delivery : answer.at("deliveries").as_array()) {
+        EXPECT_EQ(delivery.at("status").as_string(), "failed");
+        EXPECT_EQ(delivery.at("status_reason").as_string(), "The engine could not hand this message to Gmail; its log says why.");
+    }
+    EXPECT_EQ(count(std::format("notification_deliveries WHERE report_id = {} AND status = 'failed'", id)), 2);
+}
+
+TEST_F(Reports, TheRecipientsFollowTheRuleAndAListCarriesNone) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    const auto id = generate(chelsea_);
+    EXPECT_TRUE(report(id).at("recipients").as_array().empty());
+    recipients(chelsea_, R"(["owner@spa.example", "manager@spa.example", " Owner@spa.example"])");
+    recipients(uptown_, R"(["uptown@spa.example"])");
+    EXPECT_EQ(boost::json::serialize(report(id).at("recipients")), R"(["manager@spa.example","owner@spa.example"])");
+    const auto rule = std::format("/api/notification-rules/{}",
+                                  value<std::int64_t>(std::format("SELECT id FROM notification_rules WHERE location_id = {}", chelsea_)));
+    ASSERT_EQ(patch(rule, R"({"recipients": ["owner@spa.example", "assistant@spa.example"]})").status, 200u);
+    EXPECT_EQ(boost::json::serialize(report(id).at("recipients")), R"(["assistant@spa.example","owner@spa.example"])");
+    ASSERT_EQ(patch(rule, R"({"enabled": false})").status, 200u);
+    EXPECT_TRUE(report(id).at("recipients").as_array().empty());
+    ASSERT_EQ(patch(rule, R"({"enabled": true})").status, 200u);
+
+    sending_on();
+    connect_mailbox();
+    ASSERT_EQ(post(std::format("/api/reports/{}/send", id)).status, 200u);
+    const auto listed = read(std::format("/api/reports?location_id={}", chelsea_));
+    ASSERT_EQ(listed.at("items").as_array().size(), 1u);
+    EXPECT_TRUE(listed.at("items").at(0).at("recipients").as_array().empty());
+    EXPECT_TRUE(listed.at("items").at(0).at("deliveries").as_array().empty());
+    EXPECT_EQ(report(id).at("deliveries").as_array().size(), 2u);
+}
+
+TEST_F(Reports, TheDeliveryLogShowsAReportsSends) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    const auto id = generate(chelsea_);
+    const auto other = generate(chelsea_);
+    recipients(chelsea_, R"(["owner@spa.example", "manager@spa.example"])");
+    sending_on();
+    connect_mailbox();
+    ASSERT_EQ(post(std::format("/api/reports/{}/send", id)).status, 200u);
+    ASSERT_EQ(post(std::format("/api/reports/{}/send", other), R"({"recipients": ["owner@spa.example"]})").status, 200u);
+    const auto log = read(std::format("/api/notification-deliveries?report_id={}", id));
+    EXPECT_EQ(log.at("total").as_int64(), 2);
+    for (const auto& item : log.at("items").as_array()) {
+        EXPECT_EQ(item.at("report_id").as_int64(), id);
+        EXPECT_EQ(item.at("requested_by").as_string(), "staff@xvisionmediaus.com");
+    }
+    EXPECT_EQ(read(std::format("/api/notification-deliveries?report_id={}", other)).at("total").as_int64(), 1);
+    EXPECT_EQ(get("/api/notification-deliveries?report_id=x", browser_).status, 400u);
+}
+
 // ---- schedules --------------------------------------------------------------------------
 
 TEST_F(Reports, AScheduleBuildsOneReportPerRunInItsOwnTimeZone) {
@@ -895,28 +1186,69 @@ TEST_F(Reports, ADailyScheduleRunsOnceOnTheDaysClocksChange) {
               "2027-03-13");
 }
 
-// Whether a report is to be sent by itself is on the report; nothing sends it yet.
-TEST_F(Reports, AScheduleSendsByItselfOnlyWhereAPersonSaidSo) {
+TEST_F(Reports, AScheduleSendsByItselfOnceAndOnlyWhereAPersonSaidSo) {
     add_review(chelsea_, "a1", 5, "2026-11-09T15:00:00Z", "Lovely");
-    recipients(chelsea_, R"(["owner@spa.example"])");
+    recipients(chelsea_, R"(["owner@spa.example", "manager@spa.example"])");
+    recipients(uptown_, R"(["uptown@spa.example"])");
     sending_on();
+    connect_mailbox();
     const auto by_itself = schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York", "auto_send": true)");
     EXPECT_TRUE(listed_schedule(by_itself).at("auto_send").as_bool());
     const auto waits = schedule(uptown_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
     clock_.advance(2h);
     ASSERT_EQ(await(reporter_->start_due()), 2);
-    const auto by_hand = generate(chelsea_);
     run_jobs();
+    const auto by_hand = generate(chelsea_);
 
-    const auto auto_send = [&](std::string_view where) {
-        return value<std::string>(std::format("SELECT auto_send_status FROM reports WHERE {}", where));
-    };
-    EXPECT_EQ(auto_send(std::format("schedule_id = {}", by_itself)), "pending");
-    EXPECT_EQ(auto_send(std::format("schedule_id = {}", waits)), "off");
+    const auto sent = value<std::int64_t>(std::format("SELECT id FROM reports WHERE schedule_id = {}", by_itself));
+    EXPECT_EQ(report(sent).at("auto_send_status").as_string(), "done");
+    EXPECT_EQ(value<std::string>(std::format("SELECT auto_send_status FROM reports WHERE schedule_id = {}", waits)), "off");
     EXPECT_EQ(report(by_hand).at("auto_send_status").as_string(), "off");
     EXPECT_EQ(count("reports WHERE status = 'ready'"), 3);
+
+    // Its location's recipients, each once, in the schedule's name.
+    ASSERT_EQ(channel_.sent.size(), 2u);
+    EXPECT_EQ(channel_.sent[0].recipient, "manager@spa.example");
+    EXPECT_EQ(channel_.sent[1].recipient, "owner@spa.example");
+    EXPECT_THAT(channel_.sent[0].body, HasSubstr(std::string(report(sent).at("url").as_string())));
+    EXPECT_EQ(count(std::format("notification_deliveries WHERE report_id = {} AND status = 'sent' AND requested_by IS NULL", sent)), 2);
+    EXPECT_EQ(count("notification_deliveries"), 2);
+    const auto served = report(sent);
+    for (const auto& delivery : served.at("deliveries").as_array()) EXPECT_TRUE(delivery.at("requested_by").is_null());
+    EXPECT_EQ(count("audit_log WHERE action = 'report.send' AND actor = 'system:report-schedule'"), 1);
+
+    // A second run of its build sends nothing more.
+    await(reporter_->build(sent, false));
+    run_jobs();
+    EXPECT_EQ(channel_.sent.size(), 2u);
+    EXPECT_EQ(count("notification_deliveries"), 2);
+}
+
+TEST_F(Reports, AReportItsScheduleCouldNotSendWaitsForAPerson) {
+    add_review(chelsea_, "a1", 5, "2026-11-09T15:00:00Z", "Lovely");
+    recipients(chelsea_, R"(["owner@spa.example"])");
+    connect_mailbox();
+    schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York", "auto_send": true)");
+    clock_.advance(2h);
+    ASSERT_EQ(await(reporter_->start_due()), 1);
+    run_jobs();  // sending is off when it is built
+    const auto id = value<std::int64_t>("SELECT id FROM reports");
+    EXPECT_EQ(status(id), "ready");
+    EXPECT_EQ(report(id).at("auto_send_status").as_string(), "pending");
     EXPECT_TRUE(channel_.sent.empty());
     EXPECT_EQ(count("notification_deliveries"), 0);
+    EXPECT_EQ(count("audit_log WHERE action = 'report.send'"), 0);
+
+    // Nothing looks at it again: switching sending on sends nothing by itself, a person does.
+    sending_on();
+    clock_.advance(10min);
+    await(reporter_->start_due());
+    run_jobs();
+    EXPECT_TRUE(channel_.sent.empty());
+    const auto sent = post(std::format("/api/reports/{}/send", id));
+    ASSERT_EQ(sent.status, 200u) << sent.body;
+    EXPECT_EQ(channel_.sent.size(), 1u);
+    EXPECT_EQ(json(sent).at("auto_send_status").as_string(), "pending");  // what its schedule did
 }
 
 TEST_F(Reports, ADisabledScheduleAndASwitchedOffLocationRunNothing) {
