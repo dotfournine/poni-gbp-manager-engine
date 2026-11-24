@@ -208,7 +208,10 @@ struct Api {
 //    validation error of the v4 API also what it says field by field:
 //    "summary: Must be at most 1500 characters"). A rate limit also keeps
 //    every caller off that API for a minute. Without a token nothing is
-//    sent and the token source's own error is returned as it is.
+//    sent and the token source's own error is returned, with one change:
+//    its `not_found` (a token endpoint's 404) becomes `not_configured`,
+//    because nothing was asked about what the request names and callers
+//    read `not_found` as "it is gone" (a review, a local post, a report's page).
 //  - A transport failure throws (boost::system::system_error), as the
 //    client does. For a write that means "the outcome is unknown", and
 //    nothing here turns it into an error that reads like a refusal.
