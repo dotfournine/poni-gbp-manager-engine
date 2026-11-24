@@ -46,7 +46,13 @@ it runs with <code>PONI_GOOGLE_MOCK_URL</code>. The page refreshes every few sec
 <div id="reviews"></div>
 
 <h2>Workspace directory</h2>
-<p class="note">Made-up staff. The engine asks about one person at a time, by id.</p>
+<p class="note">Made-up staff. The engine lists everyone: at a connection, at every staff check, and when someone is picked for an escalation.</p>
+<form id="add-person">
+  <label>Given name <input name="given_name" required></label>
+  <label>Family name <input name="family_name" required></label>
+  <label>Address <input name="address" required placeholder="new.person@example.com"></label>
+  <button>Add a person</button> <span id="add-person-result"></span>
+</form>
 <div id="directory"></div>
 
 <h2>Outbox</h2>
@@ -197,6 +203,16 @@ document.getElementById("post").onsubmit = async (event) => {
     const answer = await call("/portal/reviews", Object.fromEntries(form));
     result.className = ""; result.textContent = `Posted ${answer.id}.`;
     event.target.comment.value = "";
+  } catch (error) { result.className = "error"; result.textContent = error.message; }
+  refresh();
+};
+document.getElementById("add-person").onsubmit = async (event) => {
+  event.preventDefault();
+  const result = document.getElementById("add-person-result");
+  try {
+    await call("/portal/directory", Object.fromEntries(new FormData(event.target)));
+    result.className = ""; result.textContent = "Added.";
+    event.target.reset();
   } catch (error) { result.className = "error"; result.textContent = error.message; }
   refresh();
 };
