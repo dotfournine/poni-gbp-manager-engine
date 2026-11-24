@@ -215,6 +215,16 @@ TEST_F(Connectors, AReviewThatIsGoneIsNotFound) {
     EXPECT_EQ(api_requests().at(0).url.buffer(), "https://mybusiness.googleapis.com/v4/accounts/1/locations/2/reviews/3");
 }
 
+// A token endpoint's 404 says nothing about the review: it is never "not found", and nothing goes to the API.
+TEST_F(Connectors, ATokenThatCouldNotBeHadIsNeverNotFound) {
+    http_.reply(404, R"({"error": "not_found", "error_description": "Not Found"})");
+    const auto review = await(reader_.get_review({"1", "2", "3"}));
+    ASSERT_FALSE(review);
+    EXPECT_EQ(review.error().kind, ApiError::Kind::not_configured);
+    EXPECT_EQ(review.error().http_status, 404u);
+    EXPECT_TRUE(api_requests().empty());
+}
+
 TEST_F(Connectors, A401GetsOneRetryWithAFreshToken) {
     http_.reply(200, std::string(kTokenOk));
     http_.reply(401, R"({"error": {"status": "UNAUTHENTICATED", "message": "expired"}})");

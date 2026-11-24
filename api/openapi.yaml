@@ -1890,6 +1890,49 @@ paths:
         "409":
           $ref: "#/components/responses/ReportConflict"
 
+  /api/reports/{id}/discard:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    post:
+      operationId: discardReport
+      summary: Discard a report
+      description: |
+        Withdraws a `ready` or `failed` report for good (D-104); it cannot
+        be undone. The report's page is moved to an archive (`archive_url`,
+        for staff) and `url` becomes null, so the link in every email
+        already sent stops working. A discarded report cannot be sent.
+
+        Refused with 409 `report_not_ready` while the report is `building`,
+        `report_discarded` once it is `discarded` or `expired`, and
+        `no_public_bucket` when the report has a page and the engine has no
+        public bucket. A 502 means the page could not be moved: the report
+        is then `discarding`, its `url` is already null although the old
+        link may still work, and calling again finishes it.
+
+        A client offers "Discard" on a `ready` or `failed` report, with a
+        confirmation that it cannot be undone, and "Finish discarding" on a
+        `discarding` one.
+      tags: [reports]
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      responses:
+        "200":
+          description: The report, `discarded`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Report"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/ReportConflict"
+        "502":
+          $ref: "#/components/responses/StorageFailed"
+
   /api/report-schedules:
     get:
       operationId: listReportSchedules
@@ -3418,14 +3461,17 @@ components:
             $ref: "#/components/schemas/Error"
     ReportConflict:
       description: |
-        `report_not_ready`: the report is not `ready`, so it cannot be sent.
+        `report_not_ready`: the report is not `ready`, so it cannot be sent;
+        or it is still `building`, so it cannot be discarded.
+        `report_discarded`: the report is `discarded` or `expired` already.
         `location_not_enabled`: the location is switched off, so its
         reports are not sent. `sending_off`: email sending is switched off,
         or no sending mailbox is connected, so a report would reach nobody.
         `no_public_bucket`: the engine has no public bucket
-        (`PONI_PUBLIC_BUCKET`): a report is not created without one, and
-        one cannot be sent after the bucket was taken away, because its
-        page has no address. `no_recipients`: no enabled `location_report`
+        (`PONI_PUBLIC_BUCKET`): a report is not created without one, one
+        cannot be sent after the bucket was taken away, because its page
+        has no address, and a report with a page cannot be discarded,
+        because the page cannot be moved. `no_recipients`: no enabled `location_report`
         rule names an address for the location.
       content:
         application/json:
@@ -3433,8 +3479,9 @@ components:
             $ref: "#/components/schemas/Error"
     StorageFailed:
       description: |
-        The page could not be put into the public bucket (`storage_failed`).
-        Nothing was recorded and nothing was sent.
+        The report's page could not be moved in the public bucket
+        (`storage_failed`). The report stays `discarding`, and a later call
+        of the discard finishes it.
       content:
         application/json:
           schema:
@@ -6848,7 +6895,8 @@ components:
         (D-104) `building`: its job has not finished. `failed`: it could not
         be built; `error` says why, and a person generates it again.
         `ready`: built; its page is at `url`. `discarding`: a discard was
-        begun and has not finished moving the page. `discarded`: withdrawn
+        begun and has not finished moving the page; `POST
+        /api/reports/{id}/discard` again finishes it. `discarded`: withdrawn
         for good; its page, if it had one, is at `archive_url`. `expired`:
         the same, by the retention's clean-up; nothing in the engine writes
         it yet.

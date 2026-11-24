@@ -243,8 +243,14 @@ TokenFetch service_account_fetch(http::Client& http, core::RateLimiter& limiter,
 
 asio::awaitable<Result<http::ClientResponse>> send(Api api, std::string_view limiter_key, http::ClientRequest request) {
     for (int attempt = 0;; ++attempt) {
-        const auto token = co_await api.tokens.access_token();
-        if (!token) co_return std::unexpected(token.error());
+        auto token = co_await api.tokens.access_token();
+        if (!token) {
+            // A token endpoint's 404 is no answer about what the request names, and callers read not_found as
+            // "it is gone" (a review, a local post, a report's page): without a token it is not_configured.
+            auto error = std::move(token.error());
+            if (error.kind == ApiError::Kind::not_found) error.kind = ApiError::Kind::not_configured;
+            co_return std::unexpected(std::move(error));
+        }
         co_await api.limiter.acquire(limiter_key);
         // A copy the first time: the request is needed again if this token turns out to be refused.
         http::ClientRequest attempt_request;

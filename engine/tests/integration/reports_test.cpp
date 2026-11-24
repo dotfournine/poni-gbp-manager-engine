@@ -119,6 +119,42 @@ protected:
     }
     // The page, as the build put it into the bucket.
     std::string html(std::int64_t id) { return public_.objects.at(page_object(id)).body; }
+    // The name of the report's archive, as the row holds it ("" while it has none).
+    std::string archive_object(std::int64_t id) {
+        return value<std::string>(std::format("SELECT coalesce(archive_object, '') FROM reports WHERE id = {}", id));
+    }
+    http::Response discard(std::int64_t id) { return post(std::format("/api/reports/{}/discard", id)); }
+    // A report built from one review, ready, its page in the bucket.
+    std::int64_t ready_report() {
+        add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+        return generate(chelsea_);
+    }
+    // The report's discard entries in the audit log.
+    std::int64_t discard_entries(std::int64_t id) {
+        return count(std::format("audit_log WHERE action = 'report.discard' AND object_id = '{}'", id));
+    }
+    // A report whose page was copied to its archive and then deleted, as one discard leaves it, and the call's answer.
+    void expect_moved_to_the_archive(std::int64_t id, const std::string& page, const storage::Object& original, const http::Response& response) {
+        ASSERT_EQ(response.status, 200u) << response.body;
+        const auto answer = json(response);
+        const auto archive = archive_object(id);
+        EXPECT_TRUE(std::regex_match(archive, std::regex(R"(a/[A-Za-z0-9_-]{43}\.html)"))) << archive;
+        EXPECT_NE(archive.substr(2), page.substr(2)) << "a new token, not the page's";
+        EXPECT_EQ(answer.at("status").as_string(), "discarded");
+        EXPECT_TRUE(answer.at("url").is_null());
+        EXPECT_EQ(answer.at("archive_url").as_string(), std::string(kPublicBase) + archive);
+        EXPECT_EQ(public_.operations, (std::vector<std::string>{"copy " + page + " " + archive, "remove " + page}));
+        EXPECT_FALSE(public_.objects.contains(page));
+        ASSERT_TRUE(public_.objects.contains(archive));
+        const auto& kept = public_.objects.at(archive);
+        EXPECT_EQ(kept.body, original.body);
+        EXPECT_EQ(kept.content_type, original.content_type);
+        EXPECT_EQ(kept.cache_control, original.cache_control);
+    }
+    // The status the report's discard entry records, before or after.
+    std::string audited_status(std::int64_t id, std::string_view side) {
+        return value<std::string>(std::format("SELECT {}->>'status' FROM audit_log WHERE action = 'report.discard' AND object_id = '{}'", side, id));
+    }
 
     void recipients(std::int64_t location, const std::string& list) {
         const auto response = post("/api/notification-rules",
@@ -1092,6 +1128,277 @@ TEST_F(Reports, TheDeliveryLogShowsAReportsSends) {
     }
     EXPECT_EQ(read(std::format("/api/notification-deliveries?report_id={}", other)).at("total").as_int64(), 1);
     EXPECT_EQ(get("/api/notification-deliveries?report_id=x", browser_).status, 400u);
+}
+
+// ---- discarding (D-104) ---------------------------------------------------------------
+
+namespace {
+
+constexpr std::string_view kNotMoved503 =
+    "The report's page could not be moved to the archive (HTTP 503). The report stays \"discarding\"; call again to finish.";
+
+}  // namespace
+
+
+TEST_F(Reports, ADiscardCopiesTheReadyPageToTheArchiveAndThenDeletesIt) {
+    const auto id = ready_report();
+    const auto page = page_object(id);
+    const auto original = public_.objects.at(page);
+    public_.operations.clear();
+    const auto response = discard(id);
+    expect_moved_to_the_archive(id, page, original, response);
+    EXPECT_EQ(original.cache_control, "no-store");
+
+    // One entry, in the person's name, written when the discard began; no object's name or address in it.
+    EXPECT_EQ(count(std::format("audit_log WHERE action = 'report.discard' AND object_id = '{}' AND actor = 'staff@xvisionmediaus.com'", id)), 1);
+    EXPECT_EQ(audited_status(id, "before"), "ready");
+    EXPECT_EQ(audited_status(id, "after"), "discarding");
+    for (const auto& text : {page, archive_object(id), std::string(kPublicBase)}) {
+        EXPECT_EQ(count(std::format("audit_log WHERE coalesce(before::text, '') || coalesce(after::text, '') LIKE '%{}%'", text)), 0) << text;
+    }
+    EXPECT_EQ(report(id).at("status").as_string(), "discarded");
+}
+
+TEST_F(Reports, AFailedReportWithAPageIsDiscardedTheSameWay) {
+    const auto id = ready_report();
+    exec(std::format("UPDATE reports SET status = 'failed', error = 'broken' WHERE id = {}", id));
+    const auto page = page_object(id);
+    const auto original = public_.objects.at(page);
+    public_.operations.clear();
+    const auto response = discard(id);
+    expect_moved_to_the_archive(id, page, original, response);
+    EXPECT_EQ(audited_status(id, "before"), "failed");
+    EXPECT_EQ(discard_entries(id), 1);
+}
+
+// Named, never stored: the copy and the delete find nothing, and the archive's name is kept.
+TEST_F(Reports, AReportWhoseUploadsWereAllRefusedIsDiscardedWithItsArchivesName) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    public_.refuse = true;
+    const auto id = generate(chelsea_);
+    for (int attempt = 1; attempt < repo::kBuildReportAttempts; ++attempt) {
+        clock_.advance(2h);
+        run_jobs();
+    }
+    ASSERT_EQ(status(id), "failed");
+    public_.refuse = false;
+    const auto page = page_object(id);
+    ASSERT_FALSE(page.empty());
+    public_.operations.clear();
+
+    const auto response = discard(id);
+    ASSERT_EQ(response.status, 200u) << response.body;
+    const auto answer = json(response);
+    const auto archive = archive_object(id);
+    EXPECT_EQ(answer.at("status").as_string(), "discarded");
+    EXPECT_EQ(answer.at("archive_url").as_string(), std::string(kPublicBase) + archive);
+    EXPECT_EQ(public_.operations, (std::vector<std::string>{"copy " + page + " " + archive, "remove " + page}));
+    EXPECT_TRUE(public_.objects.empty());
+}
+
+// The ordinary failed report: nothing was ever named, so nothing is moved.
+TEST_F(Reports, AFailedReportWithoutAPageIsDiscardedAtOnce) {
+    const auto made = post(std::format("/api/locations/{}/reports", chelsea_), R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})");
+    ASSERT_EQ(made.status, 201u) << made.body;
+    const auto id = json(made).at("id").as_int64();
+    // The stalled-report sweep fails it before its job ran.
+    exec("DELETE FROM jobs WHERE kind = 'reports.build'");
+    clock_.advance(61min);
+    await(reporter_->start_due());
+    ASSERT_EQ(status(id), "failed");
+    ASSERT_TRUE(page_object(id).empty());
+
+    const auto response = discard(id);
+    ASSERT_EQ(response.status, 200u) << response.body;
+    const auto answer = json(response);
+    EXPECT_EQ(answer.at("status").as_string(), "discarded");
+    EXPECT_TRUE(answer.at("url").is_null());
+    EXPECT_TRUE(answer.at("archive_url").is_null());
+    EXPECT_TRUE(public_.operations.empty());
+    EXPECT_EQ(discard_entries(id), 1);
+    EXPECT_EQ(audited_status(id, "before"), "failed");
+    EXPECT_EQ(audited_status(id, "after"), "discarded");
+}
+
+TEST_F(Reports, ABuildingDiscardedOrExpiredReportIsNotDiscarded) {
+    const auto discarded = ready_report();
+    ASSERT_EQ(discard(discarded).status, 200u);
+    const auto expired = generate(chelsea_);
+    exec(std::format("UPDATE reports SET status = 'expired' WHERE id = {}", expired));
+    const auto building = json(post(std::format("/api/locations/{}/reports", chelsea_),
+                                    R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"))
+                              .at("id")
+                              .as_int64();
+    const auto entries = count("audit_log");
+    public_.operations.clear();
+
+    const auto still_building = discard(building);
+    EXPECT_EQ(still_building.status, 409u) << still_building.body;
+    EXPECT_EQ(error_code(still_building), "report_not_ready");
+    EXPECT_EQ(error_message(still_building), "A report that is still being built cannot be discarded.");
+    for (const auto id : {discarded, expired}) {
+        const auto again = discard(id);
+        EXPECT_EQ(again.status, 409u) << id;
+        EXPECT_EQ(error_code(again), "report_discarded") << id;
+        EXPECT_EQ(error_message(again), "The report is discarded already.");
+    }
+    const auto unknown = discard(999999);
+    EXPECT_EQ(unknown.status, 404u);
+    EXPECT_EQ(error_code(unknown), "not_found");
+    EXPECT_EQ(status(building), "building");
+    EXPECT_EQ(status(expired), "expired");
+    EXPECT_TRUE(public_.operations.empty());
+    EXPECT_EQ(count("audit_log"), entries);
+}
+
+TEST_F(Reports, WithoutABucketAReportWithAPageIsNotDiscarded) {
+    const auto id = ready_report();
+    // The same report, read by an engine that has no bucket any more.
+    start(false);
+    public_.operations.clear();
+    const auto refused = discard(id);
+    EXPECT_EQ(refused.status, 409u) << refused.body;
+    EXPECT_EQ(error_code(refused), "no_public_bucket");
+    EXPECT_EQ(status(id), "ready");
+    EXPECT_TRUE(archive_object(id).empty());
+    EXPECT_TRUE(public_.operations.empty());
+    EXPECT_EQ(discard_entries(id), 0);
+}
+
+TEST_F(Reports, ACopyThatFailsDeletesNothingAndASecondCallFinishes) {
+    const auto id = ready_report();
+    const auto page = page_object(id);
+    public_.refuse_copy = true;
+    public_.operations.clear();
+    const auto failed = discard(id);
+    EXPECT_EQ(failed.status, 502u) << failed.body;
+    EXPECT_EQ(error_code(failed), "storage_failed");
+    EXPECT_EQ(error_message(failed), kNotMoved503);
+    const auto archive = archive_object(id);
+    ASSERT_FALSE(archive.empty());
+    for (const auto& text : {page, archive, std::string("scripted outage")}) EXPECT_THAT(failed.body, Not(HasSubstr(text)));
+    EXPECT_EQ(public_.operations, (std::vector<std::string>{"copy " + page + " " + archive})) << "no delete after a failed copy";
+    EXPECT_TRUE(public_.objects.contains(page));
+    const auto discarding = report(id);
+    EXPECT_EQ(discarding.at("status").as_string(), "discarding");
+    EXPECT_TRUE(discarding.at("url").is_null());
+    EXPECT_TRUE(discarding.at("archive_url").is_null());
+    EXPECT_EQ(discard_entries(id), 1);
+
+    public_.refuse_copy = false;
+    public_.operations.clear();
+    const auto finished = discard(id);
+    ASSERT_EQ(finished.status, 200u) << finished.body;
+    EXPECT_EQ(json(finished).at("status").as_string(), "discarded");
+    EXPECT_EQ(archive_object(id), archive) << "the archive's name is never replaced";
+    EXPECT_EQ(public_.operations, (std::vector<std::string>{"copy " + page + " " + archive, "remove " + page}));
+    EXPECT_TRUE(public_.objects.contains(archive));
+    EXPECT_FALSE(public_.objects.contains(page));
+    EXPECT_EQ(discard_entries(id), 1);
+}
+
+TEST_F(Reports, ACopyThatThrowsIsA502AndDeletesNothing) {
+    const auto id = ready_report();
+    const auto page = page_object(id);
+    public_.unreachable = true;
+    public_.operations.clear();
+    const auto failed = discard(id);
+    EXPECT_EQ(failed.status, 502u) << failed.body;
+    EXPECT_EQ(error_code(failed), "storage_failed");
+    EXPECT_EQ(error_message(failed), "The report's page could not be moved to the archive. The report stays \"discarding\"; call again to finish.");
+    EXPECT_THAT(failed.body, Not(HasSubstr("connection reset")));
+    EXPECT_EQ(public_.operations, (std::vector<std::string>{"copy " + page + " " + archive_object(id)}));
+    EXPECT_TRUE(public_.objects.contains(page));
+    EXPECT_EQ(status(id), "discarding");
+}
+
+TEST_F(Reports, ADeleteThatFailsLeavesTheArchiveAndASecondCallFinishes) {
+    const auto id = ready_report();
+    const auto page = page_object(id);
+    public_.refuse_remove = true;
+    const auto failed = discard(id);
+    EXPECT_EQ(failed.status, 502u) << failed.body;
+    EXPECT_EQ(error_message(failed), kNotMoved503);
+    const auto archive = archive_object(id);
+    EXPECT_EQ(status(id), "discarding");
+    EXPECT_TRUE(public_.objects.contains(archive));
+    EXPECT_TRUE(public_.objects.contains(page));
+
+    public_.refuse_remove = false;
+    public_.operations.clear();
+    const auto finished = discard(id);
+    ASSERT_EQ(finished.status, 200u) << finished.body;
+    EXPECT_EQ(json(finished).at("status").as_string(), "discarded");
+    EXPECT_EQ(public_.operations, (std::vector<std::string>{"copy " + page + " " + archive, "remove " + page}));
+    EXPECT_TRUE(public_.objects.contains(archive));
+    EXPECT_FALSE(public_.objects.contains(page));
+    EXPECT_EQ(discard_entries(id), 1);
+}
+
+TEST_F(Reports, ADeleteThatThrowsIsA502AndLeavesTheArchive) {
+    const auto id = ready_report();
+    const auto page = page_object(id);
+    public_.remove_throws = true;
+    const auto failed = discard(id);
+    EXPECT_EQ(failed.status, 502u) << failed.body;
+    EXPECT_EQ(error_code(failed), "storage_failed");
+    EXPECT_EQ(status(id), "discarding");
+    EXPECT_TRUE(public_.objects.contains(archive_object(id)));
+    EXPECT_TRUE(public_.objects.contains(page));
+}
+
+// The engine stopped after the delete, before the last step.
+TEST_F(Reports, ADiscardThatBrokeOffAfterItsDeleteIsFinished) {
+    const auto id = ready_report();
+    const auto page = page_object(id);
+    const auto archive = "a/" + std::string(43, 'A') + ".html";
+    auto moved = public_.objects.at(page);
+    moved.name = archive;
+    public_.objects.erase(page);
+    public_.objects.insert_or_assign(archive, std::move(moved));
+    exec(std::format("UPDATE reports SET status = 'discarding', archive_object = '{}' WHERE id = {}", archive, id));
+    public_.operations.clear();
+
+    const auto finished = discard(id);
+    ASSERT_EQ(finished.status, 200u) << finished.body;
+    const auto answer = json(finished);
+    EXPECT_EQ(answer.at("status").as_string(), "discarded");
+    EXPECT_EQ(answer.at("archive_url").as_string(), std::string(kPublicBase) + archive);
+    EXPECT_EQ(public_.operations, (std::vector<std::string>{"copy " + page + " " + archive, "remove " + page}));
+    EXPECT_TRUE(public_.objects.contains(archive)) << "a copy that finds no original leaves the archive as it is";
+}
+
+TEST_F(Reports, AnotherPersonFinishesADiscardAndTheEntryStaysTheFirstPersons) {
+    const auto id = ready_report();
+    public_.refuse_copy = true;
+    ASSERT_EQ(discard(id).status, 502u);
+    public_.refuse_copy = false;
+    const auto other = sign_in(staff("colleague@xvisionmediaus.com"));
+    const auto finished = call(verb::post, std::format("/api/reports/{}/discard", id), other, "{}");
+    ASSERT_EQ(finished.status, 200u) << finished.body;
+    EXPECT_EQ(json(finished).at("status").as_string(), "discarded");
+    EXPECT_EQ(discard_entries(id), 1);
+    EXPECT_EQ(count(std::format("audit_log WHERE action = 'report.discard' AND object_id = '{}' AND actor = 'staff@xvisionmediaus.com'", id)), 1);
+}
+
+TEST_F(Reports, ADiscardedReportIsNotSentAndKeepsItsDeliveries) {
+    const auto id = ready_report();
+    recipients(chelsea_, R"(["owner@spa.example"])");
+    sending_on();
+    connect_mailbox();
+    ASSERT_EQ(post(std::format("/api/reports/{}/send", id)).status, 200u);
+    ASSERT_EQ(discard(id).status, 200u);
+
+    const auto refused = post(std::format("/api/reports/{}/send", id));
+    EXPECT_EQ(refused.status, 409u);
+    EXPECT_EQ(error_code(refused), "report_not_ready");
+    EXPECT_EQ(channel_.sent.size(), 1u);
+    const auto listed = read("/api/reports?status=discarded");
+    ASSERT_EQ(listed.at("total").as_int64(), 1);
+    EXPECT_EQ(listed.at("items").at(0).at("id").as_int64(), id);
+    const auto deliveries = report(id).at("deliveries").as_array();
+    ASSERT_EQ(deliveries.size(), 1u);
+    EXPECT_EQ(deliveries.at(0).at("recipient").as_string(), "owner@spa.example");
 }
 
 // ---- schedules --------------------------------------------------------------------------

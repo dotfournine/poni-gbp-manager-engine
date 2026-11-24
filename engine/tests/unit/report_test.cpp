@@ -1135,6 +1135,25 @@ TEST_F(PerformanceHttp, GooglesAnswerKeepsItsKindAndLosesItsWordsWhichMayNameThe
     EXPECT_EQ(http_.requests.size(), 5u) << "nothing is sent twice";
 }
 
+// A VM whose metadata server has no token for it answers 404. That is no answer about the page: a discard must not
+// take it for "no original", so the store's error is not not_found, and Cloud Storage is not asked.
+TEST_F(PerformanceHttp, AMissingTokenIsNeverTakenForAPageThatIsGone) {
+    http_.public_bucket = kPublicBucket;
+    limiter_.configure(std::string(google::kOAuthApi), {.per_minute = 600, .burst = 100});
+    google::CachedTokenSource metadata(clock_, google::service_account_fetch(http_, limiter_, true));
+    storage::GcsStore store(google::Api{http_, metadata, limiter_}, std::string(kPublicBucket));
+    http_.reply(404, "Not Found");
+    const auto copied = test::run(io_, store.copy(kPage, kArchive));
+    ASSERT_FALSE(copied);
+    EXPECT_NE(copied.error().kind, google::ApiError::Kind::not_found);
+    http_.reply(404, "Not Found");
+    const auto removed = test::run(io_, store.remove(kPage));
+    ASSERT_FALSE(removed);
+    EXPECT_NE(removed.error().kind, google::ApiError::Kind::not_found);
+    ASSERT_EQ(http_.requests.size(), 2u);
+    for (const auto& request : http_.requests) EXPECT_EQ(request.url.host(), "metadata.google.internal");
+}
+
 TEST_F(PerformanceHttp, NoOtherNameIsCopiedOrDeletedAndNothingIsSent) {
     http_.public_bucket = kPublicBucket;
     storage::GcsStore store(api_, std::string(kPublicBucket));

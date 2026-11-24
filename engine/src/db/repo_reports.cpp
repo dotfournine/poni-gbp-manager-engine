@@ -297,6 +297,56 @@ Result<model::Report> record_report_send(pqxx::transaction_base& tx, audit::Writ
     return *get_report(tx, report_id, link_base);
 }
 
+// ---- discarding ----------------------------------------------------------------------
+
+Result<std::optional<DiscardWork>> begin_discard(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t report_id,
+                                                 std::string_view archive_token, std::string_view link_base) {
+    const auto rows = tx.exec("SELECT status, page_object, archive_object FROM reports WHERE id = $1 FOR UPDATE", pqxx::params{report_id});
+    if (rows.empty()) return not_found("report");
+    const auto status = rows[0][0].as<std::string>();
+    const auto page = rows[0][1].as<OptString>();
+    constexpr std::string_view kNoBucket = "No public bucket is configured (PONI_PUBLIC_BUCKET), so the report's page cannot be moved.";
+
+    if (status == "ready" || status == "failed") {
+        const auto before = *get_report(tx, report_id, link_base);
+        std::optional<DiscardWork> work;
+        if (!page) {
+            // Nothing was ever put into the bucket for it (D-104 point 11): there is nothing to move.
+            tx.exec("UPDATE reports SET status = 'discarded', updated_at = $2::timestamptz WHERE id = $1",
+                    pqxx::params{report_id, to_timestamptz(audit.now())});
+        } else {
+            if (link_base.empty()) return conflict("no_public_bucket", std::string(kNoBucket));
+            // Named before anything is copied, and never cleared or replaced afterwards: every object a discard writes is
+            // named by its row for good. The extension is the page's.
+            const auto dot = page->rfind('.');
+            const auto archive = std::format("a/{}{}", archive_token, dot == std::string::npos ? std::string{} : page->substr(dot));
+            const auto named = tx.exec("UPDATE reports SET status = 'discarding', archive_object = coalesce(archive_object, $2), "
+                                       "updated_at = $3::timestamptz WHERE id = $1 RETURNING archive_object",
+                                       pqxx::params{report_id, archive, to_timestamptz(audit.now())})
+                                   .one_row();
+            work = DiscardWork{.page_object = *page, .archive_object = named[0].as<std::string>()};
+        }
+        // Written when the discard begins: one that breaks off after this step still has its entry, in the name of the
+        // person who began it. No object's name or address is in it.
+        audit.record("report.discard", "report", report_id,
+                     {.before = report_json(before), .after = report_json(*get_report(tx, report_id, link_base))});
+        return work;
+    }
+    if (status == "discarding") {
+        if (link_base.empty()) return conflict("no_public_bucket", std::string(kNoBucket));
+        audit.nothing_changed();  // the entry was written when it began
+        return DiscardWork{.page_object = page.value(), .archive_object = rows[0][2].as<std::string>()};
+    }
+    if (status == "building") return conflict("report_not_ready", "A report that is still being built cannot be discarded.");
+    // "discarded", "expired", and any status the engine does not write: never taken for one that may be finished.
+    return conflict("report_discarded", "The report is discarded already.");
+}
+
+void finish_discard(pqxx::transaction_base& tx, std::int64_t report_id, core::TimePoint now) {
+    tx.exec("UPDATE reports SET status = 'discarded', updated_at = $2::timestamptz WHERE id = $1 AND status = 'discarding'",
+            pqxx::params{report_id, to_timestamptz(now)});
+}
+
 // ---- reading -------------------------------------------------------------------------
 
 model::ReportList list_reports(pqxx::transaction_base& tx, const ReportFilter& filter, std::string_view link_base) {

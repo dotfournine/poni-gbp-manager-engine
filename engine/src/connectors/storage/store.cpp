@@ -44,7 +44,8 @@ bool is_archive_of(std::string_view page, std::string_view archive) {
 
 // Google's words about an object may quote its name ("No such object: <bucket>/r/..."), and a report's
 // object name is a secret (D-104): an answer of Google's keeps its kind and status and loses its text.
-// An error without an answer (no token: status 0) and an answer that can't be read (a 2xx) name no object.
+// An error without an answer and an answer that can't be read (a 2xx) name no object. A token that could not be
+// had keeps its endpoint's status, if it had one (400, 404), and is cut to "HTTP n" too, which is harmless.
 ApiError without_google_text(ApiError error) {
     if (error.http_status >= 300) error.message = std::format("HTTP {}", error.http_status);
     return error;

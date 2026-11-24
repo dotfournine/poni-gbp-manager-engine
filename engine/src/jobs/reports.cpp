@@ -29,6 +29,30 @@ bool passing(const google::ApiError& error) {
     return error.kind == google::ApiError::Kind::unavailable || error.kind == google::ApiError::Kind::rate_limited;
 }
 
+// One of a discard's two calls to the bucket. Nothing: it was done, or found no original to act on. Otherwise the
+// 502's message, which names neither an object nor the store's words.
+asio::awaitable<std::optional<std::string>> page_move_failure(asio::awaitable<storage::Result<void>> step, std::int64_t report_id) {
+    std::optional<storage::Result<void>> answer;
+    // co_await is not allowed in a catch block: note the error, act after it.
+    std::optional<std::string> thrown;
+    try {
+        answer = co_await std::move(step);
+    } catch (const std::exception& e) {
+        thrown = e.what();
+    }
+    unsigned status = 0;
+    if (thrown) {
+        log::warn("report page not moved", {{"report_id", report_id}, {"error", *thrown}});  // a transport error names no address
+    } else if (*answer || answer->error().kind == storage::ApiError::Kind::not_found) {
+        co_return std::nullopt;
+    } else {
+        status = answer->error().http_status;
+        log::warn("report page not moved", {{"report_id", report_id}, {"status", status}});
+    }
+    co_return std::format("The report's page could not be moved to the archive{}. The report stays \"discarding\"; call again to finish.",
+                          status != 0 ? std::format(" (HTTP {})", status) : std::string{});
+}
+
 }  // namespace
 
 std::string Reporter::link_base() const { return public_store_ ? public_store_->base_url() : std::string{}; }
@@ -193,6 +217,32 @@ asio::awaitable<repo::Result<model::Report>> Reporter::deliver(std::int64_t repo
         return repo::record_report_send(tx, audit, report_id, mail, outcomes, key, base);
     });
     co_return recorded;
+}
+
+asio::awaitable<repo::Result<model::Report>> Reporter::discard(std::int64_t report_id, audit::Actor actor) {
+    auto begun = co_await db_.audited(std::move(actor), clock_.now(),
+                                      [report_id, token = core::random_token(), base = link_base()](pqxx::work& tx, audit::Writer& audit) {
+                                          return repo::begin_discard(tx, audit, report_id, token, base);
+                                      });
+    if (!begun) co_return std::unexpected(begun.error());
+    // Nothing to move: the report had no page. Otherwise there is a bucket, or begin_discard refused.
+    if (const auto& work = *begun) {
+        // Copy first. The original is deleted only after this call's copy succeeded or found no original, so a step
+        // that fails loses no page; a later call starts again at the copy, which replaces the archive with the same bytes.
+        auto copy = public_store_->copy(work->page_object, work->archive_object);
+        auto failure = co_await page_move_failure(std::move(copy), report_id);
+        if (!failure) {
+            auto remove = public_store_->remove(work->page_object);
+            failure = co_await page_move_failure(std::move(remove), report_id);
+        }
+        if (failure) co_return repo::unavailable("storage_failed", std::move(*failure));
+    }
+    // Two calls at once both get here; the second's update changes nothing, and both answer the discarded report.
+    auto discarded = co_await db_.tx([report_id, base = link_base(), now = clock_.now()](pqxx::work& tx) {
+        repo::finish_discard(tx, report_id, now);
+        return repo::get_report(tx, report_id, base);
+    });
+    co_return std::move(discarded.value());
 }
 
 asio::awaitable<void> Reporter::build(std::int64_t report_id, bool last_attempt) {

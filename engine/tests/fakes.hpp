@@ -857,10 +857,18 @@ public:
     bool refuse = false;
     // True: every put, copy and remove throws, as a connection that drops does.
     bool unreachable = false;
+    // True: that one operation answers an outage and changes nothing.
+    bool refuse_copy = false;
+    bool refuse_remove = false;
+    // True: remove throws, as a connection that drops does.
+    bool remove_throws = false;
     int puts = 0;
+    // Every call that reached the store, in order: "put <name>", "copy <from> <to>", "remove <name>".
+    std::vector<std::string> operations;
 
     boost::asio::awaitable<storage::Result<void>> put(storage::Object object) override {
         ++puts;
+        operations.push_back("put " + object.name);
         if (unreachable) throw std::runtime_error("connection reset");
         if (refuse || !storage::valid_object_name(object.name)) {
             co_return std::unexpected(storage::ApiError{storage::ApiError::Kind::permission_denied, 403, "scripted refusal"});
@@ -871,11 +879,13 @@ public:
     }
     // As the stores: a report's page to its archive name, with the same extension, and nothing else.
     boost::asio::awaitable<storage::Result<void>> copy(std::string from, std::string to) override {
+        operations.push_back(std::format("copy {} {}", from, to));
         if (unreachable) throw std::runtime_error("connection reset");
         if (!storage::is_report_page(from) || !storage::is_report_archive(to) || from.substr(from.find('.')) != to.substr(to.find('.'))) {
             co_return std::unexpected(storage::ApiError{storage::ApiError::Kind::other, 0, "the object's name is not allowed"});
         }
         if (refuse) co_return std::unexpected(storage::ApiError{storage::ApiError::Kind::permission_denied, 403, "scripted refusal"});
+        if (refuse_copy) co_return std::unexpected(storage::ApiError{storage::ApiError::Kind::unavailable, 503, "scripted outage"});
         const auto found = objects.find(from);
         if (found == objects.end()) co_return std::unexpected(storage::ApiError{storage::ApiError::Kind::not_found, 404, "no such object"});
         auto copied = found->second;
@@ -884,11 +894,13 @@ public:
         co_return storage::Result<void>{};
     }
     boost::asio::awaitable<storage::Result<void>> remove(std::string name) override {
-        if (unreachable) throw std::runtime_error("connection reset");
+        operations.push_back("remove " + name);
+        if (unreachable || remove_throws) throw std::runtime_error("connection reset");
         if (!storage::is_report_page(name)) {
             co_return std::unexpected(storage::ApiError{storage::ApiError::Kind::other, 0, "the object's name is not allowed"});
         }
         if (refuse) co_return std::unexpected(storage::ApiError{storage::ApiError::Kind::permission_denied, 403, "scripted refusal"});
+        if (refuse_remove) co_return std::unexpected(storage::ApiError{storage::ApiError::Kind::unavailable, 503, "scripted outage"});
         if (objects.erase(name) == 0) co_return std::unexpected(storage::ApiError{storage::ApiError::Kind::not_found, 404, "no such object"});
         co_return storage::Result<void>{};
     }

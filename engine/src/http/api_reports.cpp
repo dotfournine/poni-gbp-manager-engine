@@ -1,6 +1,6 @@
 // The reports part of the dashboard's API (FR-8, D-085, D-102, D-104): the
 // list of reports, generating a location's report by hand, reading one,
-// sending one by email, and the schedules. Paths, parameters and bodies are defined in
+// sending one by email, discarding one, and the schedules. Paths, parameters and bodies are defined in
 // api/openapi.yaml; change that file first.
 //
 // Every route here needs a signed-in person. The engine serves no report's
@@ -88,6 +88,16 @@ void add_report_routes(Router& router, const Api& api, jobs::Reporter& reporter)
                    if (!id) co_return not_found("report");
                    const auto sent = co_await reporter.send(*id, std::move(body->recipients), api.actor(request));
                    co_return respond(sent);
+               });
+
+    // Withdraws a ready or failed report for good (D-104): its page moves to the archive and its link stops working.
+    // A 502 leaves it "discarding", and calling again finishes it.
+    router.add(verb::post, "/api/reports/{id}/discard", {Access::user, "reports.discard"},
+               [api, &reporter](const Request& request) -> asio::awaitable<Response> {
+                   const auto id = path_id(request);
+                   if (!id) co_return not_found("report");
+                   const auto discarded = co_await reporter.discard(*id, api.actor(request));
+                   co_return respond(discarded);
                });
 
     // ---- schedules ---------------------------------------------------------------------
