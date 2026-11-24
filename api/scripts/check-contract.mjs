@@ -683,10 +683,15 @@ try {
       // Withdrawn for good (D-104): the page moves to the archive in the folder that stands in for the bucket.
       const discarded = await call("POST", `${path}/discard`);
       check(`POST ${path}/discard`, "/api/reports/{id}/discard", "POST", discarded);
-      if (discarded.status !== 200 || discarded.json?.status !== "discarded" || discarded.json?.url !== null || typeof discarded.json?.archive_url !== "string") {
+      const withdrawn = discarded.status === 200 && discarded.json?.status === "discarded";
+      if (!withdrawn || discarded.json?.url !== null || typeof discarded.json?.archive_url !== "string") {
         fail(`POST ${path}/discard`, `a discarded report has its archive's address and no url: ${discarded.text.slice(0, 300)}`);
       }
-      for (const [name, route, code] of [[`POST ${path}/discard (again)`, "discard", "report_discarded"], [`POST ${path}/send (discarded)`, "send", "report_not_ready"]]) {
+      const refusals = [[`POST ${path}/discard (again)`, "discard", "report_discarded"]];
+      // Only a report the discard withdrew: a send of one that is still ready would go out while sending is on.
+      if (withdrawn) refusals.push([`POST ${path}/send (discarded)`, "send", "report_not_ready"]);
+      else console.log(`skip  POST ${path}/send (discarded): the discard did not withdraw the report, and the check sends no email`);
+      for (const [name, route, code] of refusals) {
         const refused = await call("POST", `${path}/${route}`);
         check(name, `/api/reports/{id}/${route}`, "POST", refused);
         if (refused.status !== 409 || refused.json?.error?.code !== code) fail(name, `expected the refusal ${code}, got ${refused.status}: ${refused.text.slice(0, 300)}`);
