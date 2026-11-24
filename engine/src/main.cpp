@@ -22,6 +22,7 @@
 #include "connectors/notify/gmail.hpp"
 #include "connectors/pubsub/subscriber.hpp"
 #include "connectors/storage/store.hpp"
+#include "connectors/workspace/directory.hpp"
 #include "core/config.hpp"
 #include "core/log.hpp"
 #include "core/rate_limiter.hpp"
@@ -142,6 +143,7 @@ void configure_limits(core::RateLimiter& limiter) {
         {identity::kSignInApi, {.per_minute = 30, .burst = 5}},
         {pubsub::kPubsubApi, {.per_minute = 120, .burst = 10}},
         {storage::kStorageApi, {.per_minute = 120, .burst = 10}},
+        {workspace::kDirectoryApi, {.per_minute = 120, .burst = 10}},
         // A report's send emails each recipient apart, and the notifications share the slots (D-104 point 9).
         {notify::kGmailApi, {.per_minute = 120, .burst = 5}},
         // One slot per connection to Apple's push service, which carries one delivery's pushes.

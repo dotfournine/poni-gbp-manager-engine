@@ -1,0 +1,47 @@
+{
+  "kind": "admin#directory#users",
+  "etag": "\"made-up-etag-1\"",
+  "users": [
+    {
+      "kind": "admin#directory#user",
+      "id": "104000000000000000001",
+      "etag": "\"made-up-etag-user-1\"",
+      "primaryEmail": "riley.manager@example.com",
+      "name": {"givenName": "Riley", "familyName": "Manager", "fullName": "Riley Manager"},
+      "isAdmin": false,
+      "isDelegatedAdmin": true,
+      "suspended": false,
+      "archived": false,
+      "customerId": "C00made0up",
+      "orgUnitPath": "/Staff"
+    },
+    {
+      "kind": "admin#directory#user",
+      "id": "104000000000000000002",
+      "etag": "\"made-up-etag-user-2\"",
+      "primaryEmail": "sam.suspended@example.com",
+      "name": {"givenName": "Sam", "familyName": "Suspended", "fullName": "Sam Suspended"},
+      "isAdmin": false,
+      "isDelegatedAdmin": false,
+      "suspended": true,
+      "suspensionReason": "ADMIN",
+      "archived": false,
+      "customerId": "C00made0up",
+      "orgUnitPath": "/Staff"
+    },
+    {
+      "kind": "admin#directory#user",
+      "id": "104000000000000000003",
+      "etag": "\"made-up-etag-user-3\"",
+      "primaryEmail": "alex.archived@example.com",
+      "name": {"givenName": "Alex", "familyName": "Archived", "fullName": "Alex Archived"},
+      "isAdmin": false,
+      "isDelegatedAdmin": false,
+      "suspended": false,
+      "archived": true,
+      "customerId": "C00made0up",
+      "orgUnitPath": "/Former"
+    }
+  ],
+  "nextPageToken": "made-up-page-2"
+}

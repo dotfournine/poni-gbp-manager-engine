@@ -41,16 +41,6 @@ The app's requests are in the app repository (`poni-gbp-manager-ios/docs/design/
 
 Decided in D-106. The items are built in the order listed; the last is the owner's.
 
-### The directory connector
-
-**What and why.** The staff check, the connection and making a user all read the same list (D-106 points 2 and 3); one connector reads it, so that none writes its own loop.
-
-**What to build:** `connectors/workspace`: the list of the account's users, every page or an error, behind an interface, through `google::send`. A list that could not be read whole is an error, never a shorter list. A fake for the tests.
-
-**Done when:** the connector's unit tests pass, and every call it makes is a GET.
-
-**Touches:** D-106 points 2 and 3; the layout table in `CLAUDE.md`.
-
 ### The `workspace` connection
 
 **What and why.** D-106 point 2: the third account a signed-in person connects on the status page, the Workspace administrator whose directory the staff check reads.

@@ -50,6 +50,7 @@ add_library(poni_engine STATIC
   src/connectors/notify/gmail.cpp
   src/connectors/pubsub/subscriber.cpp
   src/connectors/storage/store.cpp
+  src/connectors/workspace/http_directory.cpp
   src/core/config.cpp
   src/core/crypto.cpp
   src/core/log.cpp
