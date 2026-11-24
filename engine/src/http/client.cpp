@@ -21,6 +21,7 @@
 #include <boost/beast/ssl/ssl_stream.hpp>
 #include <boost/system/errc.hpp>
 #include <boost/url/encode.hpp>
+#include <boost/url/grammar/hexdig_chars.hpp>
 #include <boost/url/rfc/unreserved_chars.hpp>
 
 #include <openssl/err.h>
@@ -95,7 +96,9 @@ asio::awaitable<ClientResponse> exchange(Stream& stream, beast::tcp_stream& tcp_
 
 // What the mock stands in for (D-087). Pub/Sub, Cloud Storage and the
 // metadata server are not here: against the mock they are refused.
-constexpr std::array<std::string_view, 7> kMockedHosts{
+// A mock without the list of users answers 404, which the engine takes as a
+// list it could not read and changes nothing; `poni-tools mock-google` has it.
+constexpr std::array<std::string_view, 8> kMockedHosts{
     "accounts.google.com",                          // the consent page of connecting an account (a browser address)
     "oauth2.googleapis.com",                        // tokens
     "mybusinessaccountmanagement.googleapis.com",   // accounts
@@ -103,6 +106,7 @@ constexpr std::array<std::string_view, 7> kMockedHosts{
     "mybusiness.googleapis.com",                    // reviews and the reply
     "businessprofileperformance.googleapis.com",    // the Performance API
     "gmail.googleapis.com",                         // sending email
+    "admin.googleapis.com",                         // the Workspace directory: the list of users
 };
 
 }  // namespace
@@ -134,6 +138,7 @@ std::string form_encode(std::string_view value) { return boost::urls::encode(val
 namespace {
 
 constexpr std::string_view kGbpHost = "mybusiness.googleapis.com";
+constexpr std::string_view kDirectoryHost = "admin.googleapis.com";
 constexpr std::array<std::string_view, 2> kApnsHosts{"api.push.apple.com", "api.sandbox.push.apple.com"};
 
 // ASCII, whatever the locale.
@@ -151,19 +156,19 @@ bool is_plain_id(std::string_view id) {
 
 namespace {
 
-// Whether `url` is https://mybusiness.googleapis.com/<shape> and nothing
-// else. An empty entry of `shape` stands for an id. The address must equal
-// the one built here from the same parts, character for character: then
+// Whether `url` is https://<host>/<shape> and nothing else. An empty entry
+// of `shape` stands for an id. The address must equal the one built here
+// from the same parts, character for character: then
 // there is no port, user or fragment, nothing is percent-encoded, and what
 // was checked is what is sent. `query`: the query the address must end in,
 // as the caller built it from parts it has checked; without one the address
 // has no query at all.
 template <std::size_t N>
-bool has_gbp_shape(const boost::urls::url& url, const std::array<std::string_view, N>& shape, std::string_view query = {}) {
-    if (url.scheme_id() != boost::urls::scheme::https || url.host() != kGbpHost) return false;
+bool has_shape(const boost::urls::url& url, std::string_view host, const std::array<std::string_view, N>& shape, std::string_view query = {}) {
+    if (url.scheme_id() != boost::urls::scheme::https || url.host() != host) return false;
     const auto segments = url.segments();
     if (segments.size() != shape.size()) return false;
-    boost::urls::url built("https://mybusiness.googleapis.com");
+    boost::urls::url built("https://" + std::string(host));
     std::size_t i = 0;
     for (const auto& segment : segments) {
         const auto expected = shape[i++];
@@ -197,6 +202,31 @@ std::optional<std::string> checked_update_mask(std::string_view query) {
         rest.remove_prefix(comma + 1);
     }
     return built;
+}
+
+// `query` if it is the list of the account's users as the engine asks for it,
+// "customer=my_customer&maxResults=500", alone or followed by
+// "&pageToken=" and a token of 1 to 2,048 unreserved characters and %XX
+// escapes, the characters form_encode leaves and writes. So a token cannot
+// add a parameter, a path or a fragment. Nothing otherwise.
+std::optional<std::string_view> checked_user_list_query(std::string_view query) {
+    constexpr std::string_view list = "customer=my_customer&maxResults=500";
+    constexpr std::string_view page = "&pageToken=";
+    constexpr std::size_t kMaxTokenLength = 2048;
+    if (!query.starts_with(list)) return std::nullopt;
+    const std::string_view rest = query.substr(list.size());
+    if (rest.empty()) return query;
+    if (!rest.starts_with(page)) return std::nullopt;
+    const std::string_view token = rest.substr(page.size());
+    if (token.empty() || token.size() > kMaxTokenLength) return std::nullopt;
+    constexpr auto hex = boost::urls::grammar::hexdig_chars;
+    for (std::size_t i = 0; i < token.size(); ++i) {
+        if (boost::urls::unreserved_chars(token[i])) continue;
+        const bool escape = token[i] == '%' && i + 2 < token.size() && hex(token[i + 1]) && hex(token[i + 2]);
+        if (!escape) return std::nullopt;
+        i += 2;
+    }
+    return query;
 }
 
 // A host name of letters, digits, '.' and '-', or an IP address. Anything
@@ -264,17 +294,17 @@ bool is_storage_address_of(std::string_view written, const std::vector<std::stri
 
 bool is_reply_url(const boost::urls::url& url) {
     static constexpr std::array<std::string_view, 8> shape{"v4", "accounts", "", "locations", "", "reviews", "", "reply"};
-    return has_gbp_shape(url, shape);
+    return has_shape(url, kGbpHost, shape);
 }
 
 bool is_local_post_collection_url(const boost::urls::url& url) {
     static constexpr std::array<std::string_view, 6> shape{"v4", "accounts", "", "locations", "", "localPosts"};
-    return has_gbp_shape(url, shape);
+    return has_shape(url, kGbpHost, shape);
 }
 
 bool is_local_post_url(const boost::urls::url& url) {
     static constexpr std::array<std::string_view, 7> shape{"v4", "accounts", "", "locations", "", "localPosts", ""};
-    return has_gbp_shape(url, shape);
+    return has_shape(url, kGbpHost, shape);
 }
 
 bool is_local_post_update_url(const boost::urls::url& url) {
@@ -283,12 +313,27 @@ bool is_local_post_update_url(const boost::urls::url& url) {
     // The query as it is written, not decoded: an encoded comma or name is not one of the six.
     const auto query = url.encoded_query();
     const auto mask = checked_update_mask(std::string_view(query.data(), query.size()));
-    return mask && has_gbp_shape(url, shape, *mask);
+    return mask && has_shape(url, kGbpHost, shape, *mask);
 }
 
 bool is_batch_get_reviews_url(const boost::urls::url& url) {
     static constexpr std::array<std::string_view, 4> shape{"v4", "accounts", "", "locations:batchGetReviews"};
-    return has_gbp_shape(url, shape);
+    return has_shape(url, kGbpHost, shape);
+}
+
+bool is_directory_user_list_url(const boost::urls::url& url) {
+    static constexpr std::array<std::string_view, 4> shape{"admin", "directory", "v1", "users"};
+    if (!url.has_query()) return false;
+    // The query as it is written, not decoded: an encoded '&' or '=' is part of the token, not a parameter.
+    const auto written = url.encoded_query();
+    const auto query = checked_user_list_query(std::string_view(written.data(), written.size()));
+    return query && has_shape(url, kDirectoryHost, shape, *query);
+}
+
+bool is_directory_host(const boost::urls::url& url) {
+    std::string host = text::ascii_lower(url.host());
+    while (host.ends_with('.')) host.pop_back();
+    return host == kDirectoryHost;
 }
 
 bool is_gbp_host(const boost::urls::url& url) {
@@ -386,6 +431,9 @@ std::optional<std::string_view> why_refused(ClientMethod method, const boost::ur
         return "the outbound client only sends Apple's push service a POST of a notification to one device";
     }
     if (is_storage_host(url)) return why_storage_refused(method, url, public_bucket);
+    if (is_directory_host(url) && (method != ClientMethod::get || !is_directory_user_list_url(url))) {
+        return "the outbound client only sends Google's Admin SDK a GET of the list of users";
+    }
     switch (method) {
         case ClientMethod::get: return std::nullopt;
         case ClientMethod::put:

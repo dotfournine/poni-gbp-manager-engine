@@ -121,6 +121,18 @@ bool is_batch_get_reviews_url(const boost::urls::url& url);
 // above. (A host written with other characters is refused for every method.)
 bool is_gbp_host(const boost::urls::url& url);
 
+// True when the address names the host of Google's Admin SDK,
+// admin.googleapis.com, in any case, with a trailing dot, a port or another
+// scheme: the host to which the client sends one GET, the list below, and nothing else.
+bool is_directory_host(const boost::urls::url& url);
+
+// True for the only address the client sends the Admin SDK, the list of the
+// account's users (D-106 point 3):
+// https://admin.googleapis.com/admin/directory/v1/users?customer=my_customer&maxResults=500
+// alone or followed by &pageToken=<token>, the token 1 to 2,048 unreserved
+// characters and %XX escapes, as form_encode writes it.
+bool is_directory_user_list_url(const boost::urls::url& url);
+
 // An id as Google's are, of accounts, locations, reviews and local posts:
 // letters, digits, '-' and '_' (ASCII, whatever the locale), at most 128 of
 // them. The ids the four write addresses take.
