@@ -282,7 +282,7 @@ void read_apns(Settings& s, Config& c) {
 void check_combinations(Settings& s, const Config& c) {
     if (s.failed()) return;
     if (const auto problem = public_url_problem(c)) return s.fail(*problem);
-    if (!c.public_folder_url.empty() && !c.public_bucket.contains('/')) {
+    if (!c.public_folder_url.empty() && !c.public_bucket_is_folder()) {
         return s.fail("PONI_PUBLIC_FOLDER_URL is the address of a local folder: PONI_PUBLIC_BUCKET must be that folder's path "
                       "(a bucket's address is Cloud Storage's own)");
     }
@@ -295,7 +295,7 @@ void check_combinations(Settings& s, const Config& c) {
             return s.fail("PONI_GOOGLE_SIGNIN_CLIENT_ID and _SECRET must be empty with PONI_GOOGLE_MOCK_URL: sign in with "
                           "PONI_DEV_LOGIN_EMAIL against the mock");
         }
-        if (!c.public_bucket.empty() && !c.public_bucket.contains('/')) {
+        if (!c.public_bucket.empty() && !c.public_bucket_is_folder()) {
             return s.fail("PONI_PUBLIC_BUCKET must be a path with PONI_GOOGLE_MOCK_URL: against the mock, buckets are local folders");
         }
         if (c.apns && c.apns->environment == ApnsEnvironment::production) {

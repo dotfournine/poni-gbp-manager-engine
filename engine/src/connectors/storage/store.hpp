@@ -75,6 +75,9 @@ bool valid_object_name(std::string_view name);
 bool is_report_page(std::string_view name);
 // A report's archive, the only name copy() copies to: the same with "a/".
 bool is_report_archive(std::string_view name);
+// A page and an archive name for it: the archive keeps the page's extension.
+// The only pair copy() takes.
+bool is_archive_of(std::string_view page, std::string_view archive);
 
 // Rate limiter key.
 inline constexpr std::string_view kStorageApi = "google.storage";
@@ -110,10 +113,6 @@ private:
     std::filesystem::path folder_;
     std::string served_at_;
 };
-
-// A setting names a bucket ("xvisionmedia-gbp-public") or, with a slash in
-// it, a folder ("/tmp/poni-public", "./public").
-bool is_folder_setting(std::string_view setting);
 
 // The multipart/related body of a Cloud Storage upload: the object's
 // metadata as JSON, then its content. `boundary` must not occur in the body.

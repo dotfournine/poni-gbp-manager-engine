@@ -182,6 +182,9 @@ struct Config {
     // folder instead, for development. Empty: no report is built and no photo
     // or video can be uploaded for a post.
     std::string public_bucket;
+    // A value of public_bucket with a slash in it ("/tmp/poni-public",
+    // "./public") is a folder; any other names a bucket.
+    bool public_bucket_is_folder() const { return public_bucket.contains('/'); }
     // Development only (D-105): the address a local file server serves the
     // folder of public_bucket at, "http://127.0.0.1:8088", so that the
     // dashboard can show a report's page. Only with a folder, on a loopback

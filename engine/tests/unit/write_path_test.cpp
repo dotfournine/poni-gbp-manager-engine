@@ -794,6 +794,12 @@ TEST_F(WritePath, AGmailFailureSaysWhenItWasTheToken) {
     EXPECT_EQ(down.error().kind, Kind::transient);
     EXPECT_THAT(down.error().message, testing::StartsWith("the sending account's token: HTTP 503"));
 
+    // The token endpoint answers 404: the token's failure, not a mailbox that was never connected.
+    http_.reply(404, "{}");
+    const auto missing = await(gmail_.send({"a@example.com", "s", "b"}));
+    EXPECT_EQ(missing.error().kind, Kind::permanent);
+    EXPECT_THAT(missing.error().message, testing::StartsWith("the sending account's token: HTTP 404"));
+
     // Gmail refuses the token it was given, and no new one can be had: that is the token's failure too.
     http_.reply(200, std::string(kTokenOk));
     http_.reply(401, "{}");

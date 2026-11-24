@@ -354,25 +354,44 @@ bool is_report_page_delete_url(const boost::urls::url& url, std::string_view pub
     return report_object_extension((*s)[5], "r/") && is_storage_address_of(url.buffer(), *s);
 }
 
+namespace {
+
+// Cloud Storage, however its host is written: a read, an upload, and in the public bucket the copy of a report's page
+// to the archive and the delete of the original (D-104), each address only as the engine writes it.
+std::optional<std::string_view> why_storage_refused(ClientMethod method, const boost::urls::url& url, std::string_view public_bucket) {
+    switch (method) {
+        case ClientMethod::get: return std::nullopt;
+        case ClientMethod::post:
+            if (!is_storage_upload_url(url) && !is_report_page_copy_url(url, public_bucket)) {
+                return "the outbound client only sends Cloud Storage an upload, or the copy of a report's page to the archive in the public bucket";
+            }
+            return std::nullopt;
+        case ClientMethod::del:
+            if (!is_report_page_delete_url(url, public_bucket)) {
+                return "the outbound client only sends Cloud Storage a DELETE of a report's page in the public bucket";
+            }
+            return std::nullopt;
+        case ClientMethod::put:
+        case ClientMethod::patch: return "the outbound client sends Cloud Storage no PUT and no PATCH";
+    }
+    return "the outbound client does not know this method";
+}
+
+}  // namespace
+
 std::optional<std::string_view> why_refused(ClientMethod method, const boost::urls::url& url, std::string_view public_bucket) {
     if (!is_plain_host(url)) return "the outbound client only sends to a host named with letters, digits, '.' and '-'";
     // The host however it is written; the one allowed address only as the engine writes it.
     if (is_apns_host(url) && (method != ClientMethod::post || !is_apns_device_url(url))) {
         return "the outbound client only sends Apple's push service a POST of a notification to one device";
     }
+    if (is_storage_host(url)) return why_storage_refused(method, url, public_bucket);
     switch (method) {
         case ClientMethod::get: return std::nullopt;
         case ClientMethod::put:
             if (!is_reply_url(url)) return "the outbound client only sends PUT for a reply to a review";
             return std::nullopt;
         case ClientMethod::del:
-            // The host however it is written; the one allowed address only as the engine writes it.
-            if (is_storage_host(url)) {
-                if (!is_report_page_delete_url(url, public_bucket)) {
-                    return "the outbound client only sends Cloud Storage a DELETE of a report's page in the public bucket";
-                }
-                return std::nullopt;
-            }
             if (!is_local_post_url(url)) return "the outbound client only sends DELETE for a local post";
             return std::nullopt;
         case ClientMethod::patch:
@@ -384,9 +403,6 @@ std::optional<std::string_view> why_refused(ClientMethod method, const boost::ur
             // The host however it is written; the two allowed addresses only as Google writes them.
             if (is_gbp_host(url) && !is_local_post_collection_url(url) && !is_batch_get_reviews_url(url)) {
                 return "the outbound client only sends a POST to Google Business Profile to create a local post or to read reviews";
-            }
-            if (is_storage_host(url) && !is_storage_upload_url(url) && !is_report_page_copy_url(url, public_bucket)) {
-                return "the outbound client only sends Cloud Storage an upload, or the copy of a report's page to the archive in the public bucket";
             }
             return std::nullopt;
     }

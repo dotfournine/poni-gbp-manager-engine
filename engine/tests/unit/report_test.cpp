@@ -7,6 +7,7 @@
 
 #include "connectors/gbp/performance.hpp"
 #include "connectors/storage/store.hpp"
+#include "core/config.hpp"
 #include "core/json.hpp"
 #include "domain/prompts.hpp"
 #include "domain/report.hpp"
@@ -885,9 +886,14 @@ TEST(ObjectStore, OnlyPlainNamesAreAccepted) {
 }
 
 TEST(ObjectStore, ABucketIsANameAndAFolderHasASlash) {
-    EXPECT_FALSE(storage::is_folder_setting("xvisionmedia-gbp-public"));
-    EXPECT_TRUE(storage::is_folder_setting("/tmp/poni-public"));
-    EXPECT_TRUE(storage::is_folder_setting("./public"));
+    const auto is_folder = [](std::string setting) {
+        core::Config config;
+        config.public_bucket = std::move(setting);
+        return config.public_bucket_is_folder();
+    };
+    EXPECT_FALSE(is_folder("xvisionmedia-gbp-public"));
+    EXPECT_TRUE(is_folder("/tmp/poni-public"));
+    EXPECT_TRUE(is_folder("./public"));
 }
 
 TEST_F(PerformanceHttp, AnObjectIsUploadedInOnePostWithItsNameTypeAndCacheRule) {
@@ -1045,6 +1051,9 @@ TEST(ObjectStore, AReportsPageAndItsArchiveHaveOneShapeEach) {
     EXPECT_TRUE(storage::is_report_archive(kArchive));
     EXPECT_FALSE(storage::is_report_archive(kPage));
     for (const auto& name : not_a_page()) EXPECT_FALSE(storage::is_report_page(name)) << name;
+    EXPECT_TRUE(storage::is_archive_of(kPage, kArchive));
+    EXPECT_FALSE(storage::is_archive_of(kArchive, kPage));
+    EXPECT_FALSE(storage::is_archive_of(std::format("r/{}.pdf", kPageToken), kArchive));  // another extension
 }
 
 TEST_F(PerformanceHttp, AReportsPageIsCopiedToItsArchiveInOneCall) {

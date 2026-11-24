@@ -41,8 +41,9 @@ std::string encoded_words(std::string_view text) {
 }
 
 // The sending mailbox's tokens, remembering whether the last one could be
-// had: google::send returns the token source's error as it is, and a message
-// to a person should say that it was the token.
+// had: google::send returns the token source's error (its not_found, a token
+// endpoint's 404, as not_configured), and a message to a person should say
+// that it was the token.
 struct WatchedTokens final : google::TokenSource {
     explicit WatchedTokens(google::TokenSource& inner) : inner(inner) {}
     asio::awaitable<google::Result<std::string>> access_token() override {
@@ -99,7 +100,11 @@ asio::awaitable<std::expected<void, SendError>> GmailChannel::send(Message messa
         const auto& error = answer.error();
         SendError failure{Kind::permanent, tokens.failed ? "the sending account's token: " + error.message : error.message};
         if (error.kind == ApiError::Kind::rate_limited || error.kind == ApiError::Kind::unavailable) failure.kind = Kind::transient;
-        if (tokens.failed && error.kind == ApiError::Kind::not_configured) failure = SendError{Kind::not_configured, error.message};
+        // No mailbox connected is a token source's not_configured that had no answer from a token endpoint: a 404 of
+        // one comes back as not_configured too, and stays the token's failure.
+        if (tokens.failed && error.kind == ApiError::Kind::not_configured && error.http_status == 0) {
+            failure = SendError{Kind::not_configured, error.message};
+        }
         co_return std::unexpected(std::move(failure));
     } catch (const boost::system::system_error& e) {
         network_error = e.code().message();

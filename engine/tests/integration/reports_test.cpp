@@ -1134,8 +1134,10 @@ TEST_F(Reports, TheDeliveryLogShowsAReportsSends) {
 
 namespace {
 
-constexpr std::string_view kNotMoved503 =
-    "The report's page could not be moved to the archive (HTTP 503). The report stays \"discarding\"; call again to finish.";
+constexpr std::string_view kNotCopied503 =
+    "The report's page could not be copied to the archive (HTTP 503). The report stays \"discarding\"; call again to finish.";
+constexpr std::string_view kNotDeleted503 =
+    "The report's page could not be deleted after its copy to the archive (HTTP 503). The report stays \"discarding\"; call again to finish.";
 
 }  // namespace
 
@@ -1265,6 +1267,28 @@ TEST_F(Reports, WithoutABucketAReportWithAPageIsNotDiscarded) {
     EXPECT_EQ(discard_entries(id), 0);
 }
 
+// A discard that broke off, called again by an engine that has no bucket any more: refused, and the report keeps its
+// state and its archive's name for an engine that has one.
+TEST_F(Reports, WithoutABucketADiscardingReportIsNotFinished) {
+    const auto id = ready_report();
+    const auto page = page_object(id);
+    public_.refuse_copy = true;
+    ASSERT_EQ(discard(id).status, 502u);
+    const auto archive = archive_object(id);
+    ASSERT_FALSE(archive.empty());
+    start(false);
+    public_.refuse_copy = false;
+    public_.operations.clear();
+    const auto refused = discard(id);
+    EXPECT_EQ(refused.status, 409u) << refused.body;
+    EXPECT_EQ(error_code(refused), "no_public_bucket");
+    EXPECT_EQ(status(id), "discarding");
+    EXPECT_EQ(archive_object(id), archive);
+    EXPECT_TRUE(public_.objects.contains(page));
+    EXPECT_TRUE(public_.operations.empty());
+    EXPECT_EQ(discard_entries(id), 1);
+}
+
 TEST_F(Reports, ACopyThatFailsDeletesNothingAndASecondCallFinishes) {
     const auto id = ready_report();
     const auto page = page_object(id);
@@ -1273,7 +1297,7 @@ TEST_F(Reports, ACopyThatFailsDeletesNothingAndASecondCallFinishes) {
     const auto failed = discard(id);
     EXPECT_EQ(failed.status, 502u) << failed.body;
     EXPECT_EQ(error_code(failed), "storage_failed");
-    EXPECT_EQ(error_message(failed), kNotMoved503);
+    EXPECT_EQ(error_message(failed), kNotCopied503);
     const auto archive = archive_object(id);
     ASSERT_FALSE(archive.empty());
     for (const auto& text : {page, archive, std::string("scripted outage")}) EXPECT_THAT(failed.body, Not(HasSubstr(text)));
@@ -1297,6 +1321,18 @@ TEST_F(Reports, ACopyThatFailsDeletesNothingAndASecondCallFinishes) {
     EXPECT_EQ(discard_entries(id), 1);
 }
 
+// No token for Cloud Storage keeps its endpoint's status (a 404 here), which is no answer about the page: the message says so.
+TEST_F(Reports, ACopyWithoutATokenSaysSo) {
+    const auto id = ready_report();
+    public_.copy_error = storage::ApiError{storage::ApiError::Kind::not_configured, 404, "token endpoint: not found"};
+    const auto failed = discard(id);
+    EXPECT_EQ(failed.status, 502u) << failed.body;
+    EXPECT_EQ(error_message(failed), "The report's page could not be copied to the archive (the engine has no access token for Cloud "
+                                     "Storage). The report stays \"discarding\"; call again to finish.");
+    EXPECT_THAT(failed.body, Not(HasSubstr("token endpoint")));
+    EXPECT_EQ(status(id), "discarding");
+}
+
 TEST_F(Reports, ACopyThatThrowsIsA502AndDeletesNothing) {
     const auto id = ready_report();
     const auto page = page_object(id);
@@ -1305,7 +1341,8 @@ TEST_F(Reports, ACopyThatThrowsIsA502AndDeletesNothing) {
     const auto failed = discard(id);
     EXPECT_EQ(failed.status, 502u) << failed.body;
     EXPECT_EQ(error_code(failed), "storage_failed");
-    EXPECT_EQ(error_message(failed), "The report's page could not be moved to the archive. The report stays \"discarding\"; call again to finish.");
+    EXPECT_EQ(error_message(failed), "The report's page could not be copied to the archive (the connection to Cloud Storage failed). The report "
+                                     "stays \"discarding\"; call again to finish.");
     EXPECT_THAT(failed.body, Not(HasSubstr("connection reset")));
     EXPECT_EQ(public_.operations, (std::vector<std::string>{"copy " + page + " " + archive_object(id)}));
     EXPECT_TRUE(public_.objects.contains(page));
@@ -1318,7 +1355,7 @@ TEST_F(Reports, ADeleteThatFailsLeavesTheArchiveAndASecondCallFinishes) {
     public_.refuse_remove = true;
     const auto failed = discard(id);
     EXPECT_EQ(failed.status, 502u) << failed.body;
-    EXPECT_EQ(error_message(failed), kNotMoved503);
+    EXPECT_EQ(error_message(failed), kNotDeleted503);
     const auto archive = archive_object(id);
     EXPECT_EQ(status(id), "discarding");
     EXPECT_TRUE(public_.objects.contains(archive));
@@ -1342,6 +1379,8 @@ TEST_F(Reports, ADeleteThatThrowsIsA502AndLeavesTheArchive) {
     const auto failed = discard(id);
     EXPECT_EQ(failed.status, 502u) << failed.body;
     EXPECT_EQ(error_code(failed), "storage_failed");
+    EXPECT_EQ(error_message(failed), "The report's page could not be deleted after its copy to the archive (the connection to Cloud Storage "
+                                     "failed). The report stays \"discarding\"; call again to finish.");
     EXPECT_EQ(status(id), "discarding");
     EXPECT_TRUE(public_.objects.contains(archive_object(id)));
     EXPECT_TRUE(public_.objects.contains(page));

@@ -60,7 +60,7 @@ protected:
     http::ApiOptions api_options_;
     // The pipeline that writes a draft again when staff ask; set before build(), or one of fakes is used.
     jobs::ReviewPipeline* api_pipeline_ = nullptr;
-    // The service that builds reports; set before build(), or one of fakes is used.
+    // The service that builds, sends and discards reports; set before build(), or one of fakes is used.
     jobs::Reporter* api_reporter_ = nullptr;
     // The public bucket that takes a post's photo; set before build().
     storage::ObjectStore* api_public_store_ = nullptr;
