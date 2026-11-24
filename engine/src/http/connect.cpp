@@ -312,7 +312,7 @@ asio::awaitable<std::optional<std::string>> ConnectService::connect(const Attemp
     boost::json::object stored{{"source", "dashboard"}, {"account_email", account_email}};
     // Each account's own check. No branch is a default: a row without a check stores nothing.
     if (account->name == kConnectGmail) {
-        if (!tokens.scope || !granted(*tokens.scope, notify::kGmailSendScope)) {
+        if (!granted(tokens.scope.value_or(""), notify::kGmailSendScope)) {
             co_return refuse("no_send_permission", "the gmail.send scope was not granted");
         }
         const auto works = co_await check_gmail(http_, limiter_, credentials);
@@ -323,7 +323,7 @@ asio::awaitable<std::optional<std::string>> ConnectService::connect(const Attemp
         stored["accounts"] = seen->accounts;
         stored["locations"] = seen->locations;
     } else if (account->name == kConnectWorkspace) {
-        if (!tokens.scope || !granted(*tokens.scope, kDirectoryScope)) {
+        if (!granted(tokens.scope.value_or(""), kDirectoryScope)) {
             co_return refuse("no_directory_permission", "the admin.directory.user.readonly scope was not granted");
         }
         // An administrator of another Workspace (a test tenant picked in the chooser) would pass every other
@@ -332,10 +332,9 @@ asio::awaitable<std::optional<std::string>> ConnectService::connect(const Attemp
             co_return refuse("no_access", "the account is not of the sign-in domains");
         }
         // The id the directory knows the account by, from the ID token of the engine's own exchange (D-091 point 12). Logged nowhere.
-        std::string sub;
         const auto* claim = exchanged->id_token_claims ? exchanged->id_token_claims->if_contains("sub") : nullptr;
-        if (claim && claim->is_string()) sub = std::string(claim->get_string());
-        if (sub.empty() || !is_plain_id(sub)) co_return refuse("no_access", "Google named no id for the account");
+        std::string sub = claim && claim->is_string() ? std::string(claim->get_string()) : std::string();
+        if (!is_plain_id(sub)) co_return refuse("no_access", "Google named no id for the account");  // an empty one is not
         const auto admin = co_await check_workspace(http_, clock_, limiter_, credentials, std::move(sub), account_email);
         if (!admin) co_return refuse("no_access", admin.error());
     } else {
