@@ -39,7 +39,7 @@ The app's requests are in the app repository (`poni-gbp-manager-ios/docs/design/
 
 ## Staff from the Workspace directory (D-106)
 
-Decided in D-106; the first five items are built in this order, the last is the owner's.
+Decided in D-106. The items are built in the order listed; the last is the owner's.
 
 ### The Admin SDK is read-only in the outbound client
 
@@ -107,7 +107,7 @@ Decided in D-106; the first five items are built in this order, the last is the 
 - Connect.
 - Then one trial with a throwaway account of the real Workspace: make it and list the directory at once, to see how soon a new account is listed (a person missing from the list is disabled); suspend it, unsuspend it, delete it, restore it. The suspended account should be in the list with its flag and the deleted one not, as D-106 point 5 expects, before the check is relied on.
 
-**Done when:** an administrator of the real Workspace is connected, and the trial's answers are what D-106 point 5 expects. The other five items carry no owner's steps: each later order removes its own item, and this one stays until the owner has done it.
+**Done when:** an administrator of the real Workspace is connected, and the trial's answers are what D-106 point 5 expects.
 
 **Touches:** `deploy/README.md`; `PONI_SIGNIN_DOMAINS`; D-106 points 2 and 5.
 
