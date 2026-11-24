@@ -2996,9 +2996,11 @@ paths:
         neither suspended nor archived, with an address of the sign-in
         domains, is made a user. The user has not signed in and has no
         session until they do; their own Google sign-in, with every check it
-        always passes, finds this user. A person who is a user already,
-        signed in or not, active or disabled, is answered as they are, with
-        200, and nothing changes.
+        always passes, finds this user. The refusals below come first, so an
+        account that is suspended, archived, gone from the directory or
+        outside the sign-in domains is refused even when it is a user
+        already. Otherwise a person who is a user already, signed in or not,
+        is answered as they are, with 200, and nothing changes.
       tags: [session]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"

@@ -219,6 +219,11 @@ TEST_F(UsersDirectory, TheSamePersonAgainIsTheSameUser) {
     ASSERT_EQ(disabled.status, 200u) << disabled.body;
     EXPECT_EQ(json(disabled).at("status").as_string(), "disabled");
     EXPECT_EQ(created_entries(), 1);
+
+    // The refusals come first: a user whose account is suspended at Google is refused like anyone else.
+    directory_.users.front().suspended = true;
+    EXPECT_EQ(error_code(create(kRobin)), "directory_user_inactive");
+    EXPECT_EQ(created_entries(), 1);
 }
 
 TEST_F(UsersDirectory, TheRequestCannotNameThePerson) {
