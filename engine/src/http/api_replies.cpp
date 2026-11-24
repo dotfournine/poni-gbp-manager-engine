@@ -15,6 +15,7 @@
 #include "db/repo_notifications.hpp"
 #include "db/repo_posting.hpp"
 #include "db/repo_reviews.hpp"
+#include "db/repo_users.hpp"
 #include "http/api.hpp"
 #include "http/api_support.hpp"
 #include "jobs/analysis.hpp"
@@ -191,8 +192,13 @@ void add_reply_routes(Router& router, const Api& api, jobs::ReviewPipeline& pipe
                    }));
                });
 
-    router.add(verb::get, "/api/users", {Access::user, "users.list"}, [api](const Request&) -> asio::awaitable<Response> {
-        co_return ok(co_await api.query([](pqxx::work& tx) { return repo::list_users(tx); }));
+    router.add(verb::get, "/api/users", {Access::user, "users.list"}, [api](const Request& request) -> asio::awaitable<Response> {
+        const QueryParams query(request.query);
+        std::string status = "active";
+        bool bad = false;
+        read_choice(query, "status", repo::kUserStatusFilters, status, bad);
+        if (bad) co_return bad_query();
+        co_return ok(co_await api.query([status](pqxx::work& tx) { return repo::list_users(tx, status); }));
     });
 
     // ---- notification rules and the delivery log ---------------------------------

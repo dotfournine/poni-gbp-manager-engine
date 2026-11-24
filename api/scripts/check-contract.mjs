@@ -602,6 +602,8 @@ try {
   } else if (requireData) {
     fail("GET /api/escalations", "no escalation to check; was the seed applied?");
   }
+  check("GET /api/users?status=all", "/api/users", "GET", await call("GET", "/api/users?status=all"));
+  expectStatus("GET /api/users?status=odd", await call("GET", "/api/users?status=odd"), 400, "invalid_request");
   if (seededLocation) {
     const body = { event_type: "approval_needed", location_id: seededLocation.id, recipients: ["contract-check@example.com"] };
     const rule = await call("POST", "/api/notification-rules", { body });

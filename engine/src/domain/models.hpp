@@ -28,8 +28,13 @@ struct User {
     std::string email;
     std::string name;
     std::optional<std::string> picture_url;
+    // "active" or "disabled", read from the row for a list or an assignee.
+    // The user of a session is built at sign-in without it: the default
+    // stands for them, because a session exists only for an active user and
+    // a disabled user's sign-in is refused before anything is served.
+    std::string status = "active";
 };
-BOOST_DESCRIBE_STRUCT(User, (), (id, email, name, picture_url))
+BOOST_DESCRIBE_STRUCT(User, (), (id, email, name, picture_url, status))
 
 struct SignInMethods {
     bool google = false;
