@@ -3,8 +3,9 @@
 // reply to a review, the create of a local post, the delete of a local
 // post, the edit of a local post), each of which the client refuses to send
 // anywhere else; the copy and the delete of a report's page in the public
-// bucket (D-104), which go to that bucket and nowhere else; and the email
-// the Gmail channel builds.
+// bucket (D-104), which go to that bucket and nowhere else; the one read
+// of Google's Admin SDK, the list of users (D-106); and the email the Gmail
+// channel builds.
 
 #include "connectors/gbp/writer.hpp"
 #include "connectors/notify/gmail.hpp"
@@ -15,6 +16,7 @@
 
 #include <boost/json/parse.hpp>
 #include <boost/system/system_error.hpp>
+#include <boost/url/parse.hpp>
 #include <gmock/gmock.h>
 
 #include <array>
@@ -1180,4 +1182,167 @@ TEST_F(WritePath, AReportsPageIsCopiedAndDeletedOnlyInTheConfiguredBucket) {
     EXPECT_EQ(std::string(http_.refused[0].url.buffer()), kCopyUrl);
     EXPECT_EQ(std::string(http_.refused[1].url.buffer()), kDeleteUrl);
     EXPECT_EQ(http_.requests.size(), 3u);
+}
+
+// ---- Google's Admin SDK: one GET, the list of the account's users (D-106 point 3) -------------
+
+namespace {
+
+constexpr std::string_view kUsers = "https://admin.googleapis.com/admin/directory/v1/users";
+constexpr std::string_view kUserListUrl = "https://admin.googleapis.com/admin/directory/v1/users?customer=my_customer&maxResults=500";
+constexpr std::string_view kUserListPageUrl =
+    "https://admin.googleapis.com/admin/directory/v1/users?customer=my_customer&maxResults=500&pageToken=abc-DEF_123.~%2F%3D";
+
+// Every other address on the host: what the engine never asks about, and the list's address written another way.
+std::vector<std::string> other_directory_addresses() {
+    return {
+        // one person, and the rest of a Workspace
+        std::format("{}/103456789012345678901", kUsers),
+        std::format("{}/someone@example.com", kUsers),
+        std::format("{}/123/aliases", kUsers),
+        std::format("{}/123/photos/thumbnail", kUsers),
+        "https://admin.googleapis.com/admin/directory/v1/groups/abc",
+        "https://admin.googleapis.com/admin/directory/v1/customer/my_customer/domains",
+        // the list's path, written another way
+        std::format("{}/..?customer=my_customer&maxResults=500", kUsers),
+        std::format("{}/%2e%2e?customer=my_customer&maxResults=500", kUsers),
+        std::format("{}/?customer=my_customer&maxResults=500", kUsers),
+        "https://admin.googleapis.com/admin/directory/v1/Users?customer=my_customer&maxResults=500",
+        "https://admin.googleapis.com/admin/directory/v2/users?customer=my_customer&maxResults=500",
+        "http://admin.googleapis.com/admin/directory/v1/users?customer=my_customer&maxResults=500",
+        "https://admin.googleapis.com:443/admin/directory/v1/users?customer=my_customer&maxResults=500",
+        "https://x@admin.googleapis.com/admin/directory/v1/users?customer=my_customer&maxResults=500",
+        "https://ADMIN.googleapis.com/admin/directory/v1/users?customer=my_customer&maxResults=500",
+        "https://admin.googleapis.com./admin/directory/v1/users?customer=my_customer&maxResults=500",
+    };
+}
+
+// The list's address with any other query than the engine's.
+std::vector<std::string> other_user_list_queries() {
+    const std::string list(kUserListUrl);
+    return {
+        std::string(kUsers),
+        std::format("{}?customer=my_customer", kUsers),
+        std::format("{}?maxResults=500&customer=my_customer", kUsers),
+        std::format("{}?customer=C0123&maxResults=500", kUsers),
+        std::format("{}?domain=example.com&maxResults=500", kUsers),
+        std::format("{}?customer=my_customer&maxResults=100", kUsers),
+        std::format("{}?customer=my_customer&maxResults=5000", kUsers),
+        std::format("{}?customer=my_customer&customer=my_customer&maxResults=500", kUsers),
+        list + "&query=name:x",
+        list + "&showDeleted=true",
+        list + "&viewType=domain_public",
+        list + "&projection=full",
+        list + "&orderBy=email",
+        list + "&customer=my_customer",
+        list + "&pageToken=",
+        list + "&pageTokens=abc",
+        list + "&pageToken=a&b",
+        list + "&pageToken=a=b",
+        list + "&pageToken=a/b",
+        list + "&pageToken=a+b",  // a space as a form writes it
+        list + "&pageToken=a?b",
+        list + "&pageToken=" + std::string(2049, 'a'),
+        list + "&pageToken=a&pageToken=b",
+        list + "&",
+        list + "&pageToken=a&",
+        list + "#x",
+        list + "&pageToken=a#x",
+    };
+}
+
+void expect_refused_for_every_method(const std::vector<std::string>& addresses) {
+    for (const auto& address : addresses) {
+        const boost::urls::url url(address);
+        EXPECT_TRUE(http::is_directory_host(url)) << address;
+        EXPECT_FALSE(http::is_directory_user_list_url(url)) << address;
+        for (const auto method : {http::ClientMethod::get, http::ClientMethod::post, http::ClientMethod::put, http::ClientMethod::patch,
+                                  http::ClientMethod::del}) {
+            const auto refusal = http::why_refused(method, url);
+            ASSERT_TRUE(refusal) << address;
+            EXPECT_THAT(std::string(*refusal), HasSubstr("Admin SDK")) << address;
+        }
+    }
+}
+
+}  // namespace
+
+TEST(OutboundDirectory, TheOneRequestIsAGetOfTheList) {
+    EXPECT_FALSE(http::why_refused(http::ClientMethod::get, boost::urls::url(kUserListUrl)));
+    EXPECT_FALSE(http::why_refused(http::ClientMethod::get, boost::urls::url(kUserListPageUrl)));
+    EXPECT_FALSE(http::why_refused(http::ClientMethod::get, boost::urls::url(std::format("{}&pageToken={}", kUserListUrl, std::string(2048, 'a')))))
+        << "a token of 2,048 characters is the longest";
+    EXPECT_TRUE(http::is_directory_user_list_url(boost::urls::url(kUserListUrl)));
+    EXPECT_TRUE(http::is_directory_user_list_url(boost::urls::url(kUserListPageUrl)));
+    // A token as Google hands it out, percent-encoded as the connector writes it, is one the rule takes.
+    const auto encoded = std::format("{}&pageToken={}", kUserListUrl, http::form_encode("a b&c=d/e+f%g?h#i"));
+    EXPECT_FALSE(http::why_refused(http::ClientMethod::get, boost::urls::url(encoded))) << encoded;
+}
+
+TEST(OutboundDirectory, EveryOtherMethodIsRefused) {
+    for (const auto address : {kUserListUrl, kUserListPageUrl}) {
+        for (const auto method : {http::ClientMethod::post, http::ClientMethod::put, http::ClientMethod::patch, http::ClientMethod::del}) {
+            const auto refusal = http::why_refused(method, boost::urls::url(address));
+            ASSERT_TRUE(refusal) << address;
+            EXPECT_THAT(std::string(*refusal), HasSubstr("Admin SDK")) << address;
+        }
+    }
+}
+
+TEST(OutboundDirectory, EveryOtherAddressIsRefused) { expect_refused_for_every_method(other_directory_addresses()); }
+
+TEST(OutboundDirectory, TheListIsOnlyAsTheEngineWritesIt) {
+    expect_refused_for_every_method(other_user_list_queries());
+    // A raw space and a broken escape are no address at all, so no request can carry one to the rule.
+    for (const auto* rest : {"&pageToken=a b", "&pageToken=a%2", "&pageToken=a%ZZ", "&pageToken=%"}) {
+        const auto address = std::format("{}{}", kUserListUrl, rest);
+        EXPECT_FALSE(boost::urls::parse_uri(address)) << address;
+    }
+    // Encoded, as the connector writes a token, they are escapes: the rule takes them.
+    for (const auto* token : {"a%20b", "a%252", "a%25ZZ", "%2F%3D%26%3F%23"}) {
+        const auto address = std::format("{}&pageToken={}", kUserListUrl, token);
+        EXPECT_FALSE(http::why_refused(http::ClientMethod::get, boost::urls::url(address))) << address;
+    }
+    // A host that only looks like it is another host.
+    EXPECT_FALSE(http::is_directory_host(boost::urls::url("https://admin.googleapis.com.example/admin/directory/v1/users")));
+    EXPECT_FALSE(http::is_directory_host(boost::urls::url("https://xadmin.googleapis.com/admin/directory/v1/users")));
+}
+
+TEST(OutboundDirectory, TheClientRefusesThemBeforeOpeningAConnection) {
+    RefusingClient refusing;
+    const auto rule = std::string(*http::why_refused(http::ClientMethod::post, boost::urls::url(kUserListUrl)));
+    for (auto request : {request_to(http::ClientMethod::post, kUserListUrl),
+                         request_to(http::ClientMethod::get, std::format("{}/103456789012345678901", kUsers)),
+                         request_to(http::ClientMethod::get, std::format("{}/someone@example.com", kUsers)),
+                         request_to(http::ClientMethod::get, std::format("{}?customer=my_customer&maxResults=500&query=name:x", kUsers))}) {
+        const std::string address(request.url.buffer());
+        // invalid_argument, not a network error: nothing was resolved or connected.
+        try {
+            refusing.send(std::move(request));
+            ADD_FAILURE() << "sent: " << address;
+        } catch (const std::invalid_argument& e) {
+            EXPECT_EQ(std::string(e.what()), rule) << address;
+        }
+    }
+}
+
+TEST(OutboundDirectory, TheClientLetsTheListThrough) {
+    // The list passes the rule and is sent to the mock's address, where nothing listens: a transport error, not a refusal.
+    RefusingClient refusing;
+    EXPECT_THROW(refusing.send(request_to(http::ClientMethod::get, kUserListUrl)), boost::system::system_error);
+    EXPECT_THROW(refusing.send(request_to(http::ClientMethod::get, kUserListPageUrl)), boost::system::system_error);
+}
+
+TEST(OutboundDirectory, TheScriptedClientRefusesThemToo) {
+    // So a connector test of the directory runs under the same rule as the engine.
+    boost::asio::io_context io;
+    test::FakeHttp http;
+    EXPECT_THROW(test::run(io, http.send(request_to(http::ClientMethod::post, kUserListUrl))), std::invalid_argument);
+    EXPECT_THROW(test::run(io, http.send(request_to(http::ClientMethod::get, std::format("{}/103456789012345678901", kUsers)))),
+                 std::invalid_argument);
+    EXPECT_TRUE(http.requests.empty()) << "a refused request is not a sent one";
+    ASSERT_EQ(http.refused.size(), 2u);
+    http.reply(200, R"({"users": []})");
+    EXPECT_EQ(test::run(io, http.send(request_to(http::ClientMethod::get, kUserListUrl))).status, 200u);
+    EXPECT_EQ(http.requests.size(), 1u);
 }
