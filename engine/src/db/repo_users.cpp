@@ -1,5 +1,6 @@
 #include "db/repo_users.hpp"
 
+#include "connectors/workspace/directory.hpp"
 #include "db/audit.hpp"
 #include "db/database.hpp"
 #include "db/repo_auth.hpp"
@@ -21,6 +22,46 @@ model::UserList list_users(pqxx::transaction_base& tx, std::string_view status) 
     const std::string order = " ORDER BY lower(name), id";
     if (status == "all") return {.items = db::rows_as<model::User>(tx, select + order)};
     return {.items = db::rows_as<model::User>(tx, select + " WHERE status = $1" + order, pqxx::params{status})};
+}
+
+// ---- people from the directory (D-106 point 8) ---------------------------------
+
+namespace {
+
+struct UserBySub {
+    std::string google_sub;
+    std::int64_t id = 0;
+};
+BOOST_DESCRIBE_STRUCT(UserBySub, (), (google_sub, id))
+
+}  // namespace
+
+std::map<std::string, std::int64_t> user_ids_by_google_sub(pqxx::transaction_base& tx, const std::vector<std::string>& ids) {
+    std::map<std::string, std::int64_t> out;
+    if (ids.empty()) return out;
+    for (auto& user : db::rows_as<UserBySub>(tx, "SELECT google_sub, id FROM users WHERE google_sub IN (SELECT jsonb_array_elements_text($1::jsonb))",
+                                             pqxx::params{db::json_list(ids)})) {
+        out.emplace(std::move(user.google_sub), user.id);
+    }
+    return out;
+}
+
+CreatedUser create_directory_user(pqxx::transaction_base& tx, audit::Writer& audit, const workspace::DirectoryUser& person) {
+    // No sign-in time, no photo, the column's default status (active): a row that gives nobody access before their own
+    // sign-in. DO NOTHING: whoever the person is already (signed in or not, active or disabled) stays as they are.
+    const auto inserted = tx.exec("INSERT INTO users (google_sub, email, name, created_at) VALUES ($1, $2, $3, $4::timestamptz) "
+                                  "ON CONFLICT (google_sub) DO NOTHING RETURNING id",
+                                  pqxx::params{person.id, person.primary_email, person.full_name, db::to_timestamptz(audit.now())});
+    const bool created = !inserted.empty();
+    if (created) {
+        audit.record("user.create", "user", inserted[0]["id"].as<std::int64_t>(),
+                     {.after = {{"email", person.primary_email}, {"directory_id", person.id}, {"source", "directory"}}});
+    } else {
+        audit.nothing_changed();
+    }
+    return {.user = db::one_as<model::User>(tx, "SELECT id, email, name, picture_url, status FROM users WHERE google_sub = $1",
+                                            pqxx::params{person.id}),
+            .created = created};
 }
 
 // ---- the staff check (D-106) ---------------------------------------------------

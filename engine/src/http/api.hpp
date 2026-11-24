@@ -8,6 +8,9 @@
 #include "db/database.hpp"
 #include "http/router.hpp"
 
+#include <span>
+#include <string>
+
 namespace poni::http {
 
 struct ApiOptions {
@@ -41,14 +44,21 @@ namespace poni::storage {
 class ObjectStore;
 }
 
+namespace poni::workspace {
+class Directory;
+}
+
 namespace poni::http {
 
 // Everything passed by reference must outlive the router.
 // `pipeline` writes a draft again when staff ask; `reporter` sends and shares reports;
 // `advisor` asks the model for ideas and texts for local posts.
 // `public_store` takes the photo of a local post; without one (no PONI_PUBLIC_BUCKET) a post can have no media.
+// `directory` is the Workspace directory a person finds a colleague in, and `signin_domains` the domains of the
+// addresses that may be made users from it (D-106 point 8).
 void add_api_routes(Router& router, db::Database& db, const core::Clock& clock, ApiOptions options, jobs::ReviewPipeline& pipeline,
-                    jobs::Reporter& reporter, storage::ObjectStore* public_store, jobs::PostAdvisor& advisor);
+                    jobs::Reporter& reporter, storage::ObjectStore* public_store, jobs::PostAdvisor& advisor,
+                    workspace::Directory& directory, std::span<const std::string> signin_domains);
 
 // The context every handler file gets (http/api_support.hpp).
 struct Api;
@@ -66,7 +76,9 @@ void add_auto_posting_routes(Router& router, const Api& api);
 void add_go_live_routes(Router& router, const Api& api);
 // a location's reports and their schedules (http/api_reports.cpp);
 void add_report_routes(Router& router, const Api& api, jobs::Reporter& reporter);
-// local posts (http/api_local_posts.cpp).
+// local posts (http/api_local_posts.cpp);
 void add_local_post_routes(Router& router, const Api& api, storage::ObjectStore* public_store, jobs::PostAdvisor& advisor);
+// the users, and colleagues found in the Workspace directory and made users before they sign in (http/api_users.cpp).
+void add_user_routes(Router& router, const Api& api, workspace::Directory& directory, std::span<const std::string> signin_domains);
 
 }  // namespace poni::http

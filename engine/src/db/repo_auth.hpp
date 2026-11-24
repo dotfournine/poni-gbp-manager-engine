@@ -97,11 +97,12 @@ struct NewUser {
 
 struct UpsertedUser {
     model::User user;
-    bool created = false;
+    bool created = false;  // the person's first sign-in: the row is new, or was made from the directory and had no sign-in yet
     bool disabled = false;
 };
 
-// Creates the user on first sign-in, otherwise refreshes email, name and picture.
+// Creates the user on first sign-in, otherwise refreshes email, name and picture (and, for a row made from the
+// Workspace directory, sets its first sign-in time).
 UpsertedUser upsert_user(pqxx::transaction_base& tx, const NewUser& user, core::TimePoint now);
 
 struct NewSession {

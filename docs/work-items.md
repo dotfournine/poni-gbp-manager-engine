@@ -39,17 +39,7 @@ The app's requests are in the app repository (`poni-gbp-manager-ios/docs/design/
 
 ## Staff from the Workspace directory (D-106)
 
-Decided in D-106. The items are built in the order listed; the last is the owner's.
-
-### People from the directory before their first sign-in
-
-**What and why.** D-106 point 8: an escalation can be assigned to a person who has not signed in yet.
-
-**What to build:** `GET /api/users/directory?q=` and `POST /api/users` (the Directory id; the engine finds the person in the list itself and takes nothing else from the request), a user's sign-in time that may be empty, and in the mock a list of users with "add a person" (D-087). Spec first (D-092 for the body).
-
-**Done when:** a person picked from the directory can be assigned, their first sign-in finds the same row, and `docs/runbook-google-mock.md` walks a person from the directory through being disabled and enabled.
-
-**Touches:** D-033, D-053, D-092, D-095 point 8, D-106 point 8.
+Decided in D-106. What is left is the owner's.
 
 ### Connect the real Workspace (the owner)
 

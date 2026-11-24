@@ -2955,7 +2955,9 @@ paths:
       operationId: listUsers
       summary: List staff
       description: |
-        Everyone who has signed in, by name, chosen by `status`. The default
+        Every user, by name, chosen by `status`. The list also holds the
+        people a signed-in person made users from the Workspace directory
+        (`POST /api/users`) who have not signed in yet. The default
         is the people who can be assigned an escalation: those who are not
         disabled. The list is not paged. A disabled person was disabled by
         the staff check, because their Google account is suspended, archived
@@ -2981,6 +2983,102 @@ paths:
           $ref: "#/components/responses/InvalidRequest"
         "401":
           $ref: "#/components/responses/Unauthenticated"
+    post:
+      operationId: createUser
+      summary: Make a person from the directory a user
+      description: |
+        Makes a person of the connected Workspace a user before their first
+        sign-in, so that they can be assigned an escalation at once (D-106
+        point 8). `directory_id` is a `DirectoryPerson.directory_id` from
+        `GET /api/users/directory`; nothing in the request names an address
+        or a name. The engine reads the directory's list itself and takes
+        the person's address and name from it. Only an account that is
+        neither suspended nor archived, with an address of the sign-in
+        domains, is made a user. The user has not signed in and has no
+        session until they do; their own Google sign-in, with every check it
+        always passes, finds this user. The refusals below come first, so an
+        account that is suspended, archived, gone from the directory or
+        outside the sign-in domains is refused even when it is a user
+        already. Otherwise a person who is a user already, signed in or not,
+        is answered as they are, with 200, and nothing changes.
+      tags: [session]
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserCreate"
+      responses:
+        "201":
+          description: The new user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "200":
+          description: The person was a user already; the user as they are.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          description: The directory's list holds no user with this id (`not_found`). Nothing was created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          $ref: "#/components/responses/UserDirectoryConflict"
+        "502":
+          $ref: "#/components/responses/DirectoryUnavailable"
+
+  /api/users/directory:
+    get:
+      operationId: searchDirectory
+      summary: Find people in the Workspace directory
+      description: |
+        The people of the connected Workspace whose full name or address
+        contains `q` (A to Z without regard to case, every other character
+        as written), by name, at most 50. Suspended and archived accounts
+        and addresses outside the sign-in domains are left out. `user_id`
+        says who is a user already, and is null for a person who is not:
+        make that person a user with `POST /api/users`, then assign them by
+        the returned `id`. Every search reads the whole directory from
+        Google (one request per 500 people), so a client searches when
+        typing pauses, not on every key. Nothing is kept.
+      tags: [session]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Part of the name or the address, 2 to 100 characters after trimming.
+          schema:
+            type: string
+            minLength: 2
+            maxLength: 100
+      responses:
+        "200":
+          description: The people found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DirectoryPersonList"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "409":
+          $ref: "#/components/responses/UserDirectoryConflict"
+        "502":
+          $ref: "#/components/responses/DirectoryUnavailable"
 
   /api/notification-rules:
     get:
@@ -3485,6 +3583,24 @@ components:
       description: |
         The escalation is closed (`escalation_closed`), or the user named
         doesn't exist or is disabled (`user_not_found`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    UserDirectoryConflict:
+      description: |
+        No Workspace administrator is connected (`workspace_not_connected`);
+        or, when making a user, the account is suspended or archived at
+        Google (`directory_user_inactive`), or its address is not of the
+        sign-in domains (`domain_not_allowed`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    DirectoryUnavailable:
+      description: |
+        The Workspace directory could not be read (`directory_unavailable`).
+        Nothing was created, and no part of a list is answered.
       content:
         application/json:
           schema:
@@ -4277,6 +4393,7 @@ components:
             (a reply draft), `escalation`, `local_post`, `local_post_media`,
             `notification_rule`, `notification_delivery`, `report`,
             `report_schedule`, `go_live_run`, `user` (signing in and out,
+            a person's `user.create` of someone from the Workspace directory,
             and the staff check's `user.disable`, `user.enable` and
             `user.update` by `system:workspace`, D-106), `device` and
             `credential`. Entries about a `report_share_link`
@@ -5988,6 +6105,41 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/User"
+    DirectoryPerson:
+      type: object
+      description: A person of the Workspace directory, as the search finds them (D-106 point 8).
+      additionalProperties: false
+      required: [directory_id, email, name, user_id]
+      properties:
+        directory_id:
+          type: string
+          description: The person's id in the directory, which `POST /api/users` takes.
+        email:
+          type: string
+        name:
+          type: string
+          description: The full name the directory holds; empty when it holds none.
+        user_id:
+          type: [integer, "null"]
+          format: int64
+          description: The id of the engine's user for this person, or null when they are no user yet.
+    DirectoryPersonList:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/DirectoryPerson"
+    UserCreate:
+      type: object
+      additionalProperties: false
+      required: [directory_id]
+      properties:
+        directory_id:
+          type: string
+          description: A `DirectoryPerson.directory_id` from `GET /api/users/directory`.
 
     NotificationEventType:
       type: string

@@ -1,8 +1,9 @@
 // The users as the API lists them: every one with its status, chosen by
-// status; and the staff check's side of them (D-106 points 4 to 7), the one
-// function that writes a user's status. Sign-in itself (creating a user,
-// sessions, the app's codes) is in repo_auth. Blocking calls on a
-// transaction the caller owns.
+// status; a person of the Workspace directory made a user before their first
+// sign-in (D-106 point 8); and the staff check's side of them (D-106 points 4
+// to 7), the one function that writes a user's status. Sign-in itself
+// (creating a user at sign-in, sessions, the app's codes) is in repo_auth.
+// Blocking calls on a transaction the caller owns.
 #pragma once
 
 #include "core/clock.hpp"
@@ -14,10 +15,18 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
+
+namespace poni::audit {
+class Writer;
+}
+namespace poni::workspace {
+struct DirectoryUser;
+}
 
 namespace poni::repo {
 
@@ -26,6 +35,20 @@ inline constexpr std::array<std::string_view, 3> kUserStatusFilters{"active", "d
 // The users of one status (`active`: everyone who can be assigned), or of
 // both (`all`), by name. `status` is one of kUserStatusFilters.
 model::UserList list_users(pqxx::transaction_base& tx, std::string_view status);
+
+// ---- people from the directory (D-106 point 8) ---------------------------------
+
+// The engine's users for these Directory ids: google_sub -> users.id.
+std::map<std::string, std::int64_t> user_ids_by_google_sub(pqxx::transaction_base& tx, const std::vector<std::string>& ids);
+
+struct CreatedUser {
+    model::User user;
+    bool created = false;
+};
+// Makes the person a user who has not signed in yet, or returns the user they already are. `person` is the entry the
+// engine itself just read from the directory's list, never anything a request said: their address and name come from it,
+// and their Directory id becomes the row's google_sub, which their first sign-in carries as its `sub`.
+CreatedUser create_directory_user(pqxx::transaction_base& tx, audit::Writer& audit, const workspace::DirectoryUser& person);
 
 // ---- the staff check (D-106) ---------------------------------------------------
 
