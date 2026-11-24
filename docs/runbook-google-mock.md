@@ -33,12 +33,13 @@ PONI_LOCATION_DISCOVERY_INTERVAL_S=60
 PONI_REVIEW_POLL_TICK_S=10
 PONI_REVIEW_FULL_SYNC_INTERVAL_S=300
 PONI_ANALYSIS_TICK_S=10
+PONI_STAFF_CHECK_INTERVAL_S=60
 PONI_PUBLIC_BUCKET=$HOME/.local/state/poni-gbp/mock-public
 PONI_PUBLIC_FOLDER_URL=http://127.0.0.1:8088
 EOF
 ```
 
-`PONI_SIGNIN_DOMAINS=example.com` is for the Workspace directory's connection, which is refused for an address outside the sign-in domains; the mock's administrator is `mock-owner@example.com`, and development sign-in does not read the setting. A `mock.env` made before needs that one line added.
+`PONI_SIGNIN_DOMAINS=example.com` is for the Workspace directory's connection, which is refused for an address outside the sign-in domains, and for making the directory's people users (step 8); the mock's administrator is `mock-owner@example.com`, and development sign-in does not read the setting. `PONI_STAFF_CHECK_INTERVAL_S=60` runs the staff check every minute instead of every five (60 is the shortest it takes). A `mock.env` made before needs those two lines added.
 
 The public folder is served on 127.0.0.1:8088 so that the dashboard can show a report's page (D-105). Start the server once (from the repository's root):
 
@@ -90,6 +91,7 @@ The test portal is http://127.0.0.1:8090/, the dashboard http://localhost:5174. 
 5. **Edit and remove.** In the portal, **Edit** a review (new text or stars): the engine sees an edited review at the next poll, and an edited review always goes to the approval queue. **Delete** one: at the next full sync (5 minutes with the settings above) the engine asks for it, the mock answers `NOT_FOUND`, and the review is marked removed.
 6. **Email.** Switch **Send notification emails** on and add a notification rule; what the engine sends lands in the portal's **Outbox**, not in anyone's mailbox.
 7. **A report.** **Reports**, **Generate a report**, a location, last month. Its visibility part (views, calls, search keywords) comes from the mock's made-up numbers, which are the same each time for the same days. Its page goes into the public folder when the report is built and opens in the dashboard, served from 127.0.0.1:8088. With a `location_report` rule for the location and sending switched on, **Send** puts one email per recipient into the portal's **Outbox**, each with the page's address (D-104). **Discard** moves the page to `a/` in the public folder: the address in those emails stops opening, and the dashboard shows the report from its archive. It cannot be undone.
+8. **A new colleague, from the directory to leaving.** With the Workspace directory connected (step 1: the connection is what puts the mock's administrator in the list the staff check needs), **Add a person** in the portal's "Workspace directory" section, say Robin Newhire, `robin.newhire@example.com`. Find them, `GET /api/users/directory?q=newhire` (signed in, as in step 1; or with the dashboard's picker once the web app has one): they are listed with `user_id` null. Make them a user, `POST /api/users` with `{"directory_id": "<their directory_id>"}` and the CSRF token: the answer is a 201 with the new user, and the same call again a 200 with the same user. Assign them an escalation by that `id` (**Escalations**; an escalation comes from a review that tells of a guest who was hurt, posted as in step 3). Then, in the portal, **Suspend** them: within two minutes (the scheduler's tick and a worker) the staff check disables them, the Outbox has its notification (with a `system_problem` rule from step 6), `GET /api/users?status=all` lists them as `disabled`, and the escalation still shows them as its assignee, `disabled`: a disabled colleague stays visible as inactive. **Unsuspend** them: within two minutes they are active again. **Delete** them: disabled again. The person cannot sign in against the mock, which does no Google sign-in, so this shows everything but the first sign-in; the engine's tests show that the first sign-in finds the same user.
 
 ## Afterwards
 
