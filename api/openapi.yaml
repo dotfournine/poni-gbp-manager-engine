@@ -2957,7 +2957,10 @@ paths:
       description: |
         Everyone who has signed in, by name, chosen by `status`. The default
         is the people who can be assigned an escalation: those who are not
-        disabled. The list is not paged.
+        disabled. The list is not paged. A disabled person was disabled by
+        the staff check, because their Google account is suspended, archived
+        or no longer in the Workspace directory, and is enabled again by it
+        when the directory holds the account active (D-106).
       tags: [session]
       parameters:
         - name: status
@@ -3686,7 +3689,10 @@ components:
         status:
           type: string
           enum: [active, disabled]
-          description: "`disabled`: the person has no session and cannot sign in or be assigned."
+          description: >-
+            `disabled`: the person has no session and cannot sign in or be assigned.
+            The staff check sets it: nobody changes it by hand (D-106). A disabled
+            user is never removed: they still appear wherever they did something.
     SignInMethods:
       type: object
       description: The ways of signing in this engine offers.
@@ -4440,9 +4446,13 @@ components:
         last_ok_at:
           type: [string, "null"]
           format: date-time
-          description: The last time Google answered the engine through this connection.
+          description: >-
+            The last time Google answered the engine through this connection: the
+            connection itself, or the last staff check that read the whole list and
+            could use it.
         last_error:
           type: [string, "null"]
+          description: What the last staff check could not do (read the list, or find the connected administrator in it); null after a success.
         last_error_at:
           type: [string, "null"]
           format: date-time
@@ -6054,6 +6064,16 @@ components:
           answered an edit with a post that does not say what was sent in a
           field the edit wrote. The post is as Google answered.
           `location_id`, `local_post_id`.
+        - `A staff account was disabled: <address>`: the staff check found
+          the person's Google account suspended, archived or no longer in
+          the directory, and disabled them (D-106). No ids.
+        - `A staff account is active again: <address>`: the staff check
+          found a disabled person's Google account active in the directory
+          again, and enabled them; they sign in again. No ids.
+        - `The staff check could not use the Workspace directory`: the list
+          of the directory's users could not be read, or does not hold the
+          connected administrator as an active administrator, so nobody was
+          disabled or enabled. At most once a day. No ids.
 
         New problems are added to this list, and a client shows a subject
         it does not know as it is.
