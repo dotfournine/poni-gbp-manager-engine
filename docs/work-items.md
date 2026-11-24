@@ -37,6 +37,80 @@ The app's requests are in the app repository (`poni-gbp-manager-ios/docs/design/
 
 **Touches:** D-092, D-094, D-095.
 
+## Staff from the Workspace directory (D-106)
+
+Decided in D-106. The items are built in the order listed; the last is the owner's.
+
+### The Admin SDK is read-only in the outbound client
+
+**What and why.** D-106 point 3: the engine reads the Workspace directory and changes nothing in it. The rule that says so belongs in the outbound client, where every other write is held to its address, before any connector exists.
+
+**What to build:** `http::why_refused` takes one request at `admin.googleapis.com`, a GET of the list of the account's users as the engine writes it (`customer=my_customer`, 500 a page, Google's page token), and refuses every other method and address there. The mock's host list gains the host (D-087).
+
+**Done when:** a line in `tests/unit/write_path_test.cpp` for every refused shape (each other method, another path, another query, an address that is not the one the engine writes), and the request that is allowed passes.
+
+**Touches:** D-042, D-087, D-106 point 3; the rule on what the engine changes at Google in `CLAUDE.md`.
+
+### The directory connector
+
+**What and why.** The staff check, the connection and making a user all read the same list (D-106 points 2 and 3); one connector reads it, so that none writes its own loop.
+
+**What to build:** `connectors/workspace`: the list of the account's users, every page or an error, behind an interface, through `google::send`. A list that could not be read whole is an error, never a shorter list. A fake for the tests.
+
+**Done when:** the connector's unit tests pass, and every call it makes is a GET.
+
+**Touches:** D-106 points 2 and 3; the layout table in `CLAUDE.md`.
+
+### The `workspace` connection
+
+**What and why.** D-106 point 2: the third account a signed-in person connects on the status page, the Workspace administrator whose directory the staff check reads.
+
+**What to build:** a third account in `http/connect`, asking for the read-only directory scope and for `openid email`; stored (D-043, D-100) only if the scope was granted, the address is of the sign-in domains (D-053), and the list, read with the new token, holds the account under the `sub` of its own ID token, with the same address, neither suspended nor archived, as an administrator. `WorkspaceStatus` on the status page, with the account's address; the spec and the contract first.
+
+**Done when:** an account connects against the mock and shows on the status page; a refused account stores nothing and leaves the other two tokens alone.
+
+**Touches:** D-043, D-079, D-100; the rule on connecting Google accounts in `CLAUDE.md`.
+
+### The staff check
+
+**What and why.** D-106 points 1 and 4 to 7: a person may use the engine while their Workspace account is active, and the engine follows the directory by itself, so that a person who left loses their sessions within five minutes.
+
+**What to build:** a job, every `PONI_STAFF_CHECK_INTERVAL_S` seconds (300, at least 60), reads the list and is the only thing that changes `users.status`: it disables every user the list does not show as active (point 5), deletes that person's sessions and unspent one-time codes, enables a disabled user the list holds active, and refreshes names. A run that could not read the list whole, or whose list does not hold the connected administrator, changes nothing and says so on the status page; staff are told once a day. Audit as `system:workspace`, a `system_problem` for each change. No migration.
+
+**Done when:** integration tests cover every way the check disables, enables or changes nothing, a disabled user's sessions are gone and the row stays, and development-sign-in users are never judged.
+
+**Touches:** D-095 point 5; the new rule on `users.status` in `CLAUDE.md`; the new `system_problem` subjects, added to the list in the description of `NotificationEventType` in `api/openapi.yaml`.
+
+### People from the directory before their first sign-in
+
+**What and why.** D-106 point 8: an escalation can be assigned to a person who has not signed in yet.
+
+**What to build:** `GET /api/users/directory?q=` and `POST /api/users` (the Directory id; the engine finds the person in the list itself and takes nothing else from the request), a user's sign-in time that may be empty, and in the mock a list of users with "add a person" (D-087). Spec first (D-092 for the body).
+
+**Done when:** a person picked from the directory can be assigned, their first sign-in finds the same row, and `docs/runbook-google-mock.md` walks a person from the directory through being disabled and enabled.
+
+**Touches:** D-033, D-053, D-092, D-095 point 8, D-106 point 8.
+
+### Connect the real Workspace (the owner)
+
+**What and why.** The staff check needs a Workspace administrator connected in production. The sign-in domains of today are testing domains; this waits for the new company domain's account to be set up. Nothing is built here.
+
+**Owner's steps**, each when the real account is set up:
+
+- Enable the **Admin SDK API** in the Google Cloud project of the connections' OAuth client.
+- Add the scope `https://www.googleapis.com/auth/admin.directory.user.readonly` to the app's data access. The app is "External" and "In production": for a scope Google lists as sensitive the consent screen shows the "Google hasn't verified this app" warning until Google has verified it, as for `gmail.send`.
+- Add `https://<the dashboard address>/api/connections/workspace/callback` and `http://localhost:5173/api/connections/workspace/callback` to the client's redirect addresses.
+- Create a custom admin role with "Users: Read" only, and assign it **for the whole organization** to the account that will connect. A role for one organizational unit leaves everyone outside it out of the list, and the check disables them (D-106 point 5).
+- If app access is restricted in the Admin console, mark the client as trusted.
+- Put the new company domain into `PONI_SIGNIN_DOMAINS`.
+- **Before connecting, everyone who uses the engine signs in once with their account of the Workspace being connected.** Within five minutes of the connection the check disables every user whose account is not in that Workspace's list: today's testing domains included, and the person who pressed Connect too if they signed in with one (one notice each).
+- Connect.
+- Then one trial with a throwaway account of the real Workspace: make it and list the directory at once, to see how soon a new account is listed (a person missing from the list is disabled); suspend it, unsuspend it, delete it, restore it. The suspended account should be in the list with its flag and the deleted one not, as D-106 point 5 expects, before the check is relied on.
+
+**Done when:** an administrator of the real Workspace is connected, and the trial's answers are what D-106 point 5 expects.
+
+**Touches:** `deploy/README.md`; `PONI_SIGNIN_DOMAINS`; D-106 points 2 and 5.
+
 ## First deployment
 
 The system runs locally only. The owner postponed the first deployment (D-052); the VM type (`e2-medium`) and the address (`gbp.xvisionmediaus.com`) are decided.
