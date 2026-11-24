@@ -142,6 +142,7 @@ TEST(Config, Phase1DefaultsAreSafeForLocalDevelopment) {
     EXPECT_EQ(c->review_poll_tick, 60s);
     EXPECT_EQ(c->review_full_sync_interval, 3600s);
     EXPECT_EQ(c->location_discovery_interval, 900s);
+    EXPECT_EQ(c->staff_check_interval, 300s) << "the staff check, every five minutes (D-106 point 4)";
 }
 
 TEST(Config, ReadsPhase1SettingsFromAFile) {
@@ -190,6 +191,10 @@ TEST(Config, RejectsBadPhase1Values) {
                 HasSubstr("PONI_GOOGLE_CREDENTIALS"));
     EXPECT_THAT(load_config(env_of({{"PONI_REVIEW_POLL_TICK_S", "1"}}), std::nullopt).error(),
                 HasSubstr("PONI_REVIEW_POLL_TICK_S"));
+    EXPECT_THAT(load_config(env_of({{"PONI_STAFF_CHECK_INTERVAL_S", "59"}}), std::nullopt).error(),
+                HasSubstr("PONI_STAFF_CHECK_INTERVAL_S"));
+    EXPECT_EQ(load_config(env_of({{"PONI_STAFF_CHECK_INTERVAL_S", "60"}}), std::nullopt)->staff_check_interval, 60s)
+        << "a minute at least, as the walk-through against the mock uses";
     EXPECT_THAT(load_config(env_of({{"PONI_SECRET_KEY", "abc="}}), std::nullopt).error(), HasSubstr("PONI_SECRET_KEY"));
     EXPECT_THAT(load_config(env_of({{"PONI_PUBSUB_SUBSCRIPTION", "my-sub"}}), std::nullopt).error(),
                 HasSubstr("PONI_PUBSUB_SUBSCRIPTION must look like projects/NAME/subscriptions/NAME"));

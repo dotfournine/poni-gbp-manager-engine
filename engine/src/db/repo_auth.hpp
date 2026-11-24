@@ -31,6 +31,8 @@ struct StoredCredential {
     std::string key_id;
     // The Google account's address, from the connection's ID token (D-100); none for a credential stored before.
     std::optional<std::string> account_email;
+    // When it was last stored, as db::iso writes it: which connection a reader used. Not written by save_credential.
+    std::string updated_at = {};
 };
 
 void save_credential(pqxx::transaction_base& tx, std::string_view name, const StoredCredential& credential,

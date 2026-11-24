@@ -131,6 +131,8 @@ struct Config {
     // How often the review poll job runs; each location has its own interval on top.
     std::chrono::seconds review_poll_tick{60};
     std::chrono::seconds review_full_sync_interval{3600};
+    // How often the staff check reads the Workspace directory's list (D-106 point 4).
+    std::chrono::seconds staff_check_interval{300};
     // Development only (D-087): the address of `poni-tools mock-google` on
     // this machine, "http://127.0.0.1:8090". Set, the engine sends every call
     // it makes to Google Business Profile, Google's token endpoint, the
