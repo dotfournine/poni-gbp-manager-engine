@@ -331,6 +331,17 @@ struct GbpStatus {
 };
 BOOST_DESCRIBE_STRUCT(GbpStatus, (), (connected, account_email, last_ok_at, last_error, last_error_at))
 
+// The Workspace administrator's connection (D-106 point 2).
+struct WorkspaceStatus {
+    bool connected = false;
+    std::optional<std::string> account_email;
+    // The last time Google answered the engine through this connection.
+    std::optional<std::string> last_ok_at;
+    std::optional<std::string> last_error;
+    std::optional<std::string> last_error_at;
+};
+BOOST_DESCRIBE_STRUCT(WorkspaceStatus, (), (connected, account_email, last_ok_at, last_error, last_error_at))
+
 struct IntegrationStatus {
     std::optional<std::string> last_ok_at;
     std::optional<std::string> last_error;
@@ -454,11 +465,13 @@ struct SystemStatus {
     AiStatus ai;
     PostingStatus posting;
     EmailStatus email;
+    WorkspaceStatus workspace;
     std::vector<LocationSyncStatus> locations;
     JobsStatus jobs;
 };
 BOOST_DESCRIBE_STRUCT(SystemStatus, (),
-                      (version, database, knowledge, connect_configured, gbp, location_discovery, pubsub, ai, posting, email, locations, jobs))
+                      (version, database, knowledge, connect_configured, gbp, location_discovery, pubsub, ai, posting, email, workspace, locations,
+                       jobs))
 
 // ---- analysis settings -----------------------------------------------------------
 

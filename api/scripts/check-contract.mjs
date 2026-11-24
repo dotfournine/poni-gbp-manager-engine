@@ -454,6 +454,7 @@ try {
   // Connecting a Google account (D-079). The check never goes to Google: an engine without the OAuth client
   // answers 409, one with it answers with the address at Google, and neither stores anything.
   check("POST /api/connections/gbp/start", "/api/connections/{account}/start", "POST", await call("POST", "/api/connections/gbp/start"));
+  check("POST /api/connections/workspace/start", "/api/connections/{account}/start", "POST", await call("POST", "/api/connections/workspace/start"));
   expectStatus("POST /api/connections/drive/start", await call("POST", "/api/connections/drive/start"), 404, "not_found");
 
   // The knowledge base (FR-13): read-only, seeded by poni-tools before the engine starts.

@@ -157,12 +157,17 @@ repo::NewUser new_user_of(const identity::Identity& identity) {
 // domains it has proven to own, and Google may name the organization's main
 // domain for an address on one of its other domains.
 bool domain_allowed(const identity::Identity& identity, std::span<const std::string> domains) {
-    const auto allowed = [&](std::string_view domain) {
-        return !domain.empty() && std::ranges::any_of(domains, [&](const std::string& d) { return text::ascii_iequals(d, domain); });
-    };
-    if (!identity.email_verified || !identity.hosted_domain || !allowed(*identity.hosted_domain)) return false;
-    const auto at = identity.email.rfind('@');
-    return at != std::string::npos && allowed(std::string_view(identity.email).substr(at + 1));
+    if (!identity.email_verified || !identity.hosted_domain || identity.hosted_domain->empty()) return false;
+    const auto& organization = *identity.hosted_domain;
+    if (!std::ranges::any_of(domains, [&](const std::string& d) { return text::ascii_iequals(d, organization); })) return false;
+    return address_in_domains(identity.email, domains);
+}
+
+bool address_in_domains(std::string_view email, std::span<const std::string> domains) {
+    const auto at = email.rfind('@');
+    if (at == std::string_view::npos) return false;
+    const auto domain = email.substr(at + 1);
+    return !domain.empty() && std::ranges::any_of(domains, [&](const std::string& d) { return text::ascii_iequals(d, domain); });
 }
 
 std::optional<std::chrono::seconds> LoginThrottle::attempt(std::string_view client) {

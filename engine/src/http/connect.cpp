@@ -3,7 +3,9 @@
 #include "connectors/gbp/reader.hpp"
 #include "connectors/google/auth.hpp"
 #include "connectors/notify/gmail.hpp"
+#include "connectors/workspace/directory.hpp"
 #include "core/log.hpp"
+#include "core/text.hpp"
 #include "db/audit.hpp"
 #include "db/repo_auth.hpp"
 #include "db/repo_notifications.hpp"
@@ -31,6 +33,8 @@ constexpr std::string_view kFlowCookie = "poni_connect";
 constexpr auto kAttemptLifetime = 600s;
 constexpr std::size_t kMaxAttempts = 1000;
 constexpr std::string_view kGbpScope = "https://www.googleapis.com/auth/business.manage";
+// Read-only: the engine never changes anything in a Workspace (D-106 point 3).
+constexpr std::string_view kDirectoryScope = "https://www.googleapis.com/auth/admin.directory.user.readonly";
 
 std::string attempt_key(std::string_view secret) { return core::sha256_hex(std::format("poni-connect:attempt:{}", secret)); }
 
@@ -43,10 +47,12 @@ constexpr std::string_view kNoMailbox = "the sending mailbox is not connected; c
 struct Account {
     std::string_view name, scope, credential, status, missing;
 };
-constexpr std::array<Account, 2> kAccounts{{
+constexpr std::array<Account, 3> kAccounts{{
     {kConnectGbp, kGbpScope, repo::kGbpCredential, repo::kGbpTokenStatus,
      "no GBP account is connected; connect it on the dashboard's status page"},
     {kConnectGmail, notify::kGmailSendScope, repo::kGmailCredential, repo::kEmailStatus, kNoMailbox},
+    {kConnectWorkspace, kDirectoryScope, repo::kWorkspaceCredential, repo::kWorkspaceStatus,
+     "no Workspace administrator is connected; connect one on the dashboard's status page"},
 }};
 
 // The row of `name`, or null.
@@ -113,6 +119,28 @@ asio::awaitable<std::expected<void, std::string>> check_gmail(Client& http, core
     const auto fetch = google::refresh_fetch(http, limiter, fixed(std::move(credentials)));
     const auto token = co_await fetch();
     if (!token) co_return std::unexpected(token.error().message);
+    co_return std::expected<void, std::string>{};
+}
+
+// Reads the directory's list with the new token and finds the account in it under `sub`, the id its own
+// sign-in carries (D-106 point 2): that shows the API is enabled, that a Directory id is a sign-in's `sub`
+// here, that the list the staff check reads holds the account, and that it is an administrator. The rest
+// of the list is neither looked at nor kept.
+asio::awaitable<std::expected<void, std::string>> check_workspace(Client& http, const core::Clock& clock, core::RateLimiter& limiter,
+                                                                  google::OAuthCredentials credentials, std::string sub,
+                                                                  std::string account_email) {
+    google::CachedTokenSource tokens(clock, google::refresh_fetch(http, limiter, fixed(std::move(credentials))));
+    workspace::HttpDirectory directory({http, tokens, limiter});
+    const auto users = co_await google::guarded(directory.list_users());
+    if (!users) co_return std::unexpected(users.error().message);
+    const auto entry = std::ranges::find(*users, sub, &workspace::DirectoryUser::id);
+    if (entry == users->end()) co_return std::unexpected(std::string("the directory's list does not hold the account"));
+    if (text::ascii_lower(entry->primary_email) != text::ascii_lower(account_email)) {
+        co_return std::unexpected(std::string("the directory's list names another address for the account"));
+    }
+    if (entry->suspended) co_return std::unexpected(std::string("the account is suspended in the directory"));
+    if (entry->archived) co_return std::unexpected(std::string("the account is archived in the directory"));
+    if (!entry->is_admin && !entry->is_delegated_admin) co_return std::unexpected(std::string("the account is no administrator"));
     co_return std::expected<void, std::string>{};
 }
 
@@ -294,6 +322,22 @@ asio::awaitable<std::optional<std::string>> ConnectService::connect(const Attemp
         if (!seen) co_return refuse("no_access", seen.error());
         stored["accounts"] = seen->accounts;
         stored["locations"] = seen->locations;
+    } else if (account->name == kConnectWorkspace) {
+        if (!tokens.scope || !granted(*tokens.scope, kDirectoryScope)) {
+            co_return refuse("no_directory_permission", "the admin.directory.user.readonly scope was not granted");
+        }
+        // An administrator of another Workspace (a test tenant picked in the chooser) would pass every other
+        // check, and the engine would then find none of its users.
+        if (!address_in_domains(account_email, config_.signin_domains)) {
+            co_return refuse("no_access", "the account is not of the sign-in domains");
+        }
+        // The id the directory knows the account by, from the ID token of the engine's own exchange (D-091 point 12). Logged nowhere.
+        std::string sub;
+        const auto* claim = exchanged->id_token_claims ? exchanged->id_token_claims->if_contains("sub") : nullptr;
+        if (claim && claim->is_string()) sub = std::string(claim->get_string());
+        if (sub.empty() || !is_plain_id(sub)) co_return refuse("no_access", "Google named no id for the account");
+        const auto admin = co_await check_workspace(http_, clock_, limiter_, credentials, std::move(sub), account_email);
+        if (!admin) co_return refuse("no_access", admin.error());
     } else {
         throw std::logic_error("no check for the account being connected");
     }

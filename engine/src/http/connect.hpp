@@ -1,12 +1,13 @@
-// Connecting the two Google accounts the engine works with, from the
+// Connecting the three Google accounts the engine works with, from the
 // dashboard (D-079): the GBP managing account, whose token reads reviews
-// and posts replies (D-043), and the mailbox notifications are sent from
-// (D-066).
+// and posts replies (D-043), the mailbox notifications are sent from
+// (D-066), and an administrator of the Workspace, whose token reads the
+// directory's list of users and nothing else (D-106 point 2).
 //
 //   POST /api/connections/{account}/start      where at Google to sign in
 //   GET  /api/connections/{account}/callback   Google sends the browser back here
 //
-// `account` is "gbp" or "gmail". A signed-in person starts; the engine
+// `account` is "gbp", "gmail" or "workspace". A signed-in person starts; the engine
 // builds Google's address, receives the redirect, exchanges the code, checks
 // the account, encrypts the token and stores it with the account's address,
 // with an audit entry in that person's name. The account is whichever one the
@@ -42,14 +43,16 @@ namespace poni::http {
 
 inline constexpr std::string_view kConnectGbp = "gbp";
 inline constexpr std::string_view kConnectGmail = "gmail";
+inline constexpr std::string_view kConnectWorkspace = "workspace";
 
-// Told which account ("gbp" or "gmail") has a new token stored, so the
+// Told which account ("gbp", "gmail" or "workspace") has a new token stored, so the
 // engine drops the access token it cached for the old one and uses the
 // new account from its next call on.
 using OnConnected = std::function<void(std::string_view account)>;
 
-// The refresh token of `account` ("gbp" or "gmail") as it was connected
-// here, for the account's token source. Read from the database on every
+// The refresh token of `account` ("gbp", "gmail" or "workspace") as it was
+// connected here, for the account's token source; any other name loads
+// nothing. Read from the database on every
 // refresh, so a new connection is used without a restart. `box` may be
 // null (no PONI_SECRET_KEY): nothing can then be read. `db` must outlive the loader.
 google::CredentialsLoader stored_credentials(db::Database& db, const core::SecretBox* box, std::string_view account);
@@ -60,12 +63,12 @@ notify::MailboxAddress stored_mailbox_address(db::Database& db);
 
 class ConnectService {
 public:
-    // Reads the public address (the OAuth client must list <public_url>/api/connections/gbp/callback and
-    // .../gmail/callback among its redirect addresses), the OAuth client both accounts sign in through
-    // (PONI_GBP_OAUTH_CLIENT_ID and _SECRET), the key (without PONI_SECRET_KEY a token can't be
-    // encrypted, so nothing can be connected), the sender (the only account "gmail" accepts), the
-    // session lifetime and the Google mock (its consent page instead of Google's, D-087) from `config`,
-    // which must outlive the service.
+    // Reads the public address (the OAuth client must list <public_url>/api/connections/gbp/callback,
+    // .../gmail/callback and .../workspace/callback among its redirect addresses), the OAuth client the
+    // three accounts sign in through (PONI_GBP_OAUTH_CLIENT_ID and _SECRET), the key (without
+    // PONI_SECRET_KEY a token can't be encrypted, so nothing can be connected), the sign-in domains (the
+    // only ones "workspace" accepts an address of), the session lifetime and the Google mock (its consent
+    // page instead of Google's, D-087) from `config`, which must outlive the service.
     ConnectService(db::Database& db, const core::Clock& clock, Client& http, core::RateLimiter& limiter, const core::Config& config,
                    OnConnected on_connected);
 
