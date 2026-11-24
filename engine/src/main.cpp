@@ -175,7 +175,7 @@ int run(const core::Config& config) {
                   {{"mock", config.google_mock_url}});
     }
     // The one bucket a report's page may be copied and deleted in (D-104); a folder is no bucket.
-    http::NetClient http_client(tls.ctx, google_mock, storage::is_folder_setting(config.public_bucket) ? std::string() : config.public_bucket);
+    http::NetClient http_client(tls.ctx, google_mock, config.public_bucket_is_folder() ? std::string() : config.public_bucket);
     core::RateLimiter limiter(io.get_executor(), clock);
     configure_limits(limiter);
 
@@ -230,7 +230,7 @@ int run(const core::Config& config) {
     // The public bucket takes reports' pages (D-104) and the media of
     // local posts. A folder stands in for it on a developer's machine.
     std::unique_ptr<storage::ObjectStore> public_store;
-    if (storage::is_folder_setting(config.public_bucket)) {
+    if (config.public_bucket_is_folder()) {
         public_store = std::make_unique<storage::FolderStore>(config.public_bucket, config.public_folder_url);
     } else if (!config.public_bucket.empty()) {
         public_store = std::make_unique<storage::GcsStore>(google::Api{http_client, service_tokens, limiter}, config.public_bucket);

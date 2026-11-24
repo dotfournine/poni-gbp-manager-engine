@@ -27,6 +27,11 @@ namespace {
 using OptString = std::optional<std::string>;
 using OptId = std::optional<std::int64_t>;
 
+// The refusal of an engine that has no bucket, `so` saying what that stops.
+std::unexpected<Failure> no_public_bucket(std::string_view so) {
+    return conflict("no_public_bucket", std::format("No public bucket is configured (PONI_PUBLIC_BUCKET), so {}.", so));
+}
+
 constexpr int kMaxPeriodDays = 400;
 
 core::TimePoint from_micros(std::int64_t micros) { return core::TimePoint(std::chrono::microseconds(micros)); }
@@ -106,7 +111,7 @@ Result<model::Report> create_report(pqxx::transaction_base& tx, audit::Writer& a
     if (!bounds) return invalid(bounds.error());
     if (bounds->to > audit.now()) return invalid("The period is not over yet: its last day must be before today.");
     if (link_base.empty()) {
-        return conflict("no_public_bucket", "No public bucket is configured (PONI_PUBLIC_BUCKET), so a report's page has nowhere to go.");
+        return no_public_bucket("a report's page has nowhere to go");
     }
 
     const auto now = audit.now();
@@ -262,7 +267,7 @@ Result<ReportMail> prepare_report_send(pqxx::transaction_base& tx, std::int64_t 
         return conflict("sending_off", "No sending mailbox is connected, so the report would reach nobody. Connect it on the status page first.");
     }
     if (link_base.empty()) {
-        return conflict("no_public_bucket", "No public bucket is configured (PONI_PUBLIC_BUCKET), so the report has no page to link to.");
+        return no_public_bucket("the report has no page to link to");
     }
     auto recipients = report_recipients(tx, location_id);
     if (recipients.empty()) return conflict("no_recipients", "This location has no recipients for its reports. Add them first.");
@@ -305,7 +310,6 @@ Result<std::optional<DiscardWork>> begin_discard(pqxx::transaction_base& tx, aud
     if (rows.empty()) return not_found("report");
     const auto status = rows[0][0].as<std::string>();
     const auto page = rows[0][1].as<OptString>();
-    constexpr std::string_view kNoBucket = "No public bucket is configured (PONI_PUBLIC_BUCKET), so the report's page cannot be moved.";
 
     if (status == "ready" || status == "failed") {
         const auto before = *get_report(tx, report_id, link_base);
@@ -315,7 +319,7 @@ Result<std::optional<DiscardWork>> begin_discard(pqxx::transaction_base& tx, aud
             tx.exec("UPDATE reports SET status = 'discarded', updated_at = $2::timestamptz WHERE id = $1",
                     pqxx::params{report_id, to_timestamptz(audit.now())});
         } else {
-            if (link_base.empty()) return conflict("no_public_bucket", std::string(kNoBucket));
+            if (link_base.empty()) return no_public_bucket("the report's page cannot be moved");
             // Named before anything is copied, and never cleared or replaced afterwards: every object a discard writes is
             // named by its row for good. The extension is the page's.
             const auto dot = page->rfind('.');
@@ -333,7 +337,7 @@ Result<std::optional<DiscardWork>> begin_discard(pqxx::transaction_base& tx, aud
         return work;
     }
     if (status == "discarding") {
-        if (link_base.empty()) return conflict("no_public_bucket", std::string(kNoBucket));
+        if (link_base.empty()) return no_public_bucket("the report's page cannot be moved");
         audit.nothing_changed();  // the entry was written when it began
         return DiscardWork{.page_object = page.value(), .archive_object = rows[0][2].as<std::string>()};
     }

@@ -29,9 +29,20 @@ bool passing(const google::ApiError& error) {
     return error.kind == google::ApiError::Kind::unavailable || error.kind == google::ApiError::Kind::rate_limited;
 }
 
-// One of a discard's two calls to the bucket. Nothing: it was done, or found no original to act on. Otherwise the
-// 502's message, which names neither an object nor the store's words.
-asio::awaitable<std::optional<std::string>> page_move_failure(asio::awaitable<storage::Result<void>> step, std::int64_t report_id) {
+// What a person reads of a call to the bucket that failed, after the sentence that says which: how it failed, never
+// the store's words (they may quote an object's name, D-104).
+std::string bucket_failure(const storage::ApiError& error) {
+    using Kind = storage::ApiError::Kind;
+    if (error.kind == Kind::not_configured) return " (the engine has no access token for Cloud Storage)";
+    if (error.http_status >= 200 && error.http_status < 300) return " (Cloud Storage's answer could not be read)";
+    if (error.http_status != 0) return std::format(" (HTTP {})", error.http_status);
+    return {};
+}
+
+// One of a discard's two calls to the bucket, `what` saying which ("copied to the archive"). Nothing: it was done, or
+// found no original to act on. Otherwise the 502's message, which names neither an object nor the store's words.
+asio::awaitable<std::optional<std::string>> page_move_failure(asio::awaitable<storage::Result<void>> step, std::string_view what,
+                                                              std::int64_t report_id) {
     std::optional<storage::Result<void>> answer;
     // co_await is not allowed in a catch block: note the error, act after it.
     std::optional<std::string> thrown;
@@ -40,17 +51,17 @@ asio::awaitable<std::optional<std::string>> page_move_failure(asio::awaitable<st
     } catch (const std::exception& e) {
         thrown = e.what();
     }
-    unsigned status = 0;
+    std::string how;
     if (thrown) {
-        log::warn("report page not moved", {{"report_id", report_id}, {"error", *thrown}});  // a transport error names no address
+        log::warn("report page not moved", {{"report_id", report_id}, {"step", what}, {"error", *thrown}});  // a transport error names no address
+        how = " (the connection to Cloud Storage failed)";
     } else if (*answer || answer->error().kind == storage::ApiError::Kind::not_found) {
         co_return std::nullopt;
     } else {
-        status = answer->error().http_status;
-        log::warn("report page not moved", {{"report_id", report_id}, {"status", status}});
+        how = bucket_failure(answer->error());
+        log::warn("report page not moved", {{"report_id", report_id}, {"step", what}, {"status", answer->error().http_status}});
     }
-    co_return std::format("The report's page could not be moved to the archive{}. The report stays \"discarding\"; call again to finish.",
-                          status != 0 ? std::format(" (HTTP {})", status) : std::string{});
+    co_return std::format("The report's page could not be {}{}. The report stays \"discarding\"; call again to finish.", what, how);
 }
 
 }  // namespace
@@ -158,9 +169,7 @@ asio::awaitable<void> Reporter::build_once(std::int64_t report_id, bool last_att
     if (!stored) {
         // What a build throws reaches the log, the job, the report and an email: neither Google's message nor the
         // object's name goes into it.
-        const auto status = stored.error().http_status;
-        throw std::runtime_error(std::format("The report's page could not be put into the public bucket.{}",
-                                             status != 0 ? std::format(" (HTTP {})", status) : std::string{}));
+        throw std::runtime_error(std::format("The report's page could not be put into the public bucket.{}", bucket_failure(stored.error())));
     }
 
     auto mail = co_await db_.tx(
@@ -230,10 +239,10 @@ asio::awaitable<repo::Result<model::Report>> Reporter::discard(std::int64_t repo
         // Copy first. The original is deleted only after this call's copy succeeded or found no original, so a step
         // that fails loses no page; a later call starts again at the copy, which replaces the archive with the same bytes.
         auto copy = public_store_->copy(work->page_object, work->archive_object);
-        auto failure = co_await page_move_failure(std::move(copy), report_id);
+        auto failure = co_await page_move_failure(std::move(copy), "copied to the archive", report_id);
         if (!failure) {
             auto remove = public_store_->remove(work->page_object);
-            failure = co_await page_move_failure(std::move(remove), report_id);
+            failure = co_await page_move_failure(std::move(remove), "deleted after its copy to the archive", report_id);
         }
         if (failure) co_return repo::unavailable("storage_failed", std::move(*failure));
     }

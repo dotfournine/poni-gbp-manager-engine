@@ -37,11 +37,6 @@ bool is_report_object(std::string_view name, std::string_view prefix) {
            std::ranges::all_of(extension, lower_or_digit);
 }
 
-// A page and its archive name, in the same format: the archive keeps the page's extension.
-bool is_archive_of(std::string_view page, std::string_view archive) {
-    return is_report_page(page) && is_report_archive(archive) && page.substr(page.find('.')) == archive.substr(archive.find('.'));
-}
-
 // Google's words about an object may quote its name ("No such object: <bucket>/r/..."), and a report's
 // object name is a secret (D-104): an answer of Google's keeps its kind and status and loses its text.
 // An error without an answer and an answer that can't be read (a 2xx) name no object. A token that could not be
@@ -76,7 +71,9 @@ bool is_report_page(std::string_view name) { return is_report_object(name, "r/")
 
 bool is_report_archive(std::string_view name) { return is_report_object(name, "a/"); }
 
-bool is_folder_setting(std::string_view setting) { return setting.contains('/'); }
+bool is_archive_of(std::string_view page, std::string_view archive) {
+    return is_report_page(page) && is_report_archive(archive) && page.substr(page.find('.')) == archive.substr(archive.find('.'));
+}
 
 std::string multipart_upload_body(const Object& object, std::string_view boundary) {
     const boost::json::object metadata{{"name", object.name}, {"contentType", object.content_type}, {"cacheControl", object.cache_control}};
