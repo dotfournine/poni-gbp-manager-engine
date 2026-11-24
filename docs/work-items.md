@@ -41,16 +41,6 @@ The app's requests are in the app repository (`poni-gbp-manager-ios/docs/design/
 
 Decided in D-106. The items are built in the order listed; the last is the owner's.
 
-### The Admin SDK is read-only in the outbound client
-
-**What and why.** D-106 point 3: the engine reads the Workspace directory and changes nothing in it. The rule that says so belongs in the outbound client, where every other write is held to its address, before any connector exists.
-
-**What to build:** `http::why_refused` takes one request at `admin.googleapis.com`, a GET of the list of the account's users as the engine writes it (`customer=my_customer`, 500 a page, Google's page token), and refuses every other method and address there. The mock's host list gains the host (D-087).
-
-**Done when:** a line in `tests/unit/write_path_test.cpp` for every refused shape (each other method, another path, another query, an address that is not the one the engine writes), and the request that is allowed passes.
-
-**Touches:** D-042, D-087, D-106 point 3; the rule on what the engine changes at Google in `CLAUDE.md`.
-
 ### The directory connector
 
 **What and why.** The staff check, the connection and making a user all read the same list (D-106 points 2 and 3); one connector reads it, so that none writes its own loop.
