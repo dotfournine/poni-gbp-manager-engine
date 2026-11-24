@@ -3,7 +3,8 @@
 // once as "building"; its job names its page, puts the page into the public
 // bucket and stores the numbers, after which neither changes. A send checks
 // first, under the report's row lock, and writes its delivery rows after its
-// emails went out; it changes nothing on the report. Blocking calls on a
+// emails went out; it changes nothing on the report. A discard is two steps
+// here, with the page's move in the bucket between them. Blocking calls on a
 // transaction the caller owns.
 //
 // Nothing here talks to a bucket, a mailbox or a model: jobs/reports.hpp
@@ -114,6 +115,25 @@ std::optional<ReportMail> store_built_report(pqxx::transaction_base& tx, std::in
                                              std::string_view link_base, core::TimePoint now);
 // building -> failed.
 void fail_report(pqxx::transaction_base& tx, std::int64_t report_id, const std::string& error, core::TimePoint now);
+
+// ---- discarding (D-104) ----------------------------------------------------------------
+
+// What is left to do in the bucket for a discard; nothing: the report had no page and is discarded already.
+struct DiscardWork {
+    std::string page_object;
+    std::string archive_object;
+};
+
+// The first step of a discard, with the report's row locked: a `ready` or `failed` report with a page becomes
+// "discarding" and names its archive, one without a page becomes "discarded"; either way the `report.discard`
+// audit entry is written now, once, in the name of the person who began it. A report that is "discarding" already
+// is left as it is, for the caller to finish. Refuses a report that is "building", "discarded" or "expired", and
+// one with a page while there is no bucket. `archive_token`: 43 fresh token characters, used only if the report has
+// no archive name yet. `link_base`: the bucket's address; empty: there is no bucket.
+Result<std::optional<DiscardWork>> begin_discard(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t report_id,
+                                                 std::string_view archive_token, std::string_view link_base);
+// The last step: discarding -> discarded. Does nothing to a report that is not discarding, and keeps its archive's name.
+void finish_discard(pqxx::transaction_base& tx, std::int64_t report_id, core::TimePoint now);
 
 // ---- reading -------------------------------------------------------------------------
 

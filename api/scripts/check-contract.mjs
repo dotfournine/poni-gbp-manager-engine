@@ -639,7 +639,8 @@ try {
   // account has no visibility figures, so the summary stops at "nothing to
   // summarize". A period with reviews would start a model call. Nothing is
   // sent: the build puts the page into the engine's public bucket, a folder
-  // here (D-104), and sends nothing.
+  // here (D-104), and sends nothing. The check then discards the report it
+  // built, which moves its page to the archive in that folder.
   check("GET /api/reports?status=ready", "/api/reports", "GET", await call("GET", "/api/reports?status=ready&per_page=5"));
   expectStatus("GET /api/reports?location_id=x", await call("GET", "/api/reports?location_id=x"), 400, "invalid_request");
   if (seededLocation) {
@@ -679,6 +680,17 @@ try {
         console.log(`skip  POST ${path}/send: email sending is switched on in this database, and the check sends no email`);
       }
       check(`GET /api/notification-deliveries?report_id=${made.json.id}`, "/api/notification-deliveries", "GET", await call("GET", `/api/notification-deliveries?report_id=${made.json.id}`));
+      // Withdrawn for good (D-104): the page moves to the archive in the folder that stands in for the bucket.
+      const discarded = await call("POST", `${path}/discard`);
+      check(`POST ${path}/discard`, "/api/reports/{id}/discard", "POST", discarded);
+      if (discarded.status !== 200 || discarded.json?.status !== "discarded" || discarded.json?.url !== null || typeof discarded.json?.archive_url !== "string") {
+        fail(`POST ${path}/discard`, `a discarded report has its archive's address and no url: ${discarded.text.slice(0, 300)}`);
+      }
+      for (const [name, route, code] of [[`POST ${path}/discard (again)`, "discard", "report_discarded"], [`POST ${path}/send (discarded)`, "send", "report_not_ready"]]) {
+        const refused = await call("POST", `${path}/${route}`);
+        check(name, `/api/reports/{id}/${route}`, "POST", refused);
+        if (refused.status !== 409 || refused.json?.error?.code !== code) fail(name, `expected the refusal ${code}, got ${refused.status}: ${refused.text.slice(0, 300)}`);
+      }
     }
     const schedule = await call("POST", "/api/report-schedules", { body: { location_id: locationId, frequency: "monthly", month_day: 5, time: "09:00", time_zone: "America/New_York" } });
     check("POST /api/report-schedules", "/api/report-schedules", "POST", schedule);
@@ -701,6 +713,7 @@ try {
   }
   expectStatus("GET /api/reports/999999999", await call("GET", "/api/reports/999999999"), 404, "not_found");
   expectStatus("POST /api/reports/999999999/send", await call("POST", "/api/reports/999999999/send"), 404, "not_found");
+  expectStatus("POST /api/reports/999999999/discard", await call("POST", "/api/reports/999999999/discard"), 404, "not_found");
   expectStatus("GET /api/notification-deliveries?report_id=x", await call("GET", "/api/notification-deliveries?report_id=x"), 400, "invalid_request");
   expectStatus("POST /api/locations/999999999/reports", await call("POST", "/api/locations/999999999/reports", { body: { period_start: "2026-01-01", period_end: "2026-01-31" } }), 404, "not_found");
 

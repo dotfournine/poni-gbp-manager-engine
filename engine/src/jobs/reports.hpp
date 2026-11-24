@@ -16,12 +16,19 @@
 // was tried gets its delivery row, sent or failed, once the last was tried.
 // No transaction is open while the emails go out.
 //
+// A report is withdrawn by a person's discard (D-104 point 6): "discarding"
+// and its archive's name on the row, the copy of its page to that name, the
+// delete of the original, then "discarded". Copy first: a step that fails
+// loses no page, and a later call finishes what an earlier one began.
+//
 // What is written outside the database is a report's page in the public
-// bucket and its emails: nothing here writes to Google Business Profile, and
+// bucket, its archive there and the delete of the original, and its emails:
+// nothing here writes to Google Business Profile, and
 // the calls to the Performance API are GETs. A report is built without
 // visibility numbers when Google can't be asked and without a summary when
 // the model gives none; neither stops it. Without a public bucket no report
-// is started, none is built and none is sent.
+// is started, none is built and none is sent, and a report with a page is
+// not discarded.
 #pragma once
 
 #include "connectors/gbp/performance.hpp"
@@ -68,6 +75,12 @@ public:
     // the report with its deliveries, whatever came of each address.
     boost::asio::awaitable<repo::Result<model::Report>> send(std::int64_t report_id, std::optional<std::vector<std::string>> only,
                                                              audit::Actor actor);
+
+    // Withdraws a ready or failed report for good, for `actor`, a signed-in person: refused as
+    // repo::begin_discard refuses; then its page is copied to its archive name, the original is deleted only
+    // after that copy, and the report becomes "discarded". A copy or a delete that fails answers
+    // `storage_failed` and leaves the report "discarding": the next call starts again at the copy.
+    boost::asio::awaitable<repo::Result<model::Report>> discard(std::int64_t report_id, audit::Actor actor);
 
     // Starts the reports that are due (repo::start_due_reports). Returns how many.
     boost::asio::awaitable<int> start_due();
