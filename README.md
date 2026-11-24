@@ -132,6 +132,7 @@ Settings are environment variables. `--config FILE` (or `PONI_CONFIG`) names an 
 | `PONI_LOCATION_DISCOVERY_INTERVAL_S` | `900` | How often locations are discovered |
 | `PONI_REVIEW_POLL_TICK_S` | `60` | How often the review poll job runs. Each location has its own interval on top (default 120 s) |
 | `PONI_REVIEW_FULL_SYNC_INTERVAL_S` | `3600` | How often every review of a location is reconciled |
+| `PONI_STAFF_CHECK_INTERVAL_S` | `300` | How often the staff check reads the Workspace directory's list and disables or enables users (D-106); at least 60 |
 | `PONI_PUBSUB_SUBSCRIPTION` | none | `projects/…/subscriptions/…`; empty means polling only |
 | `PONI_GOOGLE_CREDENTIALS` | `adc` | Pub/Sub credentials: `adc` (gcloud, development) or `metadata` (the VM's service account) |
 | `PONI_PUBSUB_PULL_INTERVAL_S` | `30` | How often notifications are pulled |
