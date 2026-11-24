@@ -4276,8 +4276,10 @@ components:
             `location`, `system_settings`, `ai_settings`, `review`, `draft`
             (a reply draft), `escalation`, `local_post`, `local_post_media`,
             `notification_rule`, `notification_delivery`, `report`,
-            `report_schedule`, `go_live_run`, `user` (signing in and out),
-            `device` and `credential`. Entries about a `report_share_link`
+            `report_schedule`, `go_live_run`, `user` (signing in and out,
+            and the staff check's `user.disable`, `user.enable` and
+            `user.update` by `system:workspace`, D-106), `device` and
+            `credential`. Entries about a `report_share_link`
             are from before D-104, which removed share links. The list grows
             like the actions do.
         object_id:
