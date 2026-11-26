@@ -720,7 +720,7 @@ def test_the_log_shows_the_places_path_and_no_header(google: Mock, capsys) -> No
 def test_the_made_up_businesses_are_in_their_own_time_zones(google: Mock) -> None:
     zones = {(loc["address"]["locality"], loc["time_zone"]) for loc in google.mock.state["locations"]}
     expected = {
-        "Fairview": "America/New_York",
+        "Fairview": "America/Los_Angeles",
         "New York": "America/New_York",
         "Queens": "America/New_York",
         "Springfield": "America/Chicago",
@@ -729,6 +729,11 @@ def test_the_made_up_businesses_are_in_their_own_time_zones(google: Mock) -> Non
     for loc in google.mock.state["locations"]:
         status, _, body = google.call("GET", f"{PLACES}/mock-place-{loc['id']}", headers=PLACES_HEADERS, auth=False)
         assert status == 200 and body["timeZone"]["id"] == expected[loc["address"]["locality"]]
+
+
+def test_the_made_up_businesses_are_not_all_in_one_zone(google: Mock) -> None:
+    # A hand run must be able to tell a zone read from Places from the engine's own fallback.
+    assert len({loc["time_zone"] for loc in google.mock.state["locations"]}) >= 2
 
 
 def test_a_state_file_without_time_zones_gains_them_and_keeps_its_reviews(tmp_path: Path) -> None:

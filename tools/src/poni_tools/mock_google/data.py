@@ -18,9 +18,9 @@ _LOCATIONS: dict[str, list[dict]] = {
             "suffix": "",
             "category": "Buffet restaurant",
             "locality": "Fairview",
-            "region": "VA",
+            "region": "OR",
             "street": "100 Example Plaza",
-            "time_zone": "America/New_York",
+            "time_zone": "America/Los_Angeles",
             "reviews": [
                 (
                     40,
