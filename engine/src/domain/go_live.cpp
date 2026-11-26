@@ -101,12 +101,12 @@ Fingerprint fingerprint(const FingerprintInput& input) {
     return out;
 }
 
-AutoPostScope scope_of(const PolicyRules& policy) {
+AutoReplyScope scope_of(const PolicyRules& policy) {
     return {.positive = policy.auto_post_positive,
             .rating_only = policy.auto_post_rating_only,
             .min_stars = static_cast<int>(std::clamp<std::int64_t>(policy.auto_post_min_stars, 4, 5))};
 }
 
-bool may_auto_post(std::string_view category) { return category == kCaseControl || category == kCaseReal; }
+bool may_auto_reply(std::string_view category) { return category == kCaseControl || category == kCaseReal; }
 
 }  // namespace poni::domain

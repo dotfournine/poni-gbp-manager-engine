@@ -94,13 +94,13 @@ struct Localization {
 BOOST_DESCRIBE_STRUCT(Localization, (), (reply_languages, chinese_script, chinese_region, english_variant, fallback_language))
 
 struct PolicyRules {
-    // 4-5 stars with text and no complaint: would auto-post when every check passes.
+    // 4-5 stars with text and no complaint: would auto reply when every check passes.
     bool auto_post_positive = true;
     // 4-5 stars without text.
     bool auto_post_rating_only = true;
     // Reviews below this many stars always wait for a person.
     std::int64_t auto_post_min_stars = 4;
-    // Timing of an auto-post (FR-5): a random wait of min to max minutes, so
+    // Timing of an auto reply (FR-5): a random wait of min to max minutes, so
     // replies don't all arrive at once; 0 and 0 for none.
     std::int64_t auto_post_delay_min_minutes = 0;
     std::int64_t auto_post_delay_max_minutes = 0;

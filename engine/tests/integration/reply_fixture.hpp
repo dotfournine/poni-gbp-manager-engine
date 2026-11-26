@@ -37,7 +37,7 @@ protected:
         // Both switches are off after installation; most tests are about what happens when they are on.
         exec("UPDATE system_settings SET posting_enabled = true, email_sending_enabled = true");
 
-        // The point in the policy's delay range is fixed, so a test knows when an auto-post is due.
+        // The point in the policy's delay range is fixed, so a test knows when an auto reply is due.
         pipeline_.emplace(db(), clock_, llm_, queue(), jobs::AnalysisOptions{.delay_roll = [this] { return roll_; }});
         poster_.emplace(db(), clock_, gbp_, gbp_, jobs::PostingOptions{});
         tester_.emplace(db(), clock_, llm_);
@@ -105,7 +105,7 @@ protected:
     }
 
     FakeLlm llm_;
-    // Where in its delay range an auto-post falls, in [0, 1).
+    // Where in its delay range an auto reply falls, in [0, 1).
     double roll_ = 0.0;
     FakeChannel channel_;
     test::FakePushSender push_;

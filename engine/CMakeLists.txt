@@ -71,7 +71,7 @@ add_library(poni_engine STATIC
   src/db/repo_catalog.cpp
   src/db/repo_devices.cpp
   src/db/repo_notifications.cpp
-  src/db/repo_auto_posting.cpp
+  src/db/repo_auto_reply.cpp
   src/db/repo_posting.cpp
   src/db/repo_local_posts.cpp
   src/db/repo_post_help.cpp
@@ -101,7 +101,7 @@ add_library(poni_engine STATIC
   src/domain/review_text.cpp
   src/http/api.cpp
   src/http/api_analysis.cpp
-  src/http/api_auto_posting.cpp
+  src/http/api_auto_reply.cpp
   src/http/api_go_live.cpp
   src/http/api_replies.cpp
   src/http/api_local_posts.cpp

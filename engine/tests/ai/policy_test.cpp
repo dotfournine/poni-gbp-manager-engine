@@ -75,12 +75,12 @@ TEST(TargetLanguage, ChineseScriptFollowsThePreference) {
     EXPECT_EQ(target_language("ko", "Hang", fallback).script, "Hant");
 }
 
-TEST(Gate, PraiseWithCleanChecksWouldAutoPost) {
+TEST(Gate, PraiseWithCleanChecksWouldAutoReply) {
     const auto five = gate({.stars = 5, .has_text = true}, kDefault);
-    EXPECT_EQ(five.route, "auto_post");
+    EXPECT_EQ(five.route, "auto_reply");
     EXPECT_THAT(five.reasons, IsEmpty());
-    EXPECT_EQ(gate({.stars = 4, .has_text = true}, kDefault).route, "auto_post");
-    EXPECT_EQ(gate({.stars = 5, .has_text = false}, kDefault).route, "auto_post");
+    EXPECT_EQ(gate({.stars = 4, .has_text = true}, kDefault).route, "auto_reply");
+    EXPECT_EQ(gate({.stars = 5, .has_text = false}, kDefault).route, "auto_reply");
 }
 
 TEST(Gate, LowStarsAndComplaintsWaitForAPerson) {
@@ -108,7 +108,7 @@ TEST(Gate, ASeverityFlagAlwaysEscalates) {
               "escalate");
 }
 
-TEST(Gate, AnyDoubtKeepsAReviewFromAutoPost) {
+TEST(Gate, AnyDoubtKeepsAReviewFromAutoReply) {
     const auto manipulation = gate({.stars = 5, .has_text = true, .manipulation_suspected = true}, kDefault);
     EXPECT_EQ(manipulation.route, "approval_queue");
     EXPECT_THAT(manipulation.reasons, ElementsAre("manipulation suspected"));
@@ -127,17 +127,17 @@ TEST(Gate, AnyDoubtKeepsAReviewFromAutoPost) {
     EXPECT_THAT(all.reasons, ElementsAre("analysis failed", "generation failed", "manipulation suspected", "check failed: length", "2 stars"));
 }
 
-TEST(Gate, ThePolicyCanTightenOrLoosenAutoPost) {
+TEST(Gate, ThePolicyCanTightenOrLoosenAutoReply) {
     EXPECT_EQ(gate({.stars = 4, .has_text = true}, {.auto_post_min_stars = 5}).route, "approval_queue");
-    EXPECT_EQ(gate({.stars = 5, .has_text = true}, {.auto_post_min_stars = 5}).route, "auto_post");
-    EXPECT_EQ(gate({.stars = 3, .has_text = true}, {.auto_post_min_stars = 3}).route, "auto_post");
+    EXPECT_EQ(gate({.stars = 5, .has_text = true}, {.auto_post_min_stars = 5}).route, "auto_reply");
+    EXPECT_EQ(gate({.stars = 3, .has_text = true}, {.auto_post_min_stars = 3}).route, "auto_reply");
     const auto no_positive = gate({.stars = 5, .has_text = true}, {.auto_post_positive = false});
     EXPECT_EQ(no_positive.route, "approval_queue");
-    EXPECT_THAT(no_positive.reasons, ElementsAre("auto-post is off for positive reviews"));
-    EXPECT_EQ(gate({.stars = 5, .has_text = false}, {.auto_post_positive = false}).route, "auto_post");
+    EXPECT_THAT(no_positive.reasons, ElementsAre("auto reply is off for positive reviews"));
+    EXPECT_EQ(gate({.stars = 5, .has_text = false}, {.auto_post_positive = false}).route, "auto_reply");
     const auto no_rating_only = gate({.stars = 5, .has_text = false}, {.auto_post_rating_only = false});
     EXPECT_EQ(no_rating_only.route, "approval_queue");
-    EXPECT_THAT(no_rating_only.reasons, ElementsAre("auto-post is off for rating-only reviews"));
+    EXPECT_THAT(no_rating_only.reasons, ElementsAre("auto reply is off for rating-only reviews"));
 }
 
 // ---- reply settings (D-093) -------------------------------------------------------

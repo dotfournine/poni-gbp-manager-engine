@@ -1,6 +1,6 @@
 // Mechanical checks on a drafted reply (architecture section 10, item 3).
 // They are plain code and know nothing about the model: a reply that fails
-// any of them is never routed to auto-post, whatever the model claimed.
+// any of them is never routed to auto reply, whatever the model claimed.
 //
 // They run on the reply with full-width forms turned into ASCII and
 // zero-width characters dropped (text::fold), so a link or a number can't

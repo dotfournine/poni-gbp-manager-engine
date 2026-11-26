@@ -109,7 +109,7 @@ TEST_F(Analysis, AnUnrepliedReviewGetsAnAnalysisADraftAndARoute) {
     EXPECT_TRUE(stored.analysis->is_current);
     ASSERT_TRUE(stored.draft);
     EXPECT_EQ(stored.draft->status, "draft");
-    EXPECT_EQ(stored.draft->route, "auto_post");
+    EXPECT_EQ(stored.draft->route, "auto_reply");
     EXPECT_THAT(stored.draft->route_reasons, testing::IsEmpty());
     EXPECT_EQ(stored.draft->mode, "positive");
     EXPECT_EQ(stored.draft->language, "en");
@@ -243,7 +243,7 @@ TEST_F(Analysis, TheOriginalTextIsAnalyzedNotGooglesTranslation) {
     // Gangnam replies in the review's language (the owner's open answer, as a setting).
     const auto stored = review(id);
     EXPECT_EQ(stored.draft->language, "es");
-    EXPECT_EQ(stored.draft->route, "auto_post");
+    EXPECT_EQ(stored.draft->route, "auto_reply");
     EXPECT_THAT(llm_.requests[1].messages[0].content, HasSubstr("Write the reply in Spanish."));
     // The analyzer's language replaces the guess made when the review was stored.
     EXPECT_EQ(stored.language, "es");
@@ -272,7 +272,7 @@ TEST_F(Analysis, ARatingWithoutTextNeedsNoAnalyzerCall) {
     EXPECT_EQ(stored.analysis->sentiment, "none");
     EXPECT_FALSE(stored.analysis->model);
     EXPECT_EQ(stored.draft->mode, "rating_only");
-    EXPECT_EQ(stored.draft->route, "auto_post");
+    EXPECT_EQ(stored.draft->route, "auto_reply");
 }
 
 TEST_F(Analysis, RatingOnlyRepliesAreToldToDifferFromRecentOnes) {
@@ -311,7 +311,7 @@ TEST_F(Analysis, WhatTheModelMissesIsMissed) {
     process(id);  // the scripted model sees nothing wrong and writes a cheerful reply
     const auto stored = review(id);
     EXPECT_TRUE(stored.analysis->severity_flags.empty());
-    EXPECT_EQ(stored.draft->route, "auto_post");
+    EXPECT_EQ(stored.draft->route, "auto_reply");
 }
 
 TEST_F(Analysis, AReplyThatGivesInToAnAttackWaitsForAPerson) {
@@ -360,7 +360,7 @@ TEST_F(Analysis, TheGeneratorIsAskedForTheReviewersChineseScriptAndItsReplyIsSto
     EXPECT_EQ(stored.draft->language, "zh");
     EXPECT_EQ(stored.draft->script, "Hant");
     EXPECT_EQ(stored.draft->text, "谢谢您的五星好评！很开心您喜欢我们的环境和头疗体验，期待下次再为您服务。");
-    EXPECT_EQ(stored.draft->route, "auto_post");
+    EXPECT_EQ(stored.draft->route, "auto_reply");
     EXPECT_THAT(llm_.requests[1].messages[0].content, HasSubstr("Traditional Chinese characters only, with natural Taiwan phrasing"));
 }
 
@@ -371,7 +371,7 @@ TEST_F(Analysis, ALocationsSettingsAreItsVoiceAndItsPolicy) {
     process(id);
     EXPECT_THAT(llm_.requests[1].messages[0].content, HasSubstr("Sign off with: \"— The Chelsea team\""));
     EXPECT_EQ(review(id).draft->route, "approval_queue");
-    EXPECT_THAT(review(id).draft->route_reasons, testing::ElementsAre("auto-post is off for positive reviews"));
+    EXPECT_THAT(review(id).draft->route_reasons, testing::ElementsAre("auto reply is off for positive reviews"));
 }
 
 // ---- idempotent and retry-safe ---------------------------------------------------
@@ -398,7 +398,7 @@ TEST_F(Analysis, AJobThatDiedAfterTheAnalysisOnlyWritesTheDraft) {
     EXPECT_EQ(llm_.calls("analyzer"), 1u) << "the stored analysis is used again";
     EXPECT_EQ(count("review_analyses"), 1);
     EXPECT_EQ(count("reply_drafts"), 1);
-    EXPECT_EQ(review(id).draft->route, "auto_post");
+    EXPECT_EQ(review(id).draft->route, "auto_reply");
 }
 
 TEST_F(Analysis, AModelThatIsDownIsRetriedAndThenRecorded) {
@@ -421,7 +421,7 @@ TEST_F(Analysis, AModelThatIsDownIsRetriedAndThenRecorded) {
     EXPECT_THAT(stored.draft->route_reasons, testing::ElementsAre("analysis failed", "generation failed"));
 }
 
-// D-058: with the model down nobody knows what the review says, so it waits for a person; it is never auto-posted.
+// D-058: with the model down nobody knows what the review says, so it waits for a person; it is never posted by auto reply.
 TEST_F(Analysis, AFailedAnalysisWaitsForAPerson) {
     const auto id = store(kBuffet, "r1", "FIVE", "Great sushi but we both got sick that night.");
     llm_.analyzer = [](const llm::ChatRequest&) { return FakeLlm::failure(llm::Error::Kind::unavailable); };
@@ -640,7 +640,7 @@ TEST_F(Analysis, ANewReviewIsAnalyzedAndDraftedByTheJobsAlone) {
     const auto stored = review(id);
     ASSERT_TRUE(stored.analysis);
     ASSERT_TRUE(stored.draft);
-    EXPECT_EQ(stored.draft->route, "auto_post");
+    EXPECT_EQ(stored.draft->route, "auto_reply");
     EXPECT_EQ(count("jobs WHERE status = 'failed'"), 0);
     // Nothing reached Google: the fake holds the review as it was, without a reply.
     EXPECT_FALSE(gbp_.reviews[std::string(kSpa)].front().reviewReply);

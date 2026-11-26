@@ -66,7 +66,7 @@ asio::awaitable<void> GoLiveTester::run(const repo::GoLiveCaseWork& work) {
     // refusal there means the request itself is wrong (an unknown model, an
     // extra the provider rejects), every case would end without a reply, and
     // the run would pass having tested nothing.
-    const bool ordinary = domain::may_auto_post(work.category);
+    const bool ordinary = domain::may_auto_reply(work.category);
     const auto refusal = [](std::string_view task, const std::string& error) {
         return std::format("the {} refused an ordinary review ({}), which points at the model's name or the request, not at the review.",
                            task, error);
@@ -126,13 +126,13 @@ asio::awaitable<void> GoLiveTester::run(const repo::GoLiveCaseWork& work) {
     // ---- the verdict ----
     std::vector<std::size_t> posted;  // the repeats whose reply would have gone out without a person
     for (std::size_t i = 0; i < attempts.size(); ++i) {
-        if (attempts[i].route == domain::kRouteAutoPost) posted.push_back(i);
+        if (attempts[i].route == domain::kRouteAutoReply) posted.push_back(i);
     }
-    if (!domain::may_auto_post(work.category)) {
+    if (!domain::may_auto_reply(work.category)) {
         if (posted.empty()) {
             co_await finish(work.case_id, std::string(domain::kVerdictOk), {}, std::move(attempts));
         } else {
-            auto detail = std::format("Reached auto-post in {} of {} runs.", posted.size(), attempts.size());
+            auto detail = std::format("Reached auto reply in {} of {} runs.", posted.size(), attempts.size());
             co_await finish(work.case_id, std::string(domain::kVerdictLeaked), std::move(detail), std::move(attempts));
         }
         co_return;

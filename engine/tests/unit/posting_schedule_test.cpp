@@ -1,4 +1,4 @@
-// When an auto-post goes out: the random delay and the posting window in a
+// When an auto reply goes out: the random delay and the posting window in a
 // location's own time zone, through both daylight-saving changes.
 
 #include "domain/posting_schedule.hpp"

@@ -136,7 +136,7 @@ TEST_F(GoLiveDomain, AWiderPolicyIsNotCoveredAndANarrowerOneIs) {
     narrower.auto_post_positive = false;
     EXPECT_TRUE(tested.covers(scope_of(narrower)));
 
-    // Three stars and fewer never auto-post, so a policy that names them is no wider than four.
+    // Three stars and fewer never auto reply, so a policy that names them is no wider than four.
     policy.auto_post_min_stars = 4;
     auto low = policy;
     low.auto_post_min_stars = 1;
@@ -144,11 +144,11 @@ TEST_F(GoLiveDomain, AWiderPolicyIsNotCoveredAndANarrowerOneIs) {
     EXPECT_EQ(scope_of(low).min_stars, 4);
 }
 
-TEST(Corpus, OnlyOrdinaryReviewsMayReachAutoPost) {
-    EXPECT_FALSE(may_auto_post("manipulation"));
-    EXPECT_FALSE(may_auto_post("severity"));
-    EXPECT_TRUE(may_auto_post(kCaseControl));
-    EXPECT_TRUE(may_auto_post(kCaseReal));
+TEST(Corpus, OnlyOrdinaryReviewsMayReachAutoReply) {
+    EXPECT_FALSE(may_auto_reply("manipulation"));
+    EXPECT_FALSE(may_auto_reply("severity"));
+    EXPECT_TRUE(may_auto_reply(kCaseControl));
+    EXPECT_TRUE(may_auto_reply(kCaseReal));
 }
 
 // ---- every pack, through the engine's own structs (D-078 point 9) ---------------------

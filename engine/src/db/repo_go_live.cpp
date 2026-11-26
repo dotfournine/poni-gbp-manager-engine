@@ -34,8 +34,8 @@ const db::FilledLater kCases{"cases"};
 // The columns of a model::GoLiveRun.
 std::string run_select() {
     return std::format(R"sql(
-        SELECT g.id, g.location_id, l.title AS location_title, g.fingerprint, g.status, g.summary, g.auto_post_positive,
-               g.auto_post_rating_only, g.auto_post_min_stars, g.corpus_version,
+        SELECT g.id, g.location_id, l.title AS location_title, g.fingerprint, g.status, g.summary, g.auto_reply_positive AS auto_post_positive,
+               g.auto_reply_rating_only AS auto_post_rating_only, g.auto_reply_min_stars AS auto_post_min_stars, g.corpus_version,
                -- Is the corpus the run used the one its location's industry has now?
                coalesce(g.corpus_version = (SELECT i.corpus_version FROM kb_industries i WHERE i.key = l.industry_key), false)
                    AS corpus_current,
@@ -148,7 +148,7 @@ void settle(pqxx::transaction_base& tx, std::int64_t run_id, core::TimePoint now
         return;
     }
     std::string why;
-    if (leaked > 0) why = std::format("{} reached auto-post that must not", plural(leaked, "attack or severity case", "attack or severity cases"));
+    if (leaked > 0) why = std::format("{} reached auto reply that must not", plural(leaked, "attack or severity case", "attack or severity cases"));
     if (unacceptable > 0) {
         why += (why.empty() ? "" : "; ") +
                std::format("{} that would have been posted the judge rated unacceptable", plural(unacceptable, "reply", "replies"));
@@ -197,7 +197,7 @@ model::GoLiveEstimate estimate(pqxx::transaction_base& tx, const GoLiveSetup& se
     std::int64_t with_text = 0, judged = 0;
     for (const auto& one : corpus) {
         if (!one.text.empty()) ++with_text;
-        if (domain::may_auto_post(one.category)) ++judged;
+        if (domain::may_auto_reply(one.category)) ++judged;
     }
     for (const auto& review : real) {
         if (review.has_text) ++with_text;
@@ -260,8 +260,8 @@ std::optional<std::int64_t> open_run(pqxx::transaction_base& tx, const GoLiveSet
     const auto real = real_reviews(tx, setup.location_id);
     const int at_a_time = std::clamp(parallel, 1, 64);
     const auto inserted = tx.exec(
-        "INSERT INTO go_live_runs (location_id, fingerprint, fingerprint_inputs, status, auto_post_positive, auto_post_rating_only, "
-        "auto_post_min_stars, corpus_version, repeats, real_reviews, started_by, started_at, parallel, kb_version) "
+        "INSERT INTO go_live_runs (location_id, fingerprint, fingerprint_inputs, status, auto_reply_positive, auto_reply_rating_only, "
+        "auto_reply_min_stars, corpus_version, repeats, real_reviews, started_by, started_at, parallel, kb_version) "
         "VALUES ($1, $2, $3::jsonb, 'running', $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12, $13) "
         "ON CONFLICT (fingerprint) WHERE status = 'running' DO NOTHING RETURNING id",
         pqxx::params{setup.location_id, fingerprint.hash, boost::json::serialize(fingerprint.inputs), setup.scope.positive,
@@ -357,13 +357,13 @@ std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, st
     return setup;
 }
 
-GoLiveState go_live_state(pqxx::transaction_base& tx, const std::string& fingerprint, const domain::AutoPostScope& scope) {
+GoLiveState go_live_state(pqxx::transaction_base& tx, const std::string& fingerprint, const domain::AutoReplyScope& scope) {
     GoLiveState out;
     std::int64_t newest_failed = 0;
     bool passed_but_narrower = false;
     std::string latest_status;
     // Newest first.
-    for (const auto& row : tx.exec("SELECT id, status, auto_post_positive, auto_post_rating_only, auto_post_min_stars "
+    for (const auto& row : tx.exec("SELECT id, status, auto_reply_positive, auto_reply_rating_only, auto_reply_min_stars "
                                    "FROM go_live_runs WHERE fingerprint = $1 ORDER BY id DESC",
                                    pqxx::params{fingerprint})) {
         const auto id = row[0].as<std::int64_t>();
@@ -375,7 +375,7 @@ GoLiveState go_live_state(pqxx::transaction_base& tx, const std::string& fingerp
         if (status == domain::kRunFailed && newest_failed == 0) newest_failed = id;
         // A pass counts until the same configuration fails a later test.
         if (status == domain::kRunPassed && newest_failed == 0 && !out.pass_run_id) {
-            const domain::AutoPostScope tested{.positive = row[2].as<bool>(), .rating_only = row[3].as<bool>(), .min_stars = row[4].as<int>()};
+            const domain::AutoReplyScope tested{.positive = row[2].as<bool>(), .rating_only = row[3].as<bool>(), .min_stars = row[4].as<int>()};
             if (tested.covers(scope)) {
                 out.pass_run_id = id;
             } else {
@@ -389,7 +389,7 @@ GoLiveState go_live_state(pqxx::transaction_base& tx, const std::string& fingerp
         out.state = "passed";
     } else if (passed_but_narrower) {
         out.state = "not_tested";
-        out.detail = "The reply policy now auto-posts more than the last passing test covered.";
+        out.detail = "The reply policy now auto replies more than the last passing test covered.";
     } else if (!out.latest_run_id) {
         out.state = "not_tested";
     } else if (newest_failed != 0) {
@@ -512,8 +512,8 @@ std::optional<model::GoLiveRun> get_go_live_run(pqxx::transaction_base& tx, std:
 
 std::optional<GoLiveCaseWork> go_live_case(pqxx::transaction_base& tx, std::int64_t case_id, core::TimePoint now) {
     const auto rows = tx.exec("SELECT k.run_id, k.case_key, k.category, k.stars, k.review_id, k.verdict, g.status, g.fingerprint, "
-                              "g.location_id, g.repeats, coalesce(r.original_text, ''), g.auto_post_positive, "
-                              "g.auto_post_rating_only, g.auto_post_min_stars, g.started_by, g.parallel "
+                              "g.location_id, g.repeats, coalesce(r.original_text, ''), g.auto_reply_positive, "
+                              "g.auto_reply_rating_only, g.auto_reply_min_stars, g.started_by, g.parallel "
                               "FROM go_live_cases k JOIN go_live_runs g ON g.id = k.run_id LEFT JOIN reviews r ON r.id = k.review_id "
                               "WHERE k.id = $1",
                               pqxx::params{case_id});

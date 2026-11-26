@@ -320,14 +320,14 @@ TEST_F(Api, LocationsAreGroupedUnderClientsAndTheLinkChangesNothingElse) {
 
     EXPECT_EQ(read("/api/locations").at("total").as_int64(), 2);
     EXPECT_EQ(read("/api/locations?linked=false").at("total").as_int64(), 2);
-    // A location the engine works on, with settings and auto-posting of its own.
+    // A location the engine works on, with settings and auto reply of its own.
     ASSERT_EQ(patch_current(target, R"({"enabled": true, "industry_key": "wellness", "audience": "Office workers"})").status, 200u);
     ASSERT_EQ(save_settings(spa, "voice", R"({"reply_name": "Willow Moon Head Spa"})").status, 200u);
     const auto on = patch(target + "/auto-posting", R"({"enabled": true, "five_star": true, "time_zone": "America/New_York"})");
     ASSERT_EQ(on.status, 200u) << on.body;
     // All of it but the client, as it is before and after each change of the link.
-    const auto auto_posting = [&] {
-        return value<std::string>(std::format("SELECT concat(auto_post_enabled, auto_post_five_star, auto_post_four_star, time_zone) "
+    const auto auto_reply_state = [&] {
+        return value<std::string>(std::format("SELECT concat(auto_reply_enabled, auto_reply_five_star, auto_reply_four_star, time_zone) "
                                               "FROM locations WHERE id = {}",
                                               spa));
     };
@@ -335,7 +335,7 @@ TEST_F(Api, LocationsAreGroupedUnderClientsAndTheLinkChangesNothingElse) {
         auto location = read(target).as_object();
         location.erase("client_id");
         location.erase("client_name");
-        return boost::json::object{{"location", location}, {"settings", read(settings_path(spa)).at("voice")}, {"auto_posting", auto_posting()}};
+        return boost::json::object{{"location", location}, {"settings", read(settings_path(spa)).at("voice")}, {"auto_reply", auto_reply_state()}};
     };
     const auto before = all_but_the_client();
     const auto syncs = value<std::string>(std::format("SELECT concat(next_review_poll_at, next_full_sync_at) FROM locations WHERE id = {}", spa));
@@ -392,17 +392,17 @@ TEST_F(Api, ALocationIsSwitchedOnAndOffByAPerson) {
     ASSERT_EQ(patch_current(target, R"({"enabled": true})").status, 200u);
     EXPECT_EQ(read("/api/audit-log?action=location.enable").at("total").as_int64(), 1) << "no change, no entry";
 
-    // Switching off switches auto-posting off with it, and a person switches that on again (D-070).
+    // Switching off switches auto reply off with it, and a person switches that on again (D-070).
     ASSERT_EQ(patch(target + "/auto-posting", R"({"enabled": true, "five_star": true, "time_zone": "America/New_York"})").status, 200u);
     const auto off = patch_current(target, R"({"enabled": false})");
     ASSERT_EQ(off.status, 200u) << off.body;
     EXPECT_FALSE(json(off).at("enabled").as_bool());
-    EXPECT_FALSE(value<bool>(std::format("SELECT auto_post_enabled OR auto_post_five_star FROM locations WHERE id = {}", spa)));
+    EXPECT_FALSE(value<bool>(std::format("SELECT auto_reply_enabled OR auto_reply_five_star FROM locations WHERE id = {}", spa)));
     const auto entry = read("/api/audit-log?action=location.disable").at("items").at(0);
-    EXPECT_TRUE(entry.at("before").at("auto_post_enabled").as_bool());
-    EXPECT_FALSE(entry.at("after").at("auto_post_enabled").as_bool());
+    EXPECT_TRUE(entry.at("before").at("auto_reply_enabled").as_bool());
+    EXPECT_FALSE(entry.at("after").at("auto_reply_enabled").as_bool());
     EXPECT_EQ(patch(target + "/auto-posting", R"({"enabled": true, "five_star": true})").status, 400u)
-        << "auto-posting needs a location that is switched on";
+        << "auto reply needs a location that is switched on";
 
     // A location the managing account no longer sees can't be switched on, and the refusal changes nothing else.
     exec(std::format("UPDATE locations SET access_status = 'lost' WHERE id = {}", spa));

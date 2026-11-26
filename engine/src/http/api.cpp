@@ -190,7 +190,7 @@ void add_api_routes(Router& router, db::Database& db, const core::Clock& clock, 
 
     add_analysis_routes(router, api);
     add_reply_routes(router, api, pipeline);
-    add_auto_posting_routes(router, api);
+    add_auto_reply_routes(router, api);
     add_go_live_routes(router, api);
     add_local_post_routes(router, api, public_store, advisor);
     add_report_routes(router, api, reporter);

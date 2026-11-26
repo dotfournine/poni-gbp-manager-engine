@@ -579,7 +579,7 @@ try {
       console.log("skip  approve: the posting switch is on in this database, and the check never posts");
     }
   }
-  // Phase 4: auto-posting. The check never switches it on and never lifts a
+  // Phase 4: auto reply. The check never switches it on and never lifts a
   // pause the engine set: it reads, sends changes that change nothing or
   // are refused, and resumes only what is not paused.
   const autoPosting = await call("GET", "/api/auto-posting");
@@ -587,7 +587,7 @@ try {
   if (autoPosting.json?.paused === false) {
     check("POST /api/auto-posting/resume (not paused)", "/api/auto-posting/resume", "POST", await call("POST", "/api/auto-posting/resume"));
   } else {
-    console.log("skip  resume: auto-posting is paused in this database, and the check never lifts a pause");
+    console.log("skip  resume: auto reply is paused in this database, and the check never lifts a pause");
   }
   check("GET /api/auto-posts", "/api/auto-posts", "GET", await call("GET", "/api/auto-posts?per_page=5"));
   if (location) {

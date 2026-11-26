@@ -1,7 +1,7 @@
 // The analysis and drafting pipeline as jobs (architecture 4.1, steps 2-4):
 // every review of an enabled location with an industry gets an analysis, and
 // every review without a reply gets a draft and a route. A draft routed to
-// auto-post is scheduled for posting where a person switched auto-posting
+// auto reply is scheduled for posting where a person switched auto reply
 // on (D-069); every other draft waits for a person.
 //
 //   reviews.analyze_pending   every minute, and right after a sync stored
@@ -49,7 +49,7 @@ inline constexpr std::string_view kAnalyzePendingKind = "reviews.analyze_pending
 // will. The pipeline alone adds to the writer's input what only it has: the
 // location's recent replies to rating-only reviews, and a person's
 // instructions for a draft they have written again. Neither is part of what
-// a test covers, and a draft with instructions never auto-posts.
+// a test covers, and a draft with instructions never auto replies.
 
 // What a call is recorded under besides its location (llm_calls). Never sent.
 struct AskedFor {
@@ -68,7 +68,7 @@ llm::ChatRequest writer_request(const repo::GoLiveSetup& setup, const domain::Ge
 
 struct AnalysisOptions {
     std::chrono::seconds tick{60};
-    // Where in the policy's delay range an auto-post falls, in [0, 1).
+    // Where in the policy's delay range an auto reply falls, in [0, 1).
     // Empty: random. Tests set it.
     std::function<double()> delay_roll;
 };
@@ -123,7 +123,7 @@ private:
         const Regeneration* regeneration);
 
     // Stores the pipeline's own draft, pauses a location whose checks keep
-    // failing, and schedules the auto-post or tells people that a draft
+    // failing, and schedules the auto reply or tells people that a draft
     // waits. False, and nothing stored, if the review changed or was replied
     // to while the draft was written.
     boost::asio::awaitable<bool> store_own_draft(const repo::ReviewContext& context, const domain::Analysis& analysis,

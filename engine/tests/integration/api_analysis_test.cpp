@@ -230,7 +230,7 @@ TEST_F(AnalysisApi, ALocationWhoseIndustryLeftTheKnowledgeBaseIsNotAnalyzedAndSa
     EXPECT_EQ(asked.status, 409u) << asked.body;
     {
         pqxx::work tx{conn()};
-        EXPECT_FALSE(repo::go_live_setup(tx, spa_)) << "a location without a profile has no fingerprint, so it never auto-posts";
+        EXPECT_FALSE(repo::go_live_setup(tx, spa_)) << "a location without a profile has no fingerprint, so it never auto replies";
     }
 
     // The industry comes back with a later version, and the location is analyzed again without anyone touching it.
@@ -518,7 +518,7 @@ TEST_F(AnalysisApi, ReviewsCarryTheirAnalysisAndDraft) {
     const auto review = read("/api/reviews/" + std::to_string(happy));
     EXPECT_EQ(review.at("analysis").at("sentiment").as_string(), "positive");
     EXPECT_TRUE(review.at("analysis").at("is_current").as_bool());
-    EXPECT_EQ(review.at("draft").at("route").as_string(), "auto_post");
+    EXPECT_EQ(review.at("draft").at("route").as_string(), "auto_reply");
     EXPECT_EQ(review.at("draft").at("status").as_string(), "draft");
     EXPECT_TRUE(review.at("draft").at("inputs").is_null()) << "inputs are left out where drafts are embedded";
     EXPECT_FALSE(review.at("draft").at("checks").as_array().empty());
@@ -539,7 +539,7 @@ TEST_F(AnalysisApi, ReviewsCarryTheirAnalysisAndDraft) {
     EXPECT_THAT(review_ids("?has_draft=true"), UnorderedElementsAre("happy", "severe"));
     EXPECT_THAT(review_ids("?has_draft=false"), UnorderedElementsAre("replied", "untouched"));
     EXPECT_THAT(review_ids("?route=escalate"), UnorderedElementsAre("severe"));
-    EXPECT_THAT(review_ids("?route=auto_post&draft_status=draft"), UnorderedElementsAre("happy"));
+    EXPECT_THAT(review_ids("?route=auto_reply&draft_status=draft"), UnorderedElementsAre("happy"));
     EXPECT_THAT(review_ids("?manipulation=true"), testing::IsEmpty());
     // The draft queue: live drafts, newest draft first.
     EXPECT_THAT(review_ids("?has_draft=true&draft_status=draft&sort=draft_time&order=desc"), testing::ElementsAre("severe", "happy"));

@@ -1,8 +1,8 @@
 // The tiered reply policy (FR-5): which kind of reply a review gets, in which
 // language, and where the draft goes. Every review ends on exactly one route.
 //
-// The route "auto_post" says only that the policy would let the reply go out
-// without a person: whether it does is up to repo::schedule_auto_post.
+// The route "auto_reply" says only that the policy would let the reply go out
+// without a person: whether it does is up to repo::schedule_auto_reply.
 #pragma once
 
 #include "domain/reply_settings.hpp"
@@ -14,7 +14,7 @@
 
 namespace poni::domain {
 
-inline constexpr std::string_view kRouteAutoPost = "auto_post";
+inline constexpr std::string_view kRouteAutoReply = "auto_reply";
 inline constexpr std::string_view kRouteApproval = "approval_queue";
 inline constexpr std::string_view kRouteEscalate = "escalate";
 
@@ -53,7 +53,7 @@ struct GateInput {
 
 struct GateDecision {
     std::string route;
-    // Why the review did not go to auto-post; empty for auto_post.
+    // Why the review did not go to auto reply; empty for auto_reply.
     std::vector<std::string> reasons;
 };
 

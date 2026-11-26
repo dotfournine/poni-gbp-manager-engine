@@ -140,7 +140,7 @@ protected:
         });
     }
     void set_voice(std::int64_t location, std::string_view members) { set_part(location, "voice", members); }
-    // The policy's rules (delay, window, what is routed to auto-post).
+    // The policy's rules (delay, window, what is routed to auto reply).
     void set_policy(std::int64_t location, std::string_view rules) { set_part(location, "policy", rules); }
 
     // What a seed of a new knowledge base version does to the tables, in this
@@ -287,12 +287,12 @@ protected:
     // The location's configuration, as it is now, gets a passing go-live test
     // (D-074), written straight into this test's throwaway schema: what a
     // person's test run leaves behind when the model behaves. Tests about
-    // auto-posting start from here; go_live_test.cpp earns the pass.
+    // auto reply start from here; go_live_test.cpp earns the pass.
     void certify(std::int64_t location) {
         tx([&](pqxx::work& tx) {
             const auto setup = repo::go_live_setup(tx, location).value();
-            tx.exec("INSERT INTO go_live_runs (location_id, fingerprint, fingerprint_inputs, status, auto_post_positive, "
-                    "auto_post_rating_only, auto_post_min_stars, corpus_version, repeats, started_at, finished_at) "
+            tx.exec("INSERT INTO go_live_runs (location_id, fingerprint, fingerprint_inputs, status, auto_reply_positive, "
+                    "auto_reply_rating_only, auto_reply_min_stars, corpus_version, repeats, started_at, finished_at) "
                     "VALUES ($1, $2, '{}', 'passed', true, true, 4, 'test', 3, now(), now())",
                     pqxx::params{location, setup.fingerprint.hash});
         });

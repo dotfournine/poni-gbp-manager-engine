@@ -1,4 +1,4 @@
-#include "db/repo_auto_posting.hpp"
+#include "db/repo_auto_reply.hpp"
 
 #include "core/text.hpp"
 #include "db/database.hpp"
@@ -26,15 +26,15 @@ const db::FilledLater kFromPolicyAndGoLive{"delay_min_minutes", "delay_max_minut
 // $1: the start of the daily cap's window.
 std::string location_select() {
     return std::format(R"sql(
-        SELECT l.id AS location_id, l.title AS location_title, l.client_id, c.name AS client_name, l.auto_post_enabled AS enabled,
-               l.auto_post_five_star AS five_star, l.auto_post_four_star AS four_star, l.auto_post_daily_cap AS daily_cap,
-               l.time_zone, l.posting_enabled, l.auto_post_paused_at IS NOT NULL AS paused, {} AS paused_at,
-               l.auto_post_pause_reason AS pause_reason, l.auto_post_pause_detail AS pause_detail, {} AS posted_last_24h,
+        SELECT l.id AS location_id, l.title AS location_title, l.client_id, c.name AS client_name, l.auto_reply_enabled AS enabled,
+               l.auto_reply_five_star AS five_star, l.auto_reply_four_star AS four_star, l.auto_reply_daily_cap AS daily_cap,
+               l.time_zone, l.posting_enabled, l.auto_reply_paused_at IS NOT NULL AS paused, {} AS paused_at,
+               l.auto_reply_pause_reason AS pause_reason, l.auto_reply_pause_detail AS pause_detail, {} AS posted_last_24h,
                (SELECT count(*) FROM reply_drafts d JOIN reviews r ON r.id = d.review_id
                  WHERE r.location_id = l.id AND d.status = 'scheduled') AS scheduled,
-               l.auto_post_pause_after_failures AS pause_after_failures
+               l.auto_reply_pause_after_failures AS pause_after_failures
           FROM locations l LEFT JOIN clients c ON c.id = l.client_id)sql",
-                       iso("l.auto_post_paused_at"), auto_posts_since("l.id", "$1"));
+                       iso("l.auto_reply_paused_at"), auto_replies_since("l.id", "$1"));
 }
 
 // Adds what the row does not hold. The timing comes from the location's reply
@@ -79,7 +79,7 @@ struct PauseScope {
     audit::Entry entry(std::string_view action, std::string_view action_for_all, audit::Change change) const {
         return {.action = std::string(location_id ? action : action_for_all),
                 .object_type = location_id ? "location" : "system_settings",
-                .object_id = location_id ? std::to_string(*location_id) : std::string("auto_posting"),
+                .object_id = location_id ? std::to_string(*location_id) : std::string("auto_reply"),
                 .before = std::move(change.before),
                 .after = std::move(change.after)};
     }
@@ -88,7 +88,7 @@ struct PauseScope {
 // Lifts the pause, if there is one. False if there is no such location.
 bool resume(pqxx::transaction_base& tx, audit::Writer& audit, std::optional<std::int64_t> location_id) {
     const PauseScope scope{location_id};
-    const auto rows = tx.exec(std::format("SELECT auto_post_pause_reason FROM {} WHERE {} FOR UPDATE", scope.table(), scope.row()),
+    const auto rows = tx.exec(std::format("SELECT auto_reply_pause_reason FROM {} WHERE {} FOR UPDATE", scope.table(), scope.row()),
                               pqxx::params{location_id});
     if (rows.empty()) return false;
     const auto reason = rows[0][0].as<OptString>();
@@ -96,12 +96,12 @@ bool resume(pqxx::transaction_base& tx, audit::Writer& audit, std::optional<std:
         audit.nothing_changed();
         return true;
     }
-    tx.exec(std::format("UPDATE {} SET auto_post_paused_at = NULL, auto_post_pause_reason = NULL, auto_post_pause_detail = NULL, "
-                        "auto_post_resumed_at = $2::timestamptz, updated_at = $2::timestamptz WHERE {}",
+    tx.exec(std::format("UPDATE {} SET auto_reply_paused_at = NULL, auto_reply_pause_reason = NULL, auto_reply_pause_detail = NULL, "
+                        "auto_reply_resumed_at = $2::timestamptz, updated_at = $2::timestamptz WHERE {}",
                         scope.table(), scope.row()),
             pqxx::params{location_id, to_timestamptz(audit.now())})
         .no_rows();
-    audit.record(scope.entry("location.auto_post_resumed", "auto_posting.resumed",
+    audit.record(scope.entry("location.auto_reply_resumed", "auto_reply.resumed",
                              {.before = {{"paused", true}, {"reason", *reason}}, .after = {{"paused", false}}}));
     return true;
 }
@@ -114,7 +114,7 @@ std::string pause_words(std::string_view reason) {
 
 }  // namespace
 
-std::string auto_posts_since(std::string_view location, std::string_view since) {
+std::string auto_replies_since(std::string_view location, std::string_view since) {
     return std::format("(SELECT count(*) FROM reply_posts p JOIN reviews pr ON pr.id = p.review_id "
                        "WHERE pr.location_id = {} AND p.policy_version IS NOT NULL AND p.status <> 'failed' "
                        "AND p.started_at > {}::timestamptz)",
@@ -126,24 +126,24 @@ namespace {
 // A location's settings, as the change and the resume answer with them.
 std::optional<model::AutoPosting> get_auto_posting(pqxx::transaction_base& tx, std::int64_t location_id, core::TimePoint now) {
     auto row = db::row_as<model::AutoPosting>(tx, location_select() + " WHERE l.id = $2",
-                                              pqxx::params{to_timestamptz(now - kAutoPostCapWindow), location_id}, kFromPolicyAndGoLive);
+                                              pqxx::params{to_timestamptz(now - kAutoReplyCapWindow), location_id}, kFromPolicyAndGoLive);
     if (!row) return std::nullopt;
     return to_auto_posting(tx, std::move(*row));
 }
 
 }  // namespace
 
-model::AutoPostingOverview auto_posting_overview(pqxx::transaction_base& tx, core::TimePoint now) {
+model::AutoPostingOverview auto_reply_overview(pqxx::transaction_base& tx, core::TimePoint now) {
     // The global state in one row; the locations are read after it.
     auto out = db::one_as<model::AutoPostingOverview>(
         tx,
-        std::format("SELECT posting_enabled, auto_post_paused_at IS NOT NULL AS paused, {} AS paused_at, "
-                    "auto_post_pause_reason AS pause_reason, auto_post_pause_detail AS pause_detail FROM system_settings",
-                    iso("auto_post_paused_at")),
+        std::format("SELECT posting_enabled, auto_reply_paused_at IS NOT NULL AS paused, {} AS paused_at, "
+                    "auto_reply_pause_reason AS pause_reason, auto_reply_pause_detail AS pause_detail FROM system_settings",
+                    iso("auto_reply_paused_at")),
         {}, db::FilledLater{"locations"});
     for (auto& row : db::rows_as<model::AutoPosting>(
              tx, location_select() + " WHERE l.enabled ORDER BY lower(l.title), l.id",
-             pqxx::params{to_timestamptz(now - kAutoPostCapWindow)}, kFromPolicyAndGoLive)) {
+             pqxx::params{to_timestamptz(now - kAutoReplyCapWindow)}, kFromPolicyAndGoLive)) {
         out.locations.push_back(to_auto_posting(tx, std::move(row)));
     }
     return out;
@@ -152,8 +152,8 @@ model::AutoPostingOverview auto_posting_overview(pqxx::transaction_base& tx, cor
 Result<model::AutoPosting> update_auto_posting(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
                                                const AutoPostingPatch& patch) {
     const auto rows = tx.exec(
-        "SELECT l.auto_post_enabled, l.auto_post_five_star, l.auto_post_four_star, l.auto_post_daily_cap, l.time_zone, "
-        "l.enabled AND l.access_status = 'active', l.auto_post_pause_after_failures FROM locations l WHERE l.id = $1 FOR UPDATE",
+        "SELECT l.auto_reply_enabled, l.auto_reply_five_star, l.auto_reply_four_star, l.auto_reply_daily_cap, l.time_zone, "
+        "l.enabled AND l.access_status = 'active', l.auto_reply_pause_after_failures FROM locations l WHERE l.id = $1 FOR UPDATE",
         pqxx::params{location_id});
     if (rows.empty()) return not_found("location");
     const bool old_enabled = rows[0][0].as<bool>();
@@ -183,9 +183,9 @@ Result<model::AutoPosting> update_auto_posting(pqxx::transaction_base& tx, audit
         return invalid(std::format("\"{}\" is not a time zone this server knows. Use a name like \"America/New_York\".", *zone));
     }
     if (enabled) {
-        // What must hold while auto-posting is on, checked on every change.
-        if (!synced) return invalid("Auto-posting needs a location that is switched on and still accessible.");
-        if (!five && !four) return invalid("Choose which star ratings may be answered automatically before switching auto-posting on.");
+        // What must hold while auto reply is on, checked on every change.
+        if (!synced) return invalid("Auto reply needs a location that is switched on and still accessible.");
+        if (!five && !four) return invalid("Choose which star ratings may be answered automatically before switching auto reply on.");
         const auto settings = stored_reply_settings(tx, location_id);
         if (!settings) return invalid("The location's reply policy can't be read.");
         const auto timing = domain::posting_timing(settings->policy);
@@ -198,8 +198,8 @@ Result<model::AutoPosting> update_auto_posting(pqxx::transaction_base& tx, audit
         audit.nothing_changed();
         return *get_auto_posting(tx, location_id, audit.now());
     }
-    tx.exec("UPDATE locations SET auto_post_enabled = $2, auto_post_five_star = $3, auto_post_four_star = $4, auto_post_daily_cap = $5, "
-            "time_zone = $6, updated_at = $7::timestamptz, auto_post_pause_after_failures = $8 WHERE id = $1",
+    tx.exec("UPDATE locations SET auto_reply_enabled = $2, auto_reply_five_star = $3, auto_reply_four_star = $4, auto_reply_daily_cap = $5, "
+            "time_zone = $6, updated_at = $7::timestamptz, auto_reply_pause_after_failures = $8 WHERE id = $1",
             pqxx::params{location_id, enabled, five, four, cap, zone, to_timestamptz(audit.now()), failures})
         .no_rows();
     const auto object_id = std::to_string(location_id);
@@ -211,10 +211,10 @@ Result<model::AutoPosting> update_auto_posting(pqxx::transaction_base& tx, audit
                                    {"time_zone", time_zone ? boost::json::value(*time_zone) : boost::json::value(nullptr)},
                                    {"pause_after_failures", pause_after}};
     };
-    // Its own action name when the switch itself moves: who switched auto-posting on must be easy to find.
-    audit.record({.action = enabled == old_enabled ? "location.auto_post_settings"
-                            : enabled              ? "location.auto_post_enabled"
-                                                   : "location.auto_post_disabled",
+    // Its own action name when the switch itself moves: who switched auto reply on must be easy to find.
+    audit.record({.action = enabled == old_enabled ? "location.auto_reply_settings"
+                            : enabled              ? "location.auto_reply_enabled"
+                                                   : "location.auto_reply_disabled",
                   .object_type = "location",
                   .object_id = object_id,
                   .before = json(old_enabled, old_five, old_four, old_cap, old_zone, old_failures),
@@ -222,65 +222,65 @@ Result<model::AutoPosting> update_auto_posting(pqxx::transaction_base& tx, audit
     return *get_auto_posting(tx, location_id, audit.now());
 }
 
-Result<model::AutoPosting> resume_auto_posting(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id) {
+Result<model::AutoPosting> resume_auto_reply(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id) {
     if (!resume(tx, audit, location_id)) return not_found("location");
     return *get_auto_posting(tx, location_id, audit.now());
 }
 
-model::AutoPostingOverview resume_all_auto_posting(pqxx::transaction_base& tx, audit::Writer& audit) {
+model::AutoPostingOverview resume_all_auto_reply(pqxx::transaction_base& tx, audit::Writer& audit) {
     resume(tx, audit, std::nullopt);
-    return auto_posting_overview(tx, audit.now());
+    return auto_reply_overview(tx, audit.now());
 }
 
 // ---- the engine pauses itself -----------------------------------------------------
 
-bool pause_auto_posting(pqxx::transaction_base& tx, std::optional<std::int64_t> location_id, std::string_view reason,
+bool pause_auto_reply(pqxx::transaction_base& tx, std::optional<std::int64_t> location_id, std::string_view reason,
                         const std::string& detail, core::TimePoint now) {
     const PauseScope scope{location_id};
     const auto now_text = to_timestamptz(now);
-    const auto rows = tx.exec(std::format("UPDATE {} SET auto_post_paused_at = $2::timestamptz, auto_post_pause_reason = $3, "
-                                          "auto_post_pause_detail = $4, updated_at = $2::timestamptz "
-                                          "WHERE {} AND auto_post_paused_at IS NULL RETURNING {}",
+    const auto rows = tx.exec(std::format("UPDATE {} SET auto_reply_paused_at = $2::timestamptz, auto_reply_pause_reason = $3, "
+                                          "auto_reply_pause_detail = $4, updated_at = $2::timestamptz "
+                                          "WHERE {} AND auto_reply_paused_at IS NULL RETURNING {}",
                                           scope.table(), scope.row(), location_id ? "title" : "1"),
                               pqxx::params{location_id, now_text, std::string(reason), detail});
     if (rows.empty()) return false;
     audit::record(tx, auto_reply(),
-                  scope.entry("location.auto_post_paused", "auto_posting.paused", {.after = {{"reason", std::string(reason)}, {"detail", detail}}}),
+                  scope.entry("location.auto_reply_paused", "auto_reply.paused", {.after = {{"reason", std::string(reason)}, {"detail", detail}}}),
                   now);
     if (location_id) {
         const auto title = rows[0][0].as<std::string>();
         emit(tx,
              {.type = std::string(kEventSystemProblem),
-              .key = std::format("auto-post-pause:location:{}:{}", *location_id, now_text),
+              .key = std::format("auto-reply-pause:location:{}:{}", *location_id, now_text),
               .location_id = location_id,
               .review_id = std::nullopt,
-              .subject = std::format("Auto-posting paused: {}", title),
-              .body = std::format("Auto-posting at {} was paused because {}.\n\n{}\n\nNothing is posted there without a person until "
+              .subject = std::format("Auto reply paused: {}", title),
+              .body = std::format("Auto reply at {} was paused because {}.\n\n{}\n\nNothing is posted there without a person until "
                                   "someone resumes it in the dashboard. Replies can still be approved by hand.",
                                   title, pause_words(reason), detail),
-              .link_path = "/#/auto-posting"},
+              .link_path = "/#/auto-reply"},
              now);
     } else {
         emit(tx,
              {.type = std::string(kEventSystemProblem),
-              .key = std::format("auto-post-pause:all:{}", now_text),
+              .key = std::format("auto-reply-pause:all:{}", now_text),
               .location_id = std::nullopt,
               .review_id = std::nullopt,
-              .subject = "Auto-posting paused for every location",
-              .body = std::format("Auto-posting was paused for every location because {}.\n\n{}\n\nNothing is posted without a person "
+              .subject = "Auto reply paused for every location",
+              .body = std::format("Auto reply was paused for every location because {}.\n\n{}\n\nNothing is posted without a person "
                                   "until someone resumes it in the dashboard. Replies can still be approved by hand.",
                                   pause_words(reason), detail),
-              .link_path = "/#/auto-posting"},
+              .link_path = "/#/auto-reply"},
              now);
     }
     return true;
 }
 
 bool pause_if_checks_keep_failing(pqxx::transaction_base& tx, std::int64_t location_id, core::TimePoint now) {
-    // Only where auto-posting is on: elsewhere a failing check already means
+    // Only where auto reply is on: elsewhere a failing check already means
     // the approval queue and there is nothing to pause.
-    const auto limits = tx.exec("SELECT auto_post_pause_after_failures FROM locations WHERE id = $1 AND auto_post_enabled "
-                                "AND auto_post_paused_at IS NULL",
+    const auto limits = tx.exec("SELECT auto_reply_pause_after_failures FROM locations WHERE id = $1 AND auto_reply_enabled "
+                                "AND auto_reply_paused_at IS NULL",
                                 pqxx::params{location_id});
     if (limits.empty()) return false;
     const auto limit = limits[0][0].as<int>();
@@ -290,21 +290,21 @@ bool pause_if_checks_keep_failing(pqxx::transaction_base& tx, std::int64_t locat
           FROM (SELECT EXISTS (SELECT 1 FROM jsonb_array_elements(d.checks) k WHERE NOT (k->>'passed')::boolean) AS failed
                   FROM reply_drafts d JOIN reviews r ON r.id = d.review_id JOIN locations l ON l.id = r.location_id
                  WHERE l.id = $1 AND d.created_by IS NULL
-                   AND (l.auto_post_resumed_at IS NULL OR d.created_at > l.auto_post_resumed_at)
+                   AND (l.auto_reply_resumed_at IS NULL OR d.created_at > l.auto_reply_resumed_at)
                  ORDER BY d.id DESC LIMIT $2) x)sql",
                              pqxx::params{location_id, limit})
                          .one_row();
     if (row[0].as<int>() < limit || row[1].as<int>() < limit) return false;
-    return pause_auto_posting(tx, location_id, kPauseChecksFailing,
+    return pause_auto_reply(tx, location_id, kPauseChecksFailing,
                               std::format("The last {} written for this location each failed a reply check. Look at them in "
                                           "the approval queue, and at the voice settings and the model, before resuming.",
                                           limit == 1 ? std::string("reply") : std::format("{} replies in a row", limit)),
                               now);
 }
 
-// ---- what was auto-posted -----------------------------------------------------------
+// ---- what was posted by auto reply --------------------------------------------------
 
-model::AutoPostList list_auto_posts(pqxx::transaction_base& tx, const db::Page& page) {
+model::AutoPostList list_auto_replies(pqxx::transaction_base& tx, const db::Page& page) {
     return db::page<model::AutoPost>(
         tx,
         std::format("SELECT p.id, p.review_id, r.location_id, l.title AS location_title, r.rating, r.comment AS review_text, "

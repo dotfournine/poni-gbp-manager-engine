@@ -238,7 +238,7 @@ TEST_F(Notifications, ANewDraftTellsTheLocationsRecipientsThatApprovalIsNeeded) 
     EXPECT_THAT(message.subject, HasSubstr("Approval needed: LU DREAM SPA - Chelsea"));
     EXPECT_THAT(message.body, HasSubstr("Lovely head spa with Eva"));
     EXPECT_THAT(message.body, HasSubstr("Thank you so much for your kind words"));
-    EXPECT_THAT(message.body, HasSubstr("What the policy would do: auto_post"));
+    EXPECT_THAT(message.body, HasSubstr("What the policy would do: auto_reply"));
     EXPECT_THAT(message.body, HasSubstr("/#/drafts/1/show"));
 
     channel_.sent.clear();

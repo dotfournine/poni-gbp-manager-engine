@@ -201,7 +201,7 @@ struct ReplyDraft {
     // "draft", "scheduled", "approved", "posting", "posted", "published", "rejected", "cancelled" or "superseded"
     std::string status;
     std::optional<std::string> status_reason;
-    std::string route;  // "auto_post", "approval_queue" or "escalate"
+    std::string route;  // "auto_reply", "approval_queue" or "escalate"
     std::vector<std::string> route_reasons;
     std::string mode;
     std::string text;
@@ -223,7 +223,7 @@ struct ReplyDraft {
     std::optional<std::string> edited_at;
     std::optional<std::string> decided_by;
     std::optional<std::string> decided_at;
-    // The newest attempt to post it, if it was approved or auto-posted.
+    // The newest attempt to post it, if it was approved or posted by auto reply.
     std::optional<ReplyPost> post;
     // A draft the policy scheduled for posting without a person (D-069):
     // when it goes out, and the version of the rules that decided it.
@@ -776,7 +776,7 @@ struct SystemSettings {
 };
 BOOST_DESCRIBE_STRUCT(SystemSettings, (), (posting_enabled, email_sending_enabled, updated_at))
 
-// Auto-posting at one location (D-070 to D-072): the switches a person
+// Auto reply at one location (D-070 to D-072): the switches a person
 // flips, the timing its reply policy asks for, and the pause the engine
 // may have put on it.
 struct AutoPosting {
@@ -795,9 +795,9 @@ struct AutoPosting {
     std::string window_start;
     std::string window_end;
     // Why the timing can't be used (a window without a time zone, a range
-    // that is upside down). While this is set nothing is auto-posted here.
+    // that is upside down). While this is set nothing is posted by auto reply here.
     std::optional<std::string> timing_problem;
-    // The location's posting switch (D-063), which auto-posting needs too.
+    // The location's posting switch (D-063), which auto reply needs too.
     bool posting_enabled = false;
     bool paused = false;
     std::optional<std::string> paused_at;
@@ -806,11 +806,11 @@ struct AutoPosting {
     std::optional<std::string> pause_detail;
     std::int64_t posted_last_24h = 0;
     std::int64_t scheduled = 0;
-    // This many drafts in a row that fail a reply check pause auto-posting here (D-076).
+    // This many drafts in a row that fail a reply check pause auto reply here (D-076).
     std::int64_t pause_after_failures = 0;
     // The go-live test of the location's configuration as it is now (D-074):
     // "passed", "not_tested", "running", "failed", "inconclusive" or
-    // "cancelled". Nothing is auto-posted here unless it is "passed".
+    // "cancelled". Nothing is posted by auto reply here unless it is "passed".
     std::string go_live_state;
 };
 BOOST_DESCRIBE_STRUCT(AutoPosting, (),
@@ -858,7 +858,7 @@ using AutoPostList = Paged<AutoPost>;
 
 // One of the repeats of a case: what the pipeline's decisions made of it.
 struct GoLiveAttempt {
-    // "auto_post", "approval_queue" or "escalate".
+    // "auto_reply", "approval_queue" or "escalate".
     std::string route;
     std::vector<std::string> reasons;
     // As the model wrote it; empty when it wrote none.
@@ -958,9 +958,9 @@ struct GoLiveLocation {
     std::optional<std::string> fingerprint;
     // "not_tested", "running", "passed", "failed", "inconclusive" or "cancelled".
     std::string state;
-    // Why, where the state alone doesn't say ("the policy auto-posts more than the last pass covered").
+    // Why, where the state alone doesn't say ("the policy auto replies more than the last pass covered").
     std::optional<std::string> state_detail;
-    // The pass that lets this location auto-post, if there is one.
+    // The pass that lets this location auto reply, if there is one.
     std::optional<GoLiveRun> pass;
     // The newest run of its fingerprint.
     std::optional<GoLiveRun> latest_run;
