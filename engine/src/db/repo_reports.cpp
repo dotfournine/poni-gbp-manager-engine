@@ -275,7 +275,8 @@ std::optional<ReportMail> store_built_report(pqxx::transaction_base& tx, std::in
     if (rows.empty() || rows[0][0].as<std::string>() != "pending") return std::nullopt;
     // Checked here, so that `done` is written before any email and in the one run that made the report ready:
     // a schedule's send happens at most once, and nothing is checked again between `done` and the send.
-    // To its own schedule's recipients, as that schedule holds them now (D-111).
+    // To its own schedule's recipients, as that schedule holds them now, and only while it is still on and still
+    // sends by itself: a person who switched either off while the report built is obeyed (D-111).
     auto mail = prepare_report_send(tx, report_id, std::nullopt, link_base, SendFor::schedule);
     if (!mail) return std::nullopt;  // pending: a person can send it, and the 409 they would get says why
     tx.exec("UPDATE reports SET auto_send_status = 'done' WHERE id = $1", pqxx::params{report_id}).no_rows();
@@ -302,12 +303,13 @@ std::vector<std::string> sorted_addresses(pqxx::transaction_base& tx, pqxx::zvie
     return out;
 }
 
-// The recipients of the schedule that made the report. The schedule must be of the report's own location as
-// well as the report's: if the two ever diverged, the send finds nobody rather than another location's list.
+// The recipients of the schedule that made the report, read with its switches as they are now: a schedule that is
+// off, or no longer sends by itself, gives nobody. The schedule must be of the report's own location as well as
+// the report's: if the two ever diverged, the send finds nobody rather than another location's list.
 std::vector<std::string> schedule_recipients(pqxx::transaction_base& tx, std::int64_t report_id) {
     return sorted_addresses(tx,
                             "SELECT a.address FROM reports p "
-                            "JOIN report_schedules s ON s.id = p.schedule_id AND s.location_id = p.location_id, "
+                            "JOIN report_schedules s ON s.id = p.schedule_id AND s.location_id = p.location_id AND s.enabled AND s.auto_send, "
                             "unnest(s.recipients) a(address) WHERE p.id = $1",
                             pqxx::params{report_id});
 }
@@ -346,7 +348,7 @@ Result<ReportMail> prepare_report_send(pqxx::transaction_base& tx, std::int64_t 
     auto recipients = by_person ? report_recipients(tx, location_id) : schedule_recipients(tx, report_id);
     if (recipients.empty()) {
         return conflict("no_recipients", by_person ? "This location's report schedules name no recipient. Add one to a schedule first."
-                                                   : "The schedule that made this report names no recipient.");
+                                                   : "The schedule that made this report names no recipient or no longer sends by itself.");
     }
     if (only) {
         std::vector<std::string> wanted;

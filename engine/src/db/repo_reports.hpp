@@ -100,7 +100,8 @@ std::vector<std::string> report_recipients(pqxx::transaction_base& tx, std::int6
 
 // Whose send it is, which decides its recipients (D-111). `person`: the location's report_recipients, or
 // those of them a request names. `schedule`: the recipients of the schedule that made the report, of
-// the report's own location; none, or no schedule any more, and the send is refused.
+// the report's own location, while it is on and sends by itself; none, no schedule any more, or a
+// schedule switched off, and the send is refused.
 enum class SendFor { person, schedule };
 
 // The checks of a send, under the report's row lock, in this order: `only`, when given, names at

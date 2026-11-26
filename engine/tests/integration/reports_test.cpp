@@ -1696,6 +1696,47 @@ TEST_F(Reports, AScheduledReportWhoseScheduleWasDeletedWaitsForAPerson) {
     EXPECT_EQ(json(sent).at("auto_send_status").as_string(), "pending");
 }
 
+// A person who switches a schedule, or its sending by itself, off while its report builds is obeyed: the
+// switches are read again when the report becomes ready (D-111 point 4).
+TEST_F(Reports, AScheduleSwitchedOffWhileItsReportBuildsSendsNothing) {
+    add_review(chelsea_, "a1", 5, "2026-11-09T15:00:00Z", "Lovely");
+    sending_on();
+    connect_mailbox();
+    const auto quiet = schedule(chelsea_, R"("auto_send": true, "recipients": ["owner@spa.example"])");
+    const auto off = schedule(chelsea_, R"("auto_send": true, "time": "10:00", "recipients": ["manager@spa.example"])");
+    const auto nothing_sent = [&](std::int64_t schedule_id) {
+        const auto id = value<std::int64_t>(std::format("SELECT id FROM reports WHERE schedule_id = {}", schedule_id));
+        EXPECT_EQ(status(id), "ready");
+        EXPECT_EQ(report(id).at("auto_send_status").as_string(), "pending");
+        EXPECT_TRUE(channel_.sent.empty());
+        EXPECT_EQ(count("notification_deliveries"), 0);
+        EXPECT_EQ(count("audit_log WHERE action = 'report.send'"), 0);
+        return id;
+    };
+
+    // Its sending by itself switched off, its recipients kept.
+    clock_.advance(2h);
+    ASSERT_EQ(await(reporter_->start_due()), 1);
+    ASSERT_EQ(change_schedule(chelsea_, quiet, R"("auto_send": false)").status, 200u);
+    run_jobs();
+    const auto first = nothing_sent(quiet);
+
+    // The schedule itself switched off, its sending by itself kept.
+    clock_.advance(1h);
+    ASSERT_EQ(await(reporter_->start_due()), 1);
+    ASSERT_EQ(change_schedule(chelsea_, off, R"("enabled": false)").status, 200u);
+    EXPECT_TRUE(listed_schedule(chelsea_, off).at("auto_send").as_bool());
+    run_jobs();
+    nothing_sent(off);
+
+    // A person can still send it, to the union.
+    const auto sent = post(std::format("/api/reports/{}/send", first));
+    ASSERT_EQ(sent.status, 200u) << sent.body;
+    ASSERT_EQ(channel_.sent.size(), 2u);
+    EXPECT_EQ(channel_.sent[0].recipient, "manager@spa.example");
+    EXPECT_EQ(channel_.sent[1].recipient, "owner@spa.example");
+}
+
 // A schedule sends only to addresses of its report's own location: if a schedule and its report ever named
 // different locations, the schedule's send would find nobody (written in this test's throwaway database).
 TEST_F(Reports, AScheduleThatNamesAnotherLocationThanItsReportSendsNothing) {

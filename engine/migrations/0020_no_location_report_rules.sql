@@ -3,10 +3,11 @@
 -- left only to the delivery log, as the type of a report's delivery rows,
 -- and notification_deliveries keeps it.
 --
--- After 0018 no such rule can exist: a `location_report` rule needs a
+-- When 0018 ran no such rule could exist: a `location_report` rule needs a
 -- location (notification_rules_location_report_check), and 0018 refused any
--- database with one. The DELETE stays because it costs nothing and makes the
--- narrowed CHECK safe whatever is there.
+-- database with one. One created since (the API took such rules until this
+-- migration) is deleted here, and the DELETE also makes the narrowed CHECK
+-- safe whatever is there.
 
 DELETE FROM notification_rules WHERE event_type = 'location_report';
 
