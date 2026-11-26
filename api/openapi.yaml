@@ -5450,14 +5450,16 @@ components:
           type: [string, "null"]
           enum: [zh-CN, zh-HK, zh-TW, null]
           description: |
-            The Chinese a reply in Chinese is written in; null, not set: the
-            reply follows the script of the review. Read by the reply writer.
+            The Chinese a reply in Chinese is written in: its script and
+            regional phrasing. Null, not set: the reply matches the script and
+            phrasing of the review. Read by the reply writer.
         english_variant:
           type: [string, "null"]
           enum: [en-US, en-CA, null]
           description: |
-            The spelling of a reply in English; null, not set (US spelling).
-            Read by the reply writer.
+            The spelling of a reply in English. Null, not set: the reply
+            matches the spelling and phrasing of the review. Read by the reply
+            writer.
         audience:
           type: string
           maxLength: 500
@@ -5522,14 +5524,16 @@ components:
           type: [string, "null"]
           enum: [zh-CN, zh-HK, zh-TW, null]
           description: |
-            The Chinese a reply in Chinese is written in; null, not set: the
-            reply follows the script of the review. Read by the reply writer.
+            The Chinese a reply in Chinese is written in: its script and
+            regional phrasing. Null, not set: the reply matches the script and
+            phrasing of the review. Read by the reply writer.
         english_variant:
           type: [string, "null"]
           enum: [en-US, en-CA, null]
           description: |
-            The spelling of a reply in English; null, not set (US spelling).
-            Read by the reply writer.
+            The spelling of a reply in English. Null, not set: the reply
+            matches the spelling and phrasing of the review. Read by the reply
+            writer.
         audience:
           type: string
           maxLength: 500
@@ -5578,13 +5582,16 @@ components:
           pattern: "^[^\\r\\n]*$"
           description: |
             The line a reply ends with, one line; empty, none. Read by the
-            reply writer.
+            reply writer: with `sign_off_name` also set, the signature is the
+            preferred sign-off, and the name may take the place of a generic
+            reference to the writer in it ("the owner"). Both may be set.
         sign_off_name:
           type: string
           maxLength: 200
           description: |
-            Who signs the replies; empty, nobody. Stored for the sign-off
-            wording to come; no prompt reads it yet.
+            Who signs the replies; empty, nobody. Read by the reply writer:
+            without a `signature`, a reply ends with one short line that uses
+            only this name.
         length:
           type: object
           description: Reply length by reply language (`en`, `zh`, `es`), each needed. Read by the reply writer and its checks.
@@ -5675,13 +5682,16 @@ components:
           pattern: "^[^\\r\\n]*$"
           description: |
             The line a reply ends with, one line; empty, none. Read by the
-            reply writer.
+            reply writer: with `sign_off_name` also set, the signature is the
+            preferred sign-off, and the name may take the place of a generic
+            reference to the writer in it ("the owner"). Both may be set.
         sign_off_name:
           type: string
           maxLength: 200
           description: |
-            Who signs the replies; empty, nobody. Stored for the sign-off
-            wording to come; no prompt reads it yet.
+            Who signs the replies; empty, nobody. Read by the reply writer:
+            without a `signature`, a reply ends with one short line that uses
+            only this name.
         length:
           type: object
           description: Reply length by reply language (`en`, `zh`, `es`), each needed. Read by the reply writer and its checks.
