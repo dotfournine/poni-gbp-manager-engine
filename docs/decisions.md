@@ -56,6 +56,10 @@ Pull and acknowledge only; no gRPC, Protobuf or Abseil for two HTTP calls.
 (1) Every minute one `batchGetReviews` per account for the locations whose poll is due. (2) A full reconciliation per location on linking, then hourly. (3) Pub/Sub notifications. A review is marked removed only when Google answers `NOT_FOUND` for it.
 Why: notifications lag about 15 minutes, a reply added elsewhere does not move `updateTime`, and Google's lists are not reliably complete.
 
+### D-112 · How often reviews are polled is an engine setting
+One interval for every location, `PONI_REVIEW_POLL_INTERVAL_S` (default 120 seconds, at least 60): a location is polled again that long after its last poll, or after its last failed poll. Due polls are picked up at the poll tick (`PONI_REVIEW_POLL_TICK_S`), which stays a setting of its own, so that a newly switched-on location is polled at the next tick and the locations do not all fall due at once. `locations.review_poll_interval_s` and its member of `Location` and of the location's `PATCH` are removed; `locations.next_review_poll_at` stays, as the engine's own state.
+Why: how often reviews are read is the engine's scheduling, not an attribute of a location that staff edit.
+
 ### D-038 · Superseded by D-102
 
 ### D-103 · An audit entry names its location

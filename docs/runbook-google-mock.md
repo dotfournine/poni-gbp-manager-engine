@@ -31,6 +31,7 @@ PONI_GBP_OAUTH_CLIENT_SECRET=mock-secret
 PONI_SIGNIN_DOMAINS=example.com
 PONI_LOCATION_DISCOVERY_INTERVAL_S=60
 PONI_REVIEW_POLL_TICK_S=10
+PONI_REVIEW_POLL_INTERVAL_S=60
 PONI_REVIEW_FULL_SYNC_INTERVAL_S=300
 PONI_ANALYSIS_TICK_S=10
 PONI_STAFF_CHECK_INTERVAL_S=60
@@ -39,7 +40,7 @@ PONI_PUBLIC_FOLDER_URL=http://127.0.0.1:8088
 EOF
 ```
 
-`PONI_SIGNIN_DOMAINS=example.com` is for the Workspace directory's connection, which is refused for an address outside the sign-in domains, and for making the directory's people users (step 8); the mock's administrator is `mock-owner@example.com`, and development sign-in does not read the setting. `PONI_STAFF_CHECK_INTERVAL_S=60` runs the staff check every minute instead of every five (60 is the shortest it takes). A `mock.env` made before needs those two lines added.
+`PONI_SIGNIN_DOMAINS=example.com` is for the Workspace directory's connection, which is refused for an address outside the sign-in domains, and for making the directory's people users (step 8); the mock's administrator is `mock-owner@example.com`, and development sign-in does not read the setting. `PONI_STAFF_CHECK_INTERVAL_S=60` runs the staff check every minute instead of every five (60 is the shortest it takes), and `PONI_REVIEW_POLL_INTERVAL_S=60` polls each location's reviews every minute instead of every two (D-112; 60 is the shortest it takes too). A `mock.env` made before needs those three lines added.
 
 The public folder is served on 127.0.0.1:8088 so that the dashboard can show a report's page (D-105). Start the server once (from the repository's root):
 
@@ -86,7 +87,7 @@ The test portal is http://127.0.0.1:8090/, the dashboard http://localhost:5174. 
 
 1. **Connect the accounts.** Dashboard, development sign-in, **System status**: **Connect** on the GBP token card. The mock's consent page approves at once and sends the browser back; the card says connected. Do the same on the Notification email card. The mock signs both in as `mock-owner@example.com`, which each card shows as the connected account. Then **Connect** on the Workspace directory card: the mock signs in as `mock-owner@example.com` again, a delegated administrator, whom the engine finds in the made-up directory's list before it stores the token; the portal's "Workspace directory" section lists the made-up staff. Until the dashboard has that card, start the connection by hand in the same browser: `POST /api/connections/workspace/start`, signed in and with the CSRF token (from the browser's developer tools, for example), and open the `authorization_url` it answers.
 2. **Switch the locations on.** Within a minute **Locations** lists the mock's businesses, all switched off: a location does nothing until a person switches it on (D-102). Give each its industry (`food_beverage` for Golden Harbor Buffet, `wellness` for Willow Moon Head Spa) and switch it on; no client is needed (a client only groups locations, if you want one). Switching on starts a full sync, which brings in the made-up reviews, two of them with a reply the owner wrote, which the engine never posts over.
-3. **Post a review** in the portal: location, a made-up name, stars, text (or none). The engine finds it at the location's next poll (its poll interval, one minute at the shortest; set it on the location) and analyzes it and writes a draft (**Reviews**, **Approval queue**).
+3. **Post a review** in the portal: location, a made-up name, stars, text (or none). The engine finds it at the location's next poll (`PONI_REVIEW_POLL_INTERVAL_S=60` in `mock.env`: every minute) and analyzes it and writes a draft (**Reviews**, **Approval queue**).
 4. **Approve and post.** Switch **Post replies and posts to Google** on under **Posting and sending** (off after installation, also in a mock database), then approve the draft in the **Approval queue**. The reply shows in the portal under the review, marked as posted by the engine, and the engine confirms it on its next read. To see the engine wait for a reply Google has not shown yet, set the portal's delay to, say, 120 seconds first.
 5. **Edit and remove.** In the portal, **Edit** a review (new text or stars): the engine sees an edited review at the next poll, and an edited review always goes to the approval queue. **Delete** one: at the next full sync (5 minutes with the settings above) the engine asks for it, the mock answers `NOT_FOUND`, and the review is marked removed.
 6. **Email.** Switch **Send notification emails** on and add a notification rule; what the engine sends lands in the portal's **Outbox**, not in anyone's mailbox.
