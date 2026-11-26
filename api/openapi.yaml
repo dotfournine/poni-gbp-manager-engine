@@ -2041,6 +2041,157 @@ paths:
         "428":
           $ref: "#/components/responses/PreconditionRequired"
 
+  /api/locations/{id}/report-settings/schedules:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: listReportSchedules
+      summary: List a location's report schedules
+      description: |
+        Every schedule of the location (D-111), oldest first. A location may
+        have any number, each with its own recipients and sections.
+      tags: [reports]
+      responses:
+        "200":
+          description: The location's schedules.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportScheduleList"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: createReportSchedule
+      summary: Add a report schedule to a location
+      description: |
+        A location may have any number (D-111). The schedule's time is local
+        to the location, in its `time_zone` (D-109): a schedule has no zone
+        of its own. Its first run is the first one after it was made; it
+        never runs for a time that has passed. Refused (400) when the
+        location is switched off, and when the schedule is on and names no
+        recipient.
+      tags: [reports]
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReportScheduleInput"
+      responses:
+        "201":
+          description: The new schedule.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportSchedule"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/locations/{id}/report-settings/schedules/{sid}:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+      - $ref: "#/components/parameters/Sid"
+    get:
+      operationId: getReportSchedule
+      summary: Get one of a location's report schedules
+      description: |
+        The schedule and its `ETag`, which covers the members of
+        `ReportScheduleInput`. A schedule of another location is a 404.
+      tags: [reports]
+      responses:
+        "200":
+          description: The schedule, and its `ETag`.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportSchedule"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      operationId: replaceReportSchedule
+      summary: Replace a report schedule
+      description: |
+        Every member is sent, and the schedule is replaced whole, with the
+        `ETag` of what was read in `If-Match` (D-108). A changed schedule
+        does not run for a time that passed before the change. Refused (400)
+        when the schedule is on and names no recipient.
+      tags: [reports]
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReportScheduleInput"
+      responses:
+        "200":
+          description: |
+            The schedule after the change, and its new `ETag`. A save that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportSchedule"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+    delete:
+      operationId: deleteReportSchedule
+      summary: Remove a report schedule
+      description: |
+        Removes the schedule, with the `ETag` of what was read in `If-Match`
+        (D-108). The reports it built stay, without a `schedule_id`.
+      tags: [reports]
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
+      responses:
+        "204":
+          description: The schedule is gone.
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+
   /api/reports/{id}:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -2162,99 +2313,6 @@ paths:
           $ref: "#/components/responses/ReportConflict"
         "502":
           $ref: "#/components/responses/StorageFailed"
-
-  /api/report-schedules:
-    get:
-      operationId: listReportSchedules
-      summary: List report schedules
-      tags: [reports]
-      responses:
-        "200":
-          description: Every schedule, by location title.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ReportScheduleList"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-    post:
-      operationId: createReportSchedule
-      summary: Add a report schedule
-      description: |
-        A location may have any number. A schedule's first run is the first
-        one after it was made; it never runs for a time that has passed.
-      tags: [reports]
-      parameters:
-        - $ref: "#/components/parameters/CsrfToken"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ReportScheduleCreate"
-      responses:
-        "201":
-          description: The new schedule.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ReportSchedule"
-        "400":
-          $ref: "#/components/responses/InvalidRequest"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-
-  /api/report-schedules/{id}:
-    parameters:
-      - $ref: "#/components/parameters/Id"
-    patch:
-      operationId: updateReportSchedule
-      summary: Change a report schedule
-      description: Changes the fields that are given. A changed schedule does not run for a time that passed before the change.
-      tags: [reports]
-      parameters:
-        - $ref: "#/components/parameters/CsrfToken"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ReportScheduleUpdate"
-      responses:
-        "200":
-          description: The schedule after the change.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ReportSchedule"
-        "400":
-          $ref: "#/components/responses/InvalidRequest"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-    delete:
-      operationId: deleteReportSchedule
-      summary: Remove a report schedule
-      description: Removes the schedule. The reports it built stay.
-      tags: [reports]
-      parameters:
-        - $ref: "#/components/parameters/CsrfToken"
-      responses:
-        "204":
-          description: The schedule is gone.
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
 
   /api/local-posts:
     get:
@@ -3770,6 +3828,15 @@ components:
         type: integer
         format: int64
         minimum: 1
+    Sid:
+      name: sid
+      in: path
+      required: true
+      description: The engine's own id of the report schedule, one of the location's.
+      schema:
+        type: integer
+        format: int64
+        minimum: 1
     Page:
       name: page
       in: query
@@ -4431,9 +4498,9 @@ components:
             it, and `LocationUpdate` does not take it. Every location has
             one; a location Google lists that is not on Google Maps yet is
             not added until it is. The posting window of the reply settings
-            uses it, and it is the only one a location has. A report of the
-            location takes this zone unless it names another
-            (`ReportCreate.time_zone`). It does not change how
+            uses it, and it is the only one a location has. The location's
+            reports and report schedules follow it: their days and times are
+            in this zone (D-111). It does not change how
             date-times are written: they stay UTC, `scheduled_time` and
             `recurrence.until` of a local post included.
     LocationUpdate:
@@ -7569,7 +7636,7 @@ components:
           description: The last day of the period; it is part of it.
         time_zone:
           type: string
-          description: An IANA time zone name.
+          description: The location's time zone when the report was created (D-109), an IANA name; the period's days are its days.
         format:
           type: string
           enum: [html, pdf]
@@ -7715,6 +7782,10 @@ components:
             read from them.
     ReportCreate:
       type: object
+      description: |
+        The period of a report a person asks for. Its days are the
+        location's, in its `time_zone` (D-109): a report has no zone of its
+        own to ask for.
       additionalProperties: false
       required: [period_start, period_end]
       properties:
@@ -7724,11 +7795,7 @@ components:
         period_end:
           type: string
           format: date
-          description: Must be before today in the report's time zone, and at most 400 days after `period_start`.
-        time_zone:
-          type: string
-          maxLength: 64
-          description: An IANA name. Without one, the location's time zone.
+          description: Must be before today in the location's time zone, and at most 400 days after `period_start`.
     ReportSendRequest:
       type: object
       additionalProperties: false
@@ -7750,6 +7817,11 @@ components:
         run day. `monthly`: the calendar month before.
     ReportSchedule:
       type: object
+      description: |
+        One of a location's report schedules (D-111). Its time is local to
+        the location, in the location's `time_zone` (D-109): a schedule has
+        no zone of its own, and the periods of its reports are the location's
+        days.
       additionalProperties: false
       required:
         - id
@@ -7759,9 +7831,10 @@ components:
         - weekday
         - month_day
         - time
-        - time_zone
-        - auto_send
         - enabled
+        - auto_send
+        - recipients
+        - sections
         - last_run_on
         - created_at
         - updated_at
@@ -7790,30 +7863,52 @@ components:
         time:
           type: string
           pattern: "^[0-2][0-9]:[0-5][0-9]$"
-          description: The local time of the run, HH:MM.
-        time_zone:
-          type: string
+          description: The local time of the run, HH:MM, in the location's `time_zone`.
+        enabled:
+          type: boolean
         auto_send:
           type: boolean
           description: |
             Off (the default): a report this schedule builds is `ready` and
             nothing is sent (`auto_send_status` `off`). On: it is sent once,
-            to the location's recipients, when it is built, if the checks of
-            a send pass then (`auto_send_status` `done`); otherwise it stays
-            `pending` for a person to send. No reason is stored: a person's
-            send says why it is refused.
-        enabled:
-          type: boolean
+            when it is built, if the checks of a send pass then
+            (`auto_send_status` `done`); otherwise it stays `pending` for a
+            person to send. No reason is stored: a person's send says why it
+            is refused.
+        recipients:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            format: email
+          description: |
+            Who this schedule's reports are for: trimmed, lower-cased, each
+            once, in the order given. May be empty only while `enabled` is
+            false.
+        sections:
+          type: [array, "null"]
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            enum: [summary, at_a_glance, reviews, topics, employee_recognition, highlights, visibility]
+          description: |
+            Null: the location's report settings decide. A list: this
+            schedule's reports have these sections.
         last_run_on:
           type: [string, "null"]
           format: date
-          description: The local day of the last run a report was built for.
+          description: |
+            The location's local day of the last run a report was built for.
+            The engine writes it; it is not in the `ETag`, so a run never
+            makes a person's form stale.
         created_at:
           type: string
           format: date-time
         updated_at:
           type: string
           format: date-time
+          description: When a person last changed the schedule.
     ReportScheduleList:
       type: object
       additionalProperties: false
@@ -7826,66 +7921,58 @@ components:
         total:
           type: integer
           format: int64
-    ReportScheduleCreate:
-      type: object
-      additionalProperties: false
-      required: [location_id, frequency, time, time_zone]
-      properties:
-        location_id:
-          type: integer
-          format: int64
-          description: An enabled location.
-        frequency:
-          $ref: "#/components/schemas/ReportFrequency"
-        weekday:
-          type: [integer, "null"]
-          minimum: 1
-          maximum: 7
-          description: Needed for `weekly`; null or left out otherwise.
-        month_day:
-          type: [integer, "null"]
-          minimum: 1
-          maximum: 28
-          description: Needed for `monthly`; null or left out otherwise.
-        time:
-          type: string
-          pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"
-        time_zone:
-          type: string
-          maxLength: 64
-        auto_send:
-          type: boolean
-          default: false
-        enabled:
-          type: boolean
-          default: true
-    ReportScheduleUpdate:
+    ReportScheduleInput:
       type: object
       description: |
-        `weekday` and `month_day` can't be cleared by the caller: the
-        engine drops the one the schedule's frequency does not use.
+        A whole report schedule, the body of its create and of its `PUT`
+        (D-111): every member is sent, and `weekday`, `month_day` and
+        `sections` may be null. The `ETag` of a schedule covers these
+        members.
       additionalProperties: false
+      required: [frequency, weekday, month_day, time, enabled, auto_send, recipients, sections]
       properties:
         frequency:
           $ref: "#/components/schemas/ReportFrequency"
         weekday:
-          type: integer
+          type: [integer, "null"]
           minimum: 1
           maximum: 7
+          description: Needed for `weekly`; for another frequency it is stored as null whatever is sent.
         month_day:
-          type: integer
+          type: [integer, "null"]
           minimum: 1
           maximum: 28
+          description: Needed for `monthly`; for another frequency it is stored as null whatever is sent.
         time:
           type: string
           pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$"
-        time_zone:
-          type: string
-          maxLength: 64
-        auto_send:
-          type: boolean
+          description: The local time of the run, HH:MM, in the location's `time_zone`.
         enabled:
           type: boolean
+          description: An enabled schedule needs at least one recipient.
+        auto_send:
+          type: boolean
+          description: Whether a report it builds is sent by itself (`ReportSchedule.auto_send`).
+        recipients:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+            format: email
+          description: |
+            Who this schedule's reports are for, at most 20 email addresses.
+            They are trimmed and lower-cased, a repeat is dropped, and the
+            order is kept. May be empty only while `enabled` is false.
+        sections:
+          type: [array, "null"]
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            enum: [summary, at_a_glance, reviews, topics, employee_recognition, highlights, visibility]
+          description: |
+            Null: the location's report settings decide. A list: this
+            schedule's reports have these sections, each once, at least one.
 
     LocalPostStatus:
       type: string

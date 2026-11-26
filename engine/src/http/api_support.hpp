@@ -176,9 +176,9 @@ Response respond(const std::optional<T>& found, std::string_view what, unsigned 
     return ok(*found, status);
 }
 
-// The "{id}" path parameter as a positive number.
-inline std::optional<std::int64_t> path_id(const Request& request) {
-    const auto it = request.params.find("id");
+// A path parameter, "{id}" unless `name` says another ("{sid}"), as a positive number.
+inline std::optional<std::int64_t> path_id(const Request& request, std::string_view name = "id") {
+    const auto it = request.params.find(name);
     if (it == request.params.end()) return std::nullopt;
     std::int64_t id = 0;
     const auto& text = it->second;

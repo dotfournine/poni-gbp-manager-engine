@@ -1,6 +1,6 @@
 // The reports part of the dashboard's API (FR-8, D-085, D-102, D-104, D-111):
 // a location's report settings, the list of reports, generating a location's
-// report by hand, reading one, sending one by email, discarding one, and the schedules. Paths, parameters and bodies are defined in
+// report by hand, reading one, sending one by email, discarding one, and the location's report schedules. Paths, parameters and bodies are defined in
 // api/openapi.yaml; change that file first.
 //
 // Every route here needs a signed-in person. The engine serves no report's
@@ -31,12 +31,12 @@ using namespace api_support;
 
 namespace {
 
+// The period's days are the location's, in its time zone (D-109): a report has no zone of its own to ask for.
 struct ReportCreateBody {
     std::string period_start;
     std::string period_end;
-    std::optional<std::string> time_zone;
 };
-BOOST_DESCRIBE_STRUCT(ReportCreateBody, (), (period_start, period_end, time_zone))
+BOOST_DESCRIBE_STRUCT(ReportCreateBody, (), (period_start, period_end))
 
 struct ReportSendBody {
     std::optional<std::vector<std::string>> recipients;  // nothing: every recipient
@@ -92,9 +92,7 @@ void add_report_routes(Router& router, const Api& api, jobs::Reporter& reporter)
                    const auto start = domain::parse_report_day(body->period_start);
                    const auto end = domain::parse_report_day(body->period_end);
                    if (!start || !end) co_return invalid("\"period_start\" and \"period_end\" must be days, YYYY-MM-DD.");
-                   repo::NewReport report{.location_id = *id,
-                                          .period = {*start, *end},
-                                          .time_zone = body->time_zone.value_or("")};
+                   repo::NewReport report{.location_id = *id, .period = {*start, *end}};
                    co_return respond(co_await api.change(request, [report, link_base](pqxx::work& tx, audit::Writer& audit) {
                        return repo::create_report(tx, audit, report, link_base);
                    }), 201);
@@ -126,41 +124,67 @@ void add_report_routes(Router& router, const Api& api, jobs::Reporter& reporter)
                    co_return respond(discarded);
                });
 
-    // ---- schedules ---------------------------------------------------------------------
+    // ---- a location's schedules (D-111) ------------------------------------------------
 
-    router.add(verb::get, "/api/report-schedules", {Access::user, "report_schedules.list"},
-               [api](const Request&) -> asio::awaitable<Response> {
-                   co_return ok(co_await api.query([](pqxx::work& tx) { return repo::list_schedules(tx); }));
+    const auto schedule_etag = [](const model::ReportSchedule& schedule) { return core::etag(repo::editable(schedule)); };
+
+    router.add(verb::get, "/api/locations/{id}/report-settings/schedules", {Access::user, "report_schedules.list"},
+               [api](const Request& request) -> asio::awaitable<Response> {
+                   const auto id = path_id(request);
+                   if (!id) co_return not_found("location");
+                   co_return respond(co_await api.query([id = *id](pqxx::work& tx) { return repo::list_schedules(tx, id); }));
                });
 
-    router.add(verb::post, "/api/report-schedules", {Access::user, "report_schedules.create"},
+    router.add(verb::post, "/api/locations/{id}/report-settings/schedules", {Access::user, "report_schedules.create"},
                [api](const Request& request) -> asio::awaitable<Response> {
-                   auto schedule = body_as<repo::NewSchedule>(request);
+                   auto schedule = body_as<repo::ScheduleInput>(request);
                    if (!schedule) co_return schedule.error();
-                   co_return respond(co_await api.change(request, [schedule = std::move(*schedule)](pqxx::work& tx, audit::Writer& audit) {
-                       return repo::create_schedule(tx, audit, schedule);
+                   const auto id = path_id(request);
+                   if (!id) co_return not_found("location");
+                   co_return respond(co_await api.change(request, [id = *id, schedule = std::move(*schedule)](pqxx::work& tx, audit::Writer& audit) {
+                       return repo::create_schedule(tx, audit, id, schedule);
                    }), 201);
                });
 
-    router.add(verb::patch, "/api/report-schedules/{id}", {Access::user, "report_schedules.update"},
-               [api](const Request& request) -> asio::awaitable<Response> {
-                   const auto id = path_id(request);
-                   if (!id) co_return not_found("report schedule");
-                   auto patch = body_as<repo::SchedulePatch>(request);
-                   if (!patch) co_return patch.error();
-                   co_return respond(co_await api.change(request, [id = *id, patch = std::move(*patch)](pqxx::work& tx, audit::Writer& audit) {
-                       return repo::update_schedule(tx, audit, id, patch);
-                   }));
+    // Not add_get_by_id: "{id}" is the location here, and the schedule is "{sid}".
+    router.add(verb::get, "/api/locations/{id}/report-settings/schedules/{sid}", {Access::user, "report_schedules.read"},
+               [api, schedule_etag](const Request& request) -> asio::awaitable<Response> {
+                   const auto location = path_id(request);
+                   const auto id = path_id(request, "sid");
+                   if (!location || !id) co_return not_found("report schedule");
+                   co_return respond_tagged(co_await api.query([location = *location, id = *id](pqxx::work& tx) {
+                       return repo::get_schedule(tx, location, id);
+                   }), schedule_etag);
+               });
+
+    router.add(verb::put, "/api/locations/{id}/report-settings/schedules/{sid}", {Access::user, "report_schedules.update"},
+               [api, schedule_etag](const Request& request) -> asio::awaitable<Response> {
+                   auto schedule = body_as<repo::ScheduleInput>(request);
+                   if (!schedule) co_return schedule.error();
+                   const auto location = path_id(request);
+                   const auto id = path_id(request, "sid");
+                   if (!location || !id) co_return not_found("report schedule");
+                   co_return respond_tagged(
+                       co_await api.change_if_match(
+                           request, [location = *location, id = *id](pqxx::work& tx) { return repo::current_schedule_etag(tx, location, id); },
+                           [location = *location, id = *id, schedule = std::move(*schedule)](pqxx::work& tx, audit::Writer& audit) {
+                               return repo::replace_schedule(tx, audit, location, id, schedule);
+                           }),
+                       schedule_etag);
                });
 
     // Our own row: the reports it built stay.
-    router.add(verb::delete_, "/api/report-schedules/{id}", {Access::user, "report_schedules.delete"},
+    router.add(verb::delete_, "/api/locations/{id}/report-settings/schedules/{sid}", {Access::user, "report_schedules.delete"},
                [api](const Request& request) -> asio::awaitable<Response> {
-                   const auto id = path_id(request);
-                   if (!id) co_return not_found("report schedule");
-                   co_return respond(co_await api.change(request, [id = *id](pqxx::work& tx, audit::Writer& audit) {
-                       return repo::delete_schedule(tx, audit, id);
-                   }), Response::no_content());
+                   const auto location = path_id(request);
+                   const auto id = path_id(request, "sid");
+                   if (!location || !id) co_return not_found("report schedule");
+                   co_return respond(co_await api.change_if_match(
+                                         request, [location = *location, id = *id](pqxx::work& tx) { return repo::current_schedule_etag(tx, location, id); },
+                                         [location = *location, id = *id](pqxx::work& tx, audit::Writer& audit) {
+                                             return repo::delete_schedule(tx, audit, location, id);
+                                         }),
+                                     Response::no_content());
                });
 }
 
