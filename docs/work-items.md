@@ -123,7 +123,7 @@ The owner's steps, in this order, once the system is deployed. The engine switch
 
 ### The first real reports
 
-**What.** The owner approves the report layout (two PDFs of the local trial were handed over). The first report built with the models on shows what the summary says and costs (one call per report; it has never been asked for). The first reports are sent once sending is on and each location has recipients.
+**What.** The owner approves the report layout (two PDFs of the local trial were handed over). The first report built with the models on shows what the summary says and costs (one call per report; it has never been asked for). The first reports are sent once sending is on and each location has a schedule with recipients.
 
 **Done when:** a monthly report of each MVP location was sent to its recipients.
 
