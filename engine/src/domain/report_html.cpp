@@ -314,74 +314,80 @@ std::string render_report(const ReportData& data) {
     out += "</head>\n<body>\n<main>\n";
     out += std::format("<header><h1>{}</h1><p class=\"sub\">Google reviews and visibility · {}</p></header>\n",
                        html_escape(data.location_title), html_escape(period));
+    // A section left out is not on the page; the header and the footer are not sections.
+    const auto has = [&](std::string_view key) { return has_section(data.sections, key); };
 
-    if (data.summary) {
+    if (has("summary") && data.summary) {
         out += std::format("<section><p class=\"summary\">{}</p></section>\n", html_escape(*data.summary));
     }
 
     // ---- headline numbers ----
-    out += "<section><h2>At a glance</h2><div class=\"tiles\">\n";
-    tile(out, "New reviews", number(now.new_reviews),
-         change(static_cast<double>(now.new_reviews), static_cast<double>(before.new_reviews), true));
-    tile(out, "Average rating, this period", rating(now.average_rating), rating_change(now.average_rating, before.average_rating));
-    tile(out, "Overall rating", rating(data.running_average), std::format("{} reviews in total", number(data.running_count)));
-    tile(out, "Reviews answered", as_percent(now.response_rate), std::format("{} of {}", number(now.replied), number(now.new_reviews)));
-    tile(out, "Typical time to answer", hours(now.median_response_hours), "median, for the reviews answered");
-    if (data.visibility.available) {
-        const auto views = data.visibility.totals.views();
-        tile(out, "Profile views", number(views),
-             data.visibility.previous
-                 ? change(static_cast<double>(views), static_cast<double>(data.visibility.previous->views()), true)
-                 : std::format("through {}", html_escape(short_day(*data.visibility.as_of))));
+    if (has("at_a_glance")) {
+        out += "<section><h2>At a glance</h2><div class=\"tiles\">\n";
+        tile(out, "New reviews", number(now.new_reviews),
+             change(static_cast<double>(now.new_reviews), static_cast<double>(before.new_reviews), true));
+        tile(out, "Average rating, this period", rating(now.average_rating), rating_change(now.average_rating, before.average_rating));
+        tile(out, "Overall rating", rating(data.running_average), std::format("{} reviews in total", number(data.running_count)));
+        tile(out, "Reviews answered", as_percent(now.response_rate), std::format("{} of {}", number(now.replied), number(now.new_reviews)));
+        tile(out, "Typical time to answer", hours(now.median_response_hours), "median, for the reviews answered");
+        if (data.visibility.available) {
+            const auto views = data.visibility.totals.views();
+            tile(out, "Profile views", number(views),
+                 data.visibility.previous
+                     ? change(static_cast<double>(views), static_cast<double>(data.visibility.previous->views()), true)
+                     : std::format("through {}", html_escape(short_day(*data.visibility.as_of))));
+        }
+        out += "</div></section>\n";
     }
-    out += "</div></section>\n";
 
     // ---- reviews ----
-    out += "<section><h2>Reviews</h2>\n";
-    if (now.new_reviews == 0) {
-        out += "<p class=\"empty\">No new reviews in this period.</p>\n";
-    } else {
-        out += "<div class=\"cols\"><div><h3>By star rating</h3>" + star_chart(now) + "</div><div><h3>How reviewers felt</h3>";
-        const auto analyzed = now.positive + now.mixed + now.neutral + now.negative;
-        if (analyzed == 0) {
-            out += "<p class=\"empty\">The reviews of this period have not been analyzed.</p>";
+    if (has("reviews")) {
+        out += "<section><h2>Reviews</h2>\n";
+        if (now.new_reviews == 0) {
+            out += "<p class=\"empty\">No new reviews in this period.</p>\n";
         } else {
-            out += "<table><tr><th></th><th class=\"num\">This period</th><th class=\"num\">Period before</th></tr>";
-            const auto row = [&](std::string_view label, std::int64_t a, std::int64_t b) {
-                out += std::format("<tr><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td></tr>", label, number(a), number(b));
-            };
-            row("Positive", now.positive, before.positive);
-            row("Mixed", now.mixed, before.mixed);
-            row("Neutral", now.neutral, before.neutral);
-            row("Negative", now.negative, before.negative);
-            out += "</table>";
-        }
-        out += "</div></div>\n";
-        if (data.trend.size() > 1) {
-            std::vector<Bar> bars;
-            for (const auto& bucket : data.trend) {
-                const auto unrated = bucket.new_reviews - bucket.positive - bucket.mixed - bucket.neutral - bucket.negative;
-                bars.push_back({short_day(bucket.start),
-                                {{bucket.negative, "#c8453b"},
-                                 {bucket.mixed, "#d9a520"},
-                                 {bucket.neutral, "#9aa5b5"},
-                                 {bucket.positive, "#2e8b57"},
-                                 {std::max<std::int64_t>(unrated, 0), "#dde2ea"}}});
+            out += "<div class=\"cols\"><div><h3>By star rating</h3>" + star_chart(now) + "</div><div><h3>How reviewers felt</h3>";
+            const auto analyzed = now.positive + now.mixed + now.neutral + now.negative;
+            if (analyzed == 0) {
+                out += "<p class=\"empty\">The reviews of this period have not been analyzed.</p>";
+            } else {
+                out += "<table><tr><th></th><th class=\"num\">This period</th><th class=\"num\">Period before</th></tr>";
+                const auto row = [&](std::string_view label, std::int64_t a, std::int64_t b) {
+                    out += std::format("<tr><td>{}</td><td class=\"num\">{}</td><td class=\"num\">{}</td></tr>", label, number(a), number(b));
+                };
+                row("Positive", now.positive, before.positive);
+                row("Mixed", now.mixed, before.mixed);
+                row("Neutral", now.neutral, before.neutral);
+                row("Negative", now.negative, before.negative);
+                out += "</table>";
             }
-            out += "<h3 style=\"margin-top:16px\">New reviews over the period</h3>";
-            out += bar_chart(bars, "New reviews over the period, by how reviewers felt");
-            out += "<p class=\"legend\"><i style=\"background:#2e8b57;margin-left:0\"></i>Positive<i style=\"background:#9aa5b5\"></i>Neutral"
-                   "<i style=\"background:#d9a520\"></i>Mixed<i style=\"background:#c8453b\"></i>Negative</p>\n";
+            out += "</div></div>\n";
+            if (data.trend.size() > 1) {
+                std::vector<Bar> bars;
+                for (const auto& bucket : data.trend) {
+                    const auto unrated = bucket.new_reviews - bucket.positive - bucket.mixed - bucket.neutral - bucket.negative;
+                    bars.push_back({short_day(bucket.start),
+                                    {{bucket.negative, "#c8453b"},
+                                     {bucket.mixed, "#d9a520"},
+                                     {bucket.neutral, "#9aa5b5"},
+                                     {bucket.positive, "#2e8b57"},
+                                     {std::max<std::int64_t>(unrated, 0), "#dde2ea"}}});
+                }
+                out += "<h3 style=\"margin-top:16px\">New reviews over the period</h3>";
+                out += bar_chart(bars, "New reviews over the period, by how reviewers felt");
+                out += "<p class=\"legend\"><i style=\"background:#2e8b57;margin-left:0\"></i>Positive<i style=\"background:#9aa5b5\"></i>Neutral"
+                       "<i style=\"background:#d9a520\"></i>Mixed<i style=\"background:#c8453b\"></i>Negative</p>\n";
+            }
         }
+        if (data.escalations_opened > 0 || data.escalations_closed > 0) {
+            out += std::format("<p style=\"margin-top:12px\">Serious issues raised by reviewers: {} opened, {} closed.</p>\n",
+                               number(data.escalations_opened), number(data.escalations_closed));
+        }
+        out += "</section>\n";
     }
-    if (data.escalations_opened > 0 || data.escalations_closed > 0) {
-        out += std::format("<p style=\"margin-top:12px\">Serious issues raised by reviewers: {} opened, {} closed.</p>\n",
-                           number(data.escalations_opened), number(data.escalations_closed));
-    }
-    out += "</section>\n";
 
     // ---- what people talk about ----
-    if (now.new_reviews > 0) {
+    if (has("topics") && now.new_reviews > 0) {
         out += "<section><h2>What reviewers talk about</h2><div class=\"cols\">\n";
         ranked(out, "Praised most", data.topics_praised, "#2e8b57");
         ranked(out, "Complained about most", data.topics_complained, "#c8453b");
@@ -391,7 +397,7 @@ std::string render_report(const ReportData& data) {
     }
 
     // ---- employee recognition (D-086) ----
-    if (data.staff) {
+    if (has("employee_recognition") && data.staff) {
         const auto& staff = *data.staff;
         out += "<section><h2>Employee recognition</h2>\n";
         if (staff.reviews_naming == 0) {
@@ -406,7 +412,7 @@ std::string render_report(const ReportData& data) {
         out += "</section>\n";
     }
 
-    if (!data.highlights_best.empty() || !data.highlights_worst.empty()) {
+    if (has("highlights") && (!data.highlights_best.empty() || !data.highlights_worst.empty())) {
         out += "<section><h2>Reviews worth reading</h2>\n";
         if (!data.highlights_best.empty()) {
             out += "<h3>The best</h3>\n";
@@ -420,51 +426,53 @@ std::string render_report(const ReportData& data) {
     }
 
     // ---- visibility ----
-    out += "<section><h2>Visibility on Google</h2>\n";
-    const auto& visibility = data.visibility;
-    if (!visibility.available) {
-        out += std::format("<p class=\"empty\">{}</p>\n", html_escape(visibility.note));
-    } else {
-        if (!visibility.complete) {
-            out += std::format("<p class=\"sub\">Google publishes these numbers a few days late: they go up to {}.</p>\n",
-                               html_escape(day_label(*visibility.as_of)));
+    if (has("visibility")) {
+        out += "<section><h2>Visibility on Google</h2>\n";
+        const auto& visibility = data.visibility;
+        if (!visibility.available) {
+            out += std::format("<p class=\"empty\">{}</p>\n", html_escape(visibility.note));
+        } else {
+            if (!visibility.complete) {
+                out += std::format("<p class=\"sub\">Google publishes these numbers a few days late: they go up to {}.</p>\n",
+                                   html_escape(day_label(*visibility.as_of)));
+            }
+            if (!visibility.note.empty()) out += std::format("<p class=\"sub\">{}</p>\n", html_escape(visibility.note));
+            if (visibility.daily.size() > 1) {
+                std::vector<Bar> bars;
+                for (const auto& day : visibility.daily) bars.push_back({short_day(day.day), {{day.views, "#1f5fbf"}}});
+                out += "<h3 style=\"margin-top:12px\">Profile views per day</h3>" + bar_chart(bars, "Profile views per day");
+            }
+            const auto& t = visibility.totals;
+            const auto& p = visibility.previous;
+            const auto prior = [&](std::int64_t VisibilityTotals::* member) {
+                return p ? std::optional<std::int64_t>((*p).*member) : std::optional<std::int64_t>{};
+            };
+            out += "<div class=\"scroll\"><table style=\"margin-top:12px\"><tr><th></th><th class=\"num\">This period</th>";
+            if (p) out += "<th class=\"num\">Period before</th><th class=\"num\">Change</th>";
+            out += "</tr>";
+            visibility_row(out, "Views on Search, mobile", t.search_mobile, prior(&VisibilityTotals::search_mobile));
+            visibility_row(out, "Views on Search, desktop", t.search_desktop, prior(&VisibilityTotals::search_desktop));
+            visibility_row(out, "Views on Maps, mobile", t.maps_mobile, prior(&VisibilityTotals::maps_mobile));
+            visibility_row(out, "Views on Maps, desktop", t.maps_desktop, prior(&VisibilityTotals::maps_desktop));
+            visibility_row(out, "Calls", t.calls, prior(&VisibilityTotals::calls));
+            visibility_row(out, "Direction requests", t.direction_requests, prior(&VisibilityTotals::direction_requests));
+            visibility_row(out, "Website clicks", t.website_clicks, prior(&VisibilityTotals::website_clicks));
+            visibility_row(out, "Menu clicks", t.menu_clicks, prior(&VisibilityTotals::menu_clicks));
+            visibility_row(out, "Bookings", t.bookings, prior(&VisibilityTotals::bookings));
+            out += "</table></div>\n";
         }
-        if (!visibility.note.empty()) out += std::format("<p class=\"sub\">{}</p>\n", html_escape(visibility.note));
-        if (visibility.daily.size() > 1) {
-            std::vector<Bar> bars;
-            for (const auto& day : visibility.daily) bars.push_back({short_day(day.day), {{day.views, "#1f5fbf"}}});
-            out += "<h3 style=\"margin-top:12px\">Profile views per day</h3>" + bar_chart(bars, "Profile views per day");
+        if (data.keywords && !data.keywords->items.empty()) {
+            out += std::format("<h3 style=\"margin-top:20px\">What people searched for, {}</h3>", month_label(data.keywords->month));
+            out += "<table><tr><th>Search</th><th class=\"num\">Times shown</th></tr>";
+            for (const auto& keyword : data.keywords->items) {
+                out += std::format("<tr><td>{}</td><td class=\"num\">{}</td></tr>", html_escape(keyword.keyword),
+                                   keyword.impressions ? number(*keyword.impressions)
+                                                       : std::format("fewer than {}", number(keyword.below.value_or(0))));
+            }
+            out += "</table>\n";
         }
-        const auto& t = visibility.totals;
-        const auto& p = visibility.previous;
-        const auto prior = [&](std::int64_t VisibilityTotals::* member) {
-            return p ? std::optional<std::int64_t>((*p).*member) : std::optional<std::int64_t>{};
-        };
-        out += "<div class=\"scroll\"><table style=\"margin-top:12px\"><tr><th></th><th class=\"num\">This period</th>";
-        if (p) out += "<th class=\"num\">Period before</th><th class=\"num\">Change</th>";
-        out += "</tr>";
-        visibility_row(out, "Views on Search, mobile", t.search_mobile, prior(&VisibilityTotals::search_mobile));
-        visibility_row(out, "Views on Search, desktop", t.search_desktop, prior(&VisibilityTotals::search_desktop));
-        visibility_row(out, "Views on Maps, mobile", t.maps_mobile, prior(&VisibilityTotals::maps_mobile));
-        visibility_row(out, "Views on Maps, desktop", t.maps_desktop, prior(&VisibilityTotals::maps_desktop));
-        visibility_row(out, "Calls", t.calls, prior(&VisibilityTotals::calls));
-        visibility_row(out, "Direction requests", t.direction_requests, prior(&VisibilityTotals::direction_requests));
-        visibility_row(out, "Website clicks", t.website_clicks, prior(&VisibilityTotals::website_clicks));
-        visibility_row(out, "Menu clicks", t.menu_clicks, prior(&VisibilityTotals::menu_clicks));
-        visibility_row(out, "Bookings", t.bookings, prior(&VisibilityTotals::bookings));
-        out += "</table></div>\n";
+        out += "</section>\n";
     }
-    if (data.keywords && !data.keywords->items.empty()) {
-        out += std::format("<h3 style=\"margin-top:20px\">What people searched for, {}</h3>", month_label(data.keywords->month));
-        out += "<table><tr><th>Search</th><th class=\"num\">Times shown</th></tr>";
-        for (const auto& keyword : data.keywords->items) {
-            out += std::format("<tr><td>{}</td><td class=\"num\">{}</td></tr>", html_escape(keyword.keyword),
-                               keyword.impressions ? number(*keyword.impressions)
-                                                   : std::format("fewer than {}", number(keyword.below.value_or(0))));
-        }
-        out += "</table>\n";
-    }
-    out += "</section>\n";
 
     out += std::format("<footer>Period: {} ({}). Compared with {}. Prepared by PONI on {}.</footer>\n", html_escape(period),
                        html_escape(data.time_zone), html_escape(period_label(data.previous_start, data.previous_end)),
@@ -480,13 +488,15 @@ std::string render_report_email(const ReportData& data, std::string_view link) {
     if (now.average_rating) out += std::format("Average rating in the period: {}\n", rating(now.average_rating));
     if (data.running_average) out += std::format("Overall rating: {} ({} reviews)\n", rating(data.running_average), number(data.running_count));
     if (now.response_rate) out += std::format("Reviews answered: {}\n", as_percent(now.response_rate));
-    if (data.visibility.available) {
+    if (has_section(data.sections, "visibility") && data.visibility.available) {
         out += std::format("Profile views: {} (through {})\n", number(data.visibility.totals.views()), day_label(*data.visibility.as_of));
         out += std::format("Calls: {}, direction requests: {}, website clicks: {}\n", number(data.visibility.totals.calls),
                            number(data.visibility.totals.direction_requests), number(data.visibility.totals.website_clicks));
     }
-    if (!data.topics_praised.empty()) out += std::format("Praised most: {}\n", data.topics_praised.front().label);
-    if (!data.topics_complained.empty()) out += std::format("Complained about most: {}\n", data.topics_complained.front().label);
+    if (has_section(data.sections, "topics")) {
+        if (!data.topics_praised.empty()) out += std::format("Praised most: {}\n", data.topics_praised.front().label);
+        if (!data.topics_complained.empty()) out += std::format("Complained about most: {}\n", data.topics_complained.front().label);
+    }
     out += std::format("\nThe full report, with charts:\n{}\n\nTo keep a copy, open the report and print it to PDF.\n", link);
     return out;
 }

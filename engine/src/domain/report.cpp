@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <format>
 #include <set>
 
 namespace poni::domain {
@@ -264,6 +265,24 @@ VisibilityTotals sum_metrics(const std::vector<MetricDay>& days) {
     return totals;
 }
 
+std::vector<std::string> all_report_sections() { return {kReportSections.begin(), kReportSections.end()}; }
+
+std::optional<std::string> report_sections_problem(const std::vector<std::string>& sections) {
+    if (sections.empty()) return "\"sections\" must name at least one section.";
+    std::set<std::string_view> seen;
+    for (const auto& key : sections) {
+        if (std::ranges::find(kReportSections, key) == kReportSections.end()) {
+            std::string known;
+            for (const auto section : kReportSections) known += std::format("{}{}", known.empty() ? "" : ", ", section);
+            return std::format("\"sections\" has an unknown section '{}'; the sections are {}.", key, known);
+        }
+        if (!seen.insert(key).second) return std::format("\"sections\" names '{}' twice.", key);
+    }
+    return std::nullopt;
+}
+
+bool has_section(const std::vector<std::string>& sections, std::string_view key) { return std::ranges::find(sections, key) != sections.end(); }
+
 ReportData build_report(const ReportInput& input) {
     const auto previous = previous_period(input.period);
     ReportData out;
@@ -275,37 +294,48 @@ ReportData build_report(const ReportInput& input) {
     out.previous_end = format_day(previous.end);
     out.time_zone = input.time_zone;
     out.generated_at = input.generated_at;
+    out.sections = input.sections;
+    const auto has = [&](std::string_view key) { return has_section(input.sections, key); };
 
+    // Always: the email's headline and the report's row read them, whatever the sections.
     out.reviews = review_numbers(input.reviews);
     out.previous = review_numbers(input.previous_reviews);
 
     out.running_count = input.running_count;
     out.running_average = average(input.running_rating_sum, input.running_count);
 
-    // Days, or weeks for a period longer than a month.
-    const auto length = (input.period.end - input.period.start).count() + 1;
-    const auto step = days{length > 31 ? 7 : 1};
-    for (auto start = input.period.start; start <= input.period.end; start += step) {
-        TrendBucket bucket{.start = format_day(start)};
-        for (const auto& review : input.reviews) {
-            if (review.day < start || review.day >= start + step) continue;
-            ++bucket.new_reviews;
-            count_sentiment(review.sentiment, bucket);
+    if (has("reviews")) {
+        // Days, or weeks for a period longer than a month.
+        const auto length = (input.period.end - input.period.start).count() + 1;
+        const auto step = days{length > 31 ? 7 : 1};
+        for (auto start = input.period.start; start <= input.period.end; start += step) {
+            TrendBucket bucket{.start = format_day(start)};
+            for (const auto& review : input.reviews) {
+                if (review.day < start || review.day >= start + step) continue;
+                ++bucket.new_reviews;
+                count_sentiment(review.sentiment, bucket);
+            }
+            out.trend.push_back(std::move(bucket));
         }
-        out.trend.push_back(std::move(bucket));
     }
 
-    MentionCounter mentions(input.topic_labels, input.person_item_types);
-    for (const auto& review : input.reviews) mentions.add(review.topics, review.items);
-    mentions.rank_into(out, kRankedLimit);
-    if (!input.person_item_types.empty()) out.staff = staff_recognition(input);
+    if (has("topics")) {
+        MentionCounter mentions(input.topic_labels, input.person_item_types);
+        for (const auto& review : input.reviews) mentions.add(review.topics, review.items);
+        mentions.rank_into(out, kRankedLimit);
+    }
+    if (has("employee_recognition") && !input.person_item_types.empty()) out.staff = staff_recognition(input);
 
-    out.highlights_best = highlights(input, true);
-    out.highlights_worst = highlights(input, false);
+    if (has("highlights")) {
+        out.highlights_best = highlights(input, true);
+        out.highlights_worst = highlights(input, false);
+    }
     out.escalations_opened = input.escalations_opened;
     out.escalations_closed = input.escalations_closed;
-    out.visibility = visibility(input, previous);
-    out.keywords = keywords(input.performance);
+    if (has("visibility")) {
+        out.visibility = visibility(input, previous);
+        out.keywords = keywords(input.performance);
+    }
     return out;
 }
 
