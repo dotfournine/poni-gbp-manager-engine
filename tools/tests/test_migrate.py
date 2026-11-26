@@ -283,6 +283,39 @@ def test_every_location_has_a_time_zone(db):
         db.execute(insert, ("9003", " "))
 
 
+def test_rule_recipients_become_an_array_in_their_order(db):
+    # 0017 (D-107): a rule's recipients are a text[], carried over exactly.
+    shipped = migrate.load_migrations(SHIPPED)
+    assert migrate.apply_migrations(db, shipped[:16])[-1] == 16
+    insert = (
+        "INSERT INTO notification_rules (event_type, recipients, created_at, updated_at) "
+        "VALUES (%s, %s::jsonb, now(), now()) RETURNING id"
+    )
+    two = db.execute(insert, ("escalation", '["b@example.com", "a@example.com"]')).fetchone()[0]
+    none = db.execute(insert, ("approval_needed", "[]")).fetchone()[0]
+
+    assert migrate.apply_migrations(db, shipped[:17]) == [17]
+    assert dict(db.execute("SELECT id, recipients FROM notification_rules").fetchall()) == {
+        two: ["b@example.com", "a@example.com"],
+        none: [],
+    }
+    assert one(db, "SELECT pg_typeof(recipients)::text FROM notification_rules LIMIT 1") == "text[]"
+    # No list named: an empty one, as the jsonb default gave.
+    unnamed = one(
+        db,
+        "INSERT INTO notification_rules (event_type, created_at, updated_at) "
+        "VALUES ('system_problem', now(), now()) RETURNING recipients",
+    )
+    assert unnamed == []
+    with pytest.raises(psycopg.errors.CheckViolation):
+        db.execute("UPDATE notification_rules SET recipients = ARRAY['a@example.com', NULL] WHERE id = %s", (two,))
+    with pytest.raises(psycopg.errors.CheckViolation):
+        db.execute(
+            "UPDATE notification_rules SET recipients = %s WHERE id = %s",
+            ([f"{i}@example.com" for i in range(21)], two),
+        )
+
+
 @pytest.mark.parametrize(
     "rows",
     [
