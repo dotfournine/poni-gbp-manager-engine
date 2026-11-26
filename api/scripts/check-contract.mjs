@@ -268,7 +268,10 @@ try {
   const seededLocation = (allLocations.json?.items ?? []).find((item) => item.gbp_location_id === "contract-location-1" && item.gbp_account_id === "contract-account-1");
   if (location) {
     const path = `/api/locations/${location.id}`;
-    check(`GET ${path}`, "/api/locations/{id}", "GET", await call("GET", path));
+    const one = await call("GET", path);
+    check(`GET ${path}`, "/api/locations/{id}", "GET", one);
+    // Every location has its zone, read from Google Places at discovery (D-109).
+    if (typeof one.json?.time_zone !== "string" || one.json.time_zone === "") fail(`GET ${path}`, "the location has no time_zone");
   } else if (requireData) {
     fail("GET /api/locations", "no location to check; was the seed applied?");
   } else {

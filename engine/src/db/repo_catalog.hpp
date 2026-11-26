@@ -17,6 +17,7 @@
 #include <pqxx/pqxx>
 
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -105,6 +106,8 @@ Result<std::string> current_location_etag(pqxx::transaction_base& tx, std::int64
 struct SeenLocation {
     std::string account_id;
     gbp::Location location;
+    // A new location's IANA zone, read from Google Places (D-109); nothing for a known one.
+    std::optional<std::string> time_zone = std::nullopt;
 };
 
 struct DiscoveryOutcome {
@@ -126,7 +129,15 @@ void request_discovery(pqxx::transaction_base& tx, audit::Writer& audit);
 // location missing from two complete discoveries in a row is marked lost.
 // New, lost and restored locations get an audit entry. Call this only with a
 // complete listing: a partial one would count locations as missing.
-DiscoveryOutcome apply_discovery(pqxx::transaction_base& tx, const std::vector<SeenLocation>& seen, core::TimePoint now);
+// A new location is inserted with its `time_zone`, which it must have.
+// `deferred` are the new locations Google lists that are not on Google Maps
+// yet (no place id, D-109 point 6): they are not rows and not counted as seen,
+// and each gets one `location.discovery_deferred` entry, the first time only.
+DiscoveryOutcome apply_discovery(pqxx::transaction_base& tx, const std::vector<SeenLocation>& seen,
+                                 const std::vector<SeenLocation>& deferred, core::TimePoint now);
+
+// Which of these Google location ids are rows already.
+std::set<std::string> known_location_ids(pqxx::transaction_base& tx, const std::vector<std::string>& ids);
 
 // ---- audit log and status ------------------------------------------------------
 

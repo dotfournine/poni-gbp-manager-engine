@@ -175,13 +175,10 @@ Result<domain::ReplySettings> replace_reply_settings(pqxx::transaction_base& tx,
         // What must hold while auto reply is on, checked on every save that leaves it on (D-110).
         // check_reply_settings has held the minimum to 4 or 5 and the timing to what can be used.
         if (!rows[0][0].as<bool>()) return invalid("Auto reply needs a location that is switched on and still accessible.");
-        const auto zone = rows[0][1].as<std::optional<std::string>>();
+        const auto zone = rows[0][1].as<std::string>();
         const auto timing = domain::posting_timing(settings);
-        if (timing && timing->window) {
-            if (!zone) return invalid("The posting window needs the location's time zone, and the location has none yet.");
-            if (!domain::known_time_zone(*zone)) {
-                return invalid(std::format("The posting window needs the location's time zone, and '{}' is not known on this server.", *zone));
-            }
+        if (timing && timing->window && !domain::known_time_zone(zone)) {
+            return invalid(std::format("The posting window needs the location's time zone, and '{}' is not known on this server.", zone));
         }
     }
     const auto before = read_bundle<domain::ReplySettings>(tx, kReply, location_id);

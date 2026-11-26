@@ -330,8 +330,8 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
     const auto min_stars = row[15].as<std::int64_t>();
     const bool review_has_text = row[16].as<bool>();
     const auto cap = row[17].as<std::int64_t>();
-    const auto zone = row[18].as<OptString>();
-    verdict.zone = zone.value_or("");
+    const auto zone = row[18].as<std::string>();
+    verdict.zone = zone;
 
     // 1. What people switched on. Off is the state after installation.
     if (!row[21].as<bool>()) return no(std::move(verdict), "Posting is switched off.", true);
@@ -385,8 +385,7 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
     if (!timing) return no(std::move(verdict), std::format("The reply policy's timing can't be used: {}.", timing.error()));
     verdict.timing = *timing;
     if (timing->window) {
-        if (!zone) return no(std::move(verdict), "The reply policy has a posting window, and the location has no time zone.");
-        const auto inside = domain::in_window(now, *timing->window, *zone);
+        const auto inside = domain::in_window(now, *timing->window, zone);
         if (!inside) return no(std::move(verdict), std::format("The location's time zone can't be used: {}.", inside.error()));
         // A job that ran late (the engine was down) must not post in the middle of the night.
         if (at_claim && !*inside) return no(std::move(verdict), "The reply missed its posting window.");
@@ -405,7 +404,7 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
                         {"prompt_version", row[6].as<std::string>()},
                         {"policy", auto_reply_policy(settings->reply)},
                         {"auto_reply", boost::json::object{{"daily_cap", cap},
-                                                           {"time_zone", zone ? boost::json::value(*zone) : boost::json::value(nullptr)}}}};
+                                                           {"time_zone", zone}}}};
     verdict.policy_version = core::sha256_hex(boost::json::serialize(verdict.snapshot)).substr(0, 12);
     verdict.ok = true;
     return verdict;

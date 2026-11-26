@@ -87,7 +87,7 @@ protected:
 
 TEST_F(AutoReply, AfterInstallationNothingIsPostedWithoutAPerson) {
     EXPECT_EQ(count("reply_settings WHERE auto_reply_enabled"), 0);
-    EXPECT_EQ(count("locations WHERE time_zone IS NOT NULL OR auto_reply_paused_at IS NOT NULL"), 0);
+    EXPECT_EQ(count("locations WHERE auto_reply_paused_at IS NOT NULL"), 0);
 
     const auto draft_id = drafted("r1");
     EXPECT_EQ(draft(draft_id, "route"), "auto_reply");
@@ -405,8 +405,9 @@ TEST_F(AutoReply, AReplyDueOutsideThePostingWindowMovesIntoTheNextOne) {
     run_jobs();
     EXPECT_EQ(gbp_.puts.size(), 1u) << "09:00 in New York";
 
-    // The other location has the same window and no time zone: it can't be timed, so a person decides.
+    // The other location has the same window and a zone this server does not know: it can't be timed, so a person decides.
     switch_on(buffet_);
+    set_zone(buffet_, "Nowhere/Land");
     set_reply(buffet_, R"({"auto_reply_window_start": "09:00", "auto_reply_window_end": "21:00"})");
     const auto untimed = drafted("b1", kBuffet);
     EXPECT_EQ(draft(untimed, "status"), "draft");
@@ -1030,10 +1031,9 @@ TEST_F(AutoReply, TheSettingsAreCheckedBeforeAnythingIsStored) {
 
     // A posting window needs a time zone the server knows before auto reply can be on.
     set_reply(spa_, R"({"auto_reply_window_start": "09:00", "auto_reply_window_end": "21:00"})");
-    EXPECT_THAT(save(spa_, R"({"auto_reply_enabled": true})").error().message, HasSubstr("time zone"));
-    EXPECT_TRUE(save(spa_, R"({"auto_reply_daily_cap": 400})")) << "with auto reply off, a window needs no zone yet";
     set_zone(spa_, "Mars/Olympus");
     EXPECT_THAT(save(spa_, R"({"auto_reply_enabled": true})").error().message, HasSubstr("not known on this server"));
+    EXPECT_TRUE(save(spa_, R"({"auto_reply_daily_cap": 400})")) << "with auto reply off, the window's zone is not checked";
     set_zone(spa_, "America/New_York");
     const auto on = save(spa_, R"({"auto_reply_enabled": true})");
     ASSERT_TRUE(on) << on.error().message;

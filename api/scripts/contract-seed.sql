@@ -8,12 +8,12 @@ VALUES ('Contract Check Spa', 'Seeded for the contract check', now(), now())
 ON CONFLICT DO NOTHING;
 
 INSERT INTO locations (gbp_location_id, gbp_account_id, client_id, enabled, title, primary_category, address, locality,
-                       administrative_area, postal_code, region_code, phone, website_uri, maps_uri, raw,
+                       administrative_area, postal_code, region_code, phone, website_uri, maps_uri, time_zone, raw,
                        first_seen_at, last_seen_at, updated_at, reviews_polled_at, reviews_full_synced_at,
                        last_sync_error, last_sync_error_at)
 SELECT 'contract-location-1', 'contract-account-1', c.id, true, 'Contract Check Spa - Downtown', 'Spa',
        '1 Example Street', 'New York', 'NY', '10001', 'US', '(212) 555-0100', 'https://example.invalid/',
-       'https://maps.example.invalid/1', '{"name": "locations/contract-location-1"}'::jsonb,
+       'https://maps.example.invalid/1', 'America/New_York', '{"name": "locations/contract-location-1"}'::jsonb,
        now(), now(), now(), now(), now(), 'HTTP 503 (seeded example)', now()
   FROM clients c
  WHERE c.name = 'Contract Check Spa'

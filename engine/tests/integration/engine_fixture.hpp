@@ -187,7 +187,7 @@ protected:
     }
     // Finds the fake Google's locations, as the sync's discovery does.
     void discover() {
-        jobs::Sync discovery(db(), clock_, gbp_, queue(), {});
+        jobs::Sync discovery(db(), clock_, gbp_, places_, queue(), {});
         await(discovery.discover_locations());
     }
     // Each of the two gets a client of its own: spa_client_ and buffet_client_.
@@ -306,6 +306,8 @@ protected:
     boost::asio::io_context io_;
     core::ManualClock clock_{t0()};
     FakeGbp gbp_;
+    // Google Places: every place's zone is America/New_York unless a test names another (D-109).
+    FakePlaceTimeZones places_;
     jobs::Registry registry_;
     std::int64_t spa_client_ = 0, buffet_client_ = 0, spa_ = 0, buffet_ = 0, user_ = 0;
 

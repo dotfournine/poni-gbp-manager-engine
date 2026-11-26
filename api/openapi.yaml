@@ -4342,13 +4342,19 @@ components:
             why it is here: see `POST /api/locations/{id}/local-posts/refresh`
             for how to tell that a read has ended.
         time_zone:
-          type: [string, "null"]
+          type: string
+          readOnly: true
+          minLength: 1
           description: |
             The location's time zone, an IANA name such as
-            `America/New_York`. The posting window of the reply settings
-            uses it, and it is the only one a location has. No route sets
-            it, and `LocationUpdate` does not take it. A report of the location takes this zone unless
-            it names another (`ReportCreate.time_zone`). It does not change how
+            `America/New_York`. It comes from Google Places when the
+            location is discovered (D-109) and never changes: no route sets
+            it, and `LocationUpdate` does not take it. Every location has
+            one; a location Google lists that is not on Google Maps yet is
+            not added until it is. The posting window of the reply settings
+            uses it, and it is the only one a location has. A report of the
+            location takes this zone unless it names another
+            (`ReportCreate.time_zone`). It does not change how
             date-times are written: they stay UTC, `scheduled_time` and
             `recurrence.until` of a local post included.
     LocationUpdate:
@@ -4637,7 +4643,10 @@ components:
             `location`, `system_settings`, `ai_settings`, `review`, `draft`
             (a reply draft), `escalation`, `local_post`, `local_post_media`,
             `notification_rule`, `notification_delivery`, `report`,
-            `report_schedule`, `go_live_run`, `user` (signing in and out,
+            `report_schedule`, `go_live_run`, `google_location` (a location
+            Google lists that is not a row yet: discovery left it out until it
+            is on Google Maps, `location.discovery_deferred`, and the object id
+            is Google's location id), `user` (signing in and out,
             a person's `user.create` of someone from the Workspace directory,
             and the staff check's `user.disable`, `user.enable` and
             `user.update` by `system:workspace`, D-106), `device` and
@@ -4718,6 +4727,18 @@ components:
           $ref: "#/components/schemas/GbpStatus"
         location_discovery:
           $ref: "#/components/schemas/IntegrationStatus"
+          description: |
+            The listing of the managing account's locations, and the read of
+            each new location's time zone from Google Places (D-109). A
+            failure of either applies nothing and shows here, with a
+            `last_error_at` later than `last_ok_at`. A new location that is
+            not on Google Maps yet is left out, everything else is applied,
+            and `last_error` names it beside the success, at the same moment
+            (`last_ok_at` equals `last_error_at`: applied, with a note):
+            "<title> is not on Google Maps yet, so its time zone is not known;
+            it is added once it is", or for several, "<title>, <title> are not
+            on Google Maps yet, so their time zones are not known; they are
+            added once they are".
         pubsub:
           $ref: "#/components/schemas/PubsubStatus"
         ai:
@@ -7569,7 +7590,7 @@ components:
         time_zone:
           type: string
           maxLength: 64
-          description: An IANA name. Without one, the location's time zone, else UTC.
+          description: An IANA name. Without one, the location's time zone.
     ReportSendRequest:
       type: object
       additionalProperties: false
