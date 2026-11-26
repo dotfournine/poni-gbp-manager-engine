@@ -185,7 +185,7 @@ TEST_F(Prompts, EachVariantNamesItsScriptAndRegionAndNotSetFollowsTheReview) {
                                       chosen)));
     const auto not_set = chinese(std::nullopt);
     EXPECT_THAT(not_set, HasSubstr("Write the reply in Chinese, matching the script (Simplified or Traditional) and the regional phrasing "
-                                   "the review uses.\n"));
+                                   "the review uses. If the review is not written in Chinese, use Simplified Chinese characters.\n"));
     EXPECT_THAT(not_set, Not(HasSubstr("The language was chosen")));
     EXPECT_THAT(not_set, Not(HasSubstr("Chinese characters only")));
 

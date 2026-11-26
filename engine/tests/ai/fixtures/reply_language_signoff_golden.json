@@ -650,7 +650,7 @@
     }
    },
    "renders": [
-    "Write the reply in Chinese, matching the script (Simplified or Traditional) and the regional phrasing the review uses."
+    "Write the reply in Chinese, matching the script (Simplified or Traditional) and the regional phrasing the review uses. If the review is not written in Chinese, use Simplified Chinese characters."
    ],
    "fingerprint_inputs": {
     "gate": "phase-4.1",
@@ -666,11 +666,11 @@
      "writer:severity:es": "60d1dd59d26d3717",
      "writer:rating_only:es": "d33bab35f056b190",
      "writer:rating_only_low:es": "dbd3506042081a59",
-     "writer:positive:zh": "78ed7260db76ddf6",
-     "writer:complaint:zh": "1d86bc5d721132b5",
-     "writer:severity:zh": "66b218ac765b8588",
-     "writer:rating_only:zh": "bcdd60961b21e30e",
-     "writer:rating_only_low:zh": "a7f5dd5de2dbcabd"
+     "writer:positive:zh": "7d3e9a6d8dd70562",
+     "writer:complaint:zh": "689955fd6f33bbe9",
+     "writer:severity:zh": "8033adc8e3fb1c2a",
+     "writer:rating_only:zh": "b691fb6ba5ae360e",
+     "writer:rating_only_low:zh": "64bb0dacc4e08880"
     },
     "analyzer": {
      "provider": "dashscope",
@@ -752,7 +752,7 @@
      "contact_allowed": false
     }
    },
-   "fingerprint": "295099bc17ebad87"
+   "fingerprint": "76b80d9e62dc014c"
   },
   {
    "name": "en-CA",

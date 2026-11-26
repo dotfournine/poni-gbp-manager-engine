@@ -134,9 +134,11 @@ std::string quoted_list(const std::vector<std::string>& ids) {
 // Said after the language only when a variant is set: the business chose it.
 constexpr std::string_view kChosenLanguage =
     "The language was chosen by the business's settings; follow it even if the review uses another language";
-// Without a variant the reply follows the review, so the writer is told no script, region or spelling.
+// Without a variant the reply follows the review, so the writer is told no script, region or spelling; a Chinese
+// reply to a review that is not Chinese (by the fallback language) is Simplified, as target_language records it.
 constexpr std::string_view kChineseNotSet =
-    "Write the reply in Chinese, matching the script (Simplified or Traditional) and the regional phrasing the review uses.";
+    "Write the reply in Chinese, matching the script (Simplified or Traditional) and the regional phrasing the review uses. If the "
+    "review is not written in Chinese, use Simplified Chinese characters.";
 constexpr std::string_view kEnglishNotSet = "Write the reply in English, matching the spelling and phrasing the review uses.";
 
 // The Chinese variant names the script and the phrasing both, so the writer

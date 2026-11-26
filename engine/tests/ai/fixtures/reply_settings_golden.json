@@ -694,7 +694,7 @@
           "auto_reply_pause_after_failures": 3
         }
       },
-      "fingerprint": "f8a5720980494a16",
+      "fingerprint": "2fa85752f1aefa97",
       "fingerprint_inputs": {
         "gate": "phase-4.1",
         "prompts": {
@@ -704,11 +704,11 @@
           "writer:severity:en": "abaaa4cb8adfa304",
           "writer:rating_only:en": "e52ea3eaa30b4950",
           "writer:rating_only_low:en": "27f3ccdca736f811",
-          "writer:positive:zh": "2f17d617cf165f0d",
-          "writer:complaint:zh": "3fb35014962a05c5",
-          "writer:severity:zh": "77fc2477a0c8bd90",
-          "writer:rating_only:zh": "94f98b3c3fc5e649",
-          "writer:rating_only_low:zh": "1afbdc2b729e2079"
+          "writer:positive:zh": "6ddf13041e9b4170",
+          "writer:complaint:zh": "ec41014c9ce3f15b",
+          "writer:severity:zh": "a1e85828d2ccdf6f",
+          "writer:rating_only:zh": "da5c5dd3fbe7c1bf",
+          "writer:rating_only_low:zh": "898a9c3e583287d9"
         },
         "analyzer": {
           "provider": "dashscope",
@@ -906,7 +906,7 @@
           "auto_reply_pause_after_failures": 3
         }
       },
-      "fingerprint": "de88a4f5ae6019f9",
+      "fingerprint": "52399df5bc9bde64",
       "fingerprint_inputs": {
         "gate": "phase-4.1",
         "prompts": {
@@ -916,11 +916,11 @@
           "writer:severity:en": "abaaa4cb8adfa304",
           "writer:rating_only:en": "e52ea3eaa30b4950",
           "writer:rating_only_low:en": "27f3ccdca736f811",
-          "writer:positive:zh": "6d33dd0d0ee70ec4",
-          "writer:complaint:zh": "d909b91725075b3a",
-          "writer:severity:zh": "77fc2477a0c8bd90",
-          "writer:rating_only:zh": "94f98b3c3fc5e649",
-          "writer:rating_only_low:zh": "1afbdc2b729e2079"
+          "writer:positive:zh": "42c3b6d80bc4fc5a",
+          "writer:complaint:zh": "186ca6d64957f621",
+          "writer:severity:zh": "a1e85828d2ccdf6f",
+          "writer:rating_only:zh": "da5c5dd3fbe7c1bf",
+          "writer:rating_only_low:zh": "898a9c3e583287d9"
         },
         "analyzer": {
           "provider": "dashscope",
@@ -1105,7 +1105,7 @@
           "auto_reply_pause_after_failures": 3
         }
       },
-      "fingerprint": "7b21716a2650f6b6",
+      "fingerprint": "a1c6220d5e1e814c",
       "fingerprint_inputs": {
         "gate": "phase-4.1",
         "prompts": {
@@ -1120,11 +1120,11 @@
           "writer:severity:es": "a3860cdc030f4acf",
           "writer:rating_only:es": "1fa862fa9755d74a",
           "writer:rating_only_low:es": "386d17e2a896d32a",
-          "writer:positive:zh": "da4c7913a9696a1d",
-          "writer:complaint:zh": "280b97dc30bedd00",
-          "writer:severity:zh": "967499ea0fb78c27",
-          "writer:rating_only:zh": "35b07c8648a5e768",
-          "writer:rating_only_low:zh": "f9a7323b8fbc7697"
+          "writer:positive:zh": "de3b06602517bf62",
+          "writer:complaint:zh": "24c83930c019f44e",
+          "writer:severity:zh": "aab67f89c24e8d36",
+          "writer:rating_only:zh": "c6eaf07d7cca8106",
+          "writer:rating_only_low:zh": "b9c728e4f6901bf2"
         },
         "analyzer": {
           "provider": "dashscope",
@@ -1309,7 +1309,7 @@
           "auto_reply_pause_after_failures": 3
         }
       },
-      "fingerprint": "a91d3288bcbd8c84",
+      "fingerprint": "be36c78c79ca5dbb",
       "fingerprint_inputs": {
         "gate": "phase-4.1",
         "prompts": {
@@ -1324,11 +1324,11 @@
           "writer:severity:es": "7602e96cff8f4f49",
           "writer:rating_only:es": "ab1123e434586614",
           "writer:rating_only_low:es": "7a22788e38774732",
-          "writer:positive:zh": "4fd587fb54ceac0a",
-          "writer:complaint:zh": "90b3584b7ef1af91",
-          "writer:severity:zh": "0f16e21b5b2dae03",
-          "writer:rating_only:zh": "78e154c8180b691b",
-          "writer:rating_only_low:zh": "efaaca4162060207"
+          "writer:positive:zh": "d22bf193ccd38506",
+          "writer:complaint:zh": "563d4a5b3e2ab511",
+          "writer:severity:zh": "1c1ae4834838e923",
+          "writer:rating_only:zh": "5c46047dffb01932",
+          "writer:rating_only_low:zh": "f7b220c322cf8984"
         },
         "analyzer": {
           "provider": "dashscope",
@@ -1901,7 +1901,7 @@
           "auto_reply_pause_after_failures": 3
         }
       },
-      "fingerprint": "6d2896dd051b0ef7",
+      "fingerprint": "0b85bbb1786443be",
       "fingerprint_inputs": {
         "gate": "phase-4.1",
         "prompts": {
@@ -1916,11 +1916,11 @@
           "writer:severity:es": "3d4b100672870675",
           "writer:rating_only:es": "78671f23a4d9ae03",
           "writer:rating_only_low:es": "90b7c9c378ce08c1",
-          "writer:positive:zh": "59fe60717ee3bc5c",
-          "writer:complaint:zh": "0877593af9bf9014",
-          "writer:severity:zh": "85affec1bb7e75d2",
-          "writer:rating_only:zh": "52cd5b1c8ed0d1c4",
-          "writer:rating_only_low:zh": "57b338d0837a1c9e"
+          "writer:positive:zh": "1003eb15e954d099",
+          "writer:complaint:zh": "571e1c0a9e4554cb",
+          "writer:severity:zh": "da4ac2ba86ee7d27",
+          "writer:rating_only:zh": "f3e43153b37efa95",
+          "writer:rating_only_low:zh": "66b780f0341b0549"
         },
         "analyzer": {
           "provider": "dashscope",
@@ -2105,7 +2105,7 @@
           "auto_reply_pause_after_failures": 3
         }
       },
-      "fingerprint": "7b21716a2650f6b6",
+      "fingerprint": "a1c6220d5e1e814c",
       "fingerprint_inputs": {
         "gate": "phase-4.1",
         "prompts": {
@@ -2120,11 +2120,11 @@
           "writer:severity:es": "a3860cdc030f4acf",
           "writer:rating_only:es": "1fa862fa9755d74a",
           "writer:rating_only_low:es": "386d17e2a896d32a",
-          "writer:positive:zh": "da4c7913a9696a1d",
-          "writer:complaint:zh": "280b97dc30bedd00",
-          "writer:severity:zh": "967499ea0fb78c27",
-          "writer:rating_only:zh": "35b07c8648a5e768",
-          "writer:rating_only_low:zh": "f9a7323b8fbc7697"
+          "writer:positive:zh": "de3b06602517bf62",
+          "writer:complaint:zh": "24c83930c019f44e",
+          "writer:severity:zh": "aab67f89c24e8d36",
+          "writer:rating_only:zh": "c6eaf07d7cca8106",
+          "writer:rating_only_low:zh": "b9c728e4f6901bf2"
         },
         "analyzer": {
           "provider": "dashscope",
@@ -2311,7 +2311,7 @@
           "auto_reply_pause_after_failures": 3
         }
       },
-      "fingerprint": "0c908746df3b73d6",
+      "fingerprint": "772760ce16be801c",
       "fingerprint_inputs": {
         "gate": "phase-4.1",
         "prompts": {
@@ -2326,11 +2326,11 @@
           "writer:severity:es": "b7573051e2e57292",
           "writer:rating_only:es": "1fa862fa9755d74a",
           "writer:rating_only_low:es": "386d17e2a896d32a",
-          "writer:positive:zh": "5d300305100a4fe1",
-          "writer:complaint:zh": "b5967a8fa98dc373",
-          "writer:severity:zh": "e66668b720a25075",
-          "writer:rating_only:zh": "35b07c8648a5e768",
-          "writer:rating_only_low:zh": "f9a7323b8fbc7697"
+          "writer:positive:zh": "b2d697de03f1b3d8",
+          "writer:complaint:zh": "4d116b93f48bbba6",
+          "writer:severity:zh": "18f4e5007a60accc",
+          "writer:rating_only:zh": "c6eaf07d7cca8106",
+          "writer:rating_only_low:zh": "b9c728e4f6901bf2"
         },
         "analyzer": {
           "provider": "dashscope",
@@ -2515,7 +2515,7 @@
           "auto_reply_pause_after_failures": 3
         }
       },
-      "fingerprint": "7b21716a2650f6b6",
+      "fingerprint": "a1c6220d5e1e814c",
       "fingerprint_inputs": {
         "gate": "phase-4.1",
         "prompts": {
@@ -2530,11 +2530,11 @@
           "writer:severity:es": "a3860cdc030f4acf",
           "writer:rating_only:es": "1fa862fa9755d74a",
           "writer:rating_only_low:es": "386d17e2a896d32a",
-          "writer:positive:zh": "da4c7913a9696a1d",
-          "writer:complaint:zh": "280b97dc30bedd00",
-          "writer:severity:zh": "967499ea0fb78c27",
-          "writer:rating_only:zh": "35b07c8648a5e768",
-          "writer:rating_only_low:zh": "f9a7323b8fbc7697"
+          "writer:positive:zh": "de3b06602517bf62",
+          "writer:complaint:zh": "24c83930c019f44e",
+          "writer:severity:zh": "aab67f89c24e8d36",
+          "writer:rating_only:zh": "c6eaf07d7cca8106",
+          "writer:rating_only_low:zh": "b9c728e4f6901bf2"
         },
         "analyzer": {
           "provider": "dashscope",
@@ -2719,7 +2719,7 @@
           "auto_reply_pause_after_failures": 3
         }
       },
-      "fingerprint": "8b0be1886396beac",
+      "fingerprint": "44d5333bd87904ff",
       "fingerprint_inputs": {
         "gate": "phase-4.1",
         "prompts": {
@@ -2734,11 +2734,11 @@
           "writer:severity:es": "a3860cdc030f4acf",
           "writer:rating_only:es": "1fa862fa9755d74a",
           "writer:rating_only_low:es": "386d17e2a896d32a",
-          "writer:positive:zh": "da4c7913a9696a1d",
-          "writer:complaint:zh": "280b97dc30bedd00",
-          "writer:severity:zh": "967499ea0fb78c27",
-          "writer:rating_only:zh": "35b07c8648a5e768",
-          "writer:rating_only_low:zh": "f9a7323b8fbc7697"
+          "writer:positive:zh": "de3b06602517bf62",
+          "writer:complaint:zh": "24c83930c019f44e",
+          "writer:severity:zh": "aab67f89c24e8d36",
+          "writer:rating_only:zh": "c6eaf07d7cca8106",
+          "writer:rating_only_low:zh": "b9c728e4f6901bf2"
         },
         "analyzer": {
           "provider": "dashscope",
@@ -2923,7 +2923,7 @@
           "auto_reply_pause_after_failures": 3
         }
       },
-      "fingerprint": "9a45562352f66077",
+      "fingerprint": "f21cc2a5d8682093",
       "fingerprint_inputs": {
         "gate": "phase-4.1",
         "prompts": {
@@ -2938,11 +2938,11 @@
           "writer:severity:es": "d26cdd5c0c9ecf93",
           "writer:rating_only:es": "19d20de231930af5",
           "writer:rating_only_low:es": "8408b30daa0fb088",
-          "writer:positive:zh": "731568852e6c259e",
-          "writer:complaint:zh": "b41b0b99d5f03883",
-          "writer:severity:zh": "99b10dc78e802010",
-          "writer:rating_only:zh": "ffe00ae12133ccf7",
-          "writer:rating_only_low:zh": "60f5e0fbb24ffe0d"
+          "writer:positive:zh": "c35813996af4557e",
+          "writer:complaint:zh": "9768125a3f41d944",
+          "writer:severity:zh": "a8444d952ae5cbc5",
+          "writer:rating_only:zh": "c938e911cf7b0b8e",
+          "writer:rating_only_low:zh": "8dc29980da4ea0f7"
         },
         "analyzer": {
           "provider": "dashscope",
@@ -3127,7 +3127,7 @@
           "auto_reply_pause_after_failures": 3
         }
       },
-      "fingerprint": "5b85edce9766a927",
+      "fingerprint": "da4d54fb7c9089d3",
       "fingerprint_inputs": {
         "gate": "phase-4.1",
         "prompts": {
@@ -3142,11 +3142,11 @@
           "writer:severity:es": "813ac55e895ab3eb",
           "writer:rating_only:es": "7ac83b9f8312caa5",
           "writer:rating_only_low:es": "ee20254785b5e7d6",
-          "writer:positive:zh": "394255c2ec774ff0",
-          "writer:complaint:zh": "4129b7e4e94e829f",
-          "writer:severity:zh": "07340de845d96b76",
-          "writer:rating_only:zh": "e7d4bc6fea8d7100",
-          "writer:rating_only_low:zh": "6d7a679c856a46ba"
+          "writer:positive:zh": "58c1d42864f415d9",
+          "writer:complaint:zh": "b9e9c2bd155b65a2",
+          "writer:severity:zh": "8dab813475d8738e",
+          "writer:rating_only:zh": "30afe7a5a0332db3",
+          "writer:rating_only_low:zh": "0f8d27d738f39f76"
         },
         "analyzer": {
           "provider": "dashscope",

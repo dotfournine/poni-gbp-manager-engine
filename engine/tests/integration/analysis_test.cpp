@@ -372,7 +372,8 @@ TEST_F(Analysis, TheGeneratorIsAskedForTheReviewersChineseScriptAndItsReplyIsSto
     EXPECT_EQ(stored.draft->route, "auto_reply");
     // The spa sets no Chinese variant: the writer is told to follow the review, and the draft records the review's script.
     EXPECT_THAT(llm_.requests[1].messages[0].content,
-                HasSubstr("Write the reply in Chinese, matching the script (Simplified or Traditional) and the regional phrasing"));
+                HasSubstr("Write the reply in Chinese, matching the script (Simplified or Traditional) and the regional phrasing the review "
+                          "uses. If the review is not written in Chinese, use Simplified Chinese characters.\n"));
 }
 
 TEST_F(Analysis, ALocationsSettingsAreItsContentAndReplySettings) {
