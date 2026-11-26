@@ -43,6 +43,7 @@ add_library(poni_engine STATIC
   src/connectors/gbp/http_reader.cpp
   src/connectors/gbp/http_writer.cpp
   src/connectors/google/auth.cpp
+  src/connectors/google/http_places.cpp
   src/connectors/identity/google_provider.cpp
   src/connectors/llm/net_client.cpp
   src/connectors/llm/protocols.cpp

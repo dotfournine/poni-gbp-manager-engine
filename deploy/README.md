@@ -97,6 +97,17 @@ Before connecting, everyone who uses the engine signs in once with their account
 
 Then, in the dashboard: **System status → Workspace directory → Connect**, and sign in as that account. The engine checks that the permission was granted, that the address is of the sign-in domains, and that the directory's list, read with the new token, holds the account as an administrator, and only then stores the token encrypted under its own name (the other two tokens are not touched).
 
+### Google Places: a new location's time zone
+
+When the engine discovers a location, it reads the location's time zone once from Google Places, by the place id Google Business Profile gives it (D-109): one request of Place Details with the field mask `timeZone`, which Google bills as Place Details Pro. It needs an API key, not an OAuth token, and the engine refuses to start without one while `PONI_GBP_OAUTH_CLIENT_ID` is set (the mock needs none).
+
+In the Google Cloud console of the project, signed in as someone who can edit it:
+
+1. **Billing** must be enabled for the project: Google Maps Platform takes no request from a project without it.
+2. **APIs & Services → Library**: find **Places API (New)** and enable it (not the older "Places API").
+3. **Google Maps Platform → Keys & Credentials → Create credentials → API key**. Under **API restrictions** keep **Places API (New)** only; under **Application restrictions** choose **IP addresses** and enter the VM's public address. A key restricted to the VM does not work from a laptop: develop against the mock, or with a key of its own.
+4. Put the key into `PONI_GOOGLE_PLACES_API_KEY` in the VM's `.env`. It is sent only in the request's `X-Goog-Api-Key` header, never in an address, and no log line, error message, audit entry or status page shows it.
+
 ### The VM
 
 1. Create the VM with a static external IP address, a 20 GB disk or more, and firewall rules for TCP 80 and 443 (and UDP 443 for HTTP/3). Give it its own service account.

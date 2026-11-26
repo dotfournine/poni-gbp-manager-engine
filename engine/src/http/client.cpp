@@ -98,7 +98,7 @@ asio::awaitable<ClientResponse> exchange(Stream& stream, beast::tcp_stream& tcp_
 // metadata server are not here: against the mock they are refused.
 // A mock without the list of users answers 404, which the engine takes as a
 // list it could not read and changes nothing; `poni-tools mock-google` has it.
-constexpr std::array<std::string_view, 8> kMockedHosts{
+constexpr std::array<std::string_view, 9> kMockedHosts{
     "accounts.google.com",                          // the consent page of connecting an account (a browser address)
     "oauth2.googleapis.com",                        // tokens
     "mybusinessaccountmanagement.googleapis.com",   // accounts
@@ -107,6 +107,7 @@ constexpr std::array<std::string_view, 8> kMockedHosts{
     "businessprofileperformance.googleapis.com",    // the Performance API
     "gmail.googleapis.com",                         // sending email
     "admin.googleapis.com",                         // the Workspace directory: the list of users
+    "places.googleapis.com",                        // Google Places: a place's time zone (D-109)
 };
 
 }  // namespace
@@ -139,6 +140,8 @@ namespace {
 
 constexpr std::string_view kGbpHost = "mybusiness.googleapis.com";
 constexpr std::string_view kDirectoryHost = "admin.googleapis.com";
+constexpr std::string_view kPlacesHost = "places.googleapis.com";
+constexpr std::string_view kPlacesRefusal = "the outbound client only sends Google Places a GET of one place's time zone";
 constexpr std::array<std::string_view, 2> kApnsHosts{"api.push.apple.com", "api.sandbox.push.apple.com"};
 
 // ASCII, whatever the locale.
@@ -154,6 +157,12 @@ bool is_plain_id(std::string_view id) {
            std::ranges::all_of(id, [](unsigned char c) { return is_letter_or_digit(c) || c == '-' || c == '_'; });
 }
 
+// Google documents no maximum length for a place id; the cap only keeps an address bounded.
+bool is_place_id(std::string_view id) {
+    return !id.empty() && id.size() <= 1024 &&
+           std::ranges::all_of(id, [](unsigned char c) { return is_letter_or_digit(c) || c == '-' || c == '_'; });
+}
+
 namespace {
 
 // Whether `url` is https://<host>/<shape> and nothing else. An empty entry
@@ -162,9 +171,10 @@ namespace {
 // there is no port, user or fragment, nothing is percent-encoded, and what
 // was checked is what is sent. `query`: the query the address must end in,
 // as the caller built it from parts it has checked; without one the address
-// has no query at all.
+// has no query at all. `is_id`: what an id segment may be.
 template <std::size_t N>
-bool has_shape(const boost::urls::url& url, std::string_view host, const std::array<std::string_view, N>& shape, std::string_view query = {}) {
+bool has_shape(const boost::urls::url& url, std::string_view host, const std::array<std::string_view, N>& shape, std::string_view query = {},
+               bool (*is_id)(std::string_view) = is_plain_id) {
     if (url.scheme_id() != boost::urls::scheme::https || url.host() != host) return false;
     const auto segments = url.segments();
     if (segments.size() != shape.size()) return false;
@@ -172,7 +182,7 @@ bool has_shape(const boost::urls::url& url, std::string_view host, const std::ar
     std::size_t i = 0;
     for (const auto& segment : segments) {
         const auto expected = shape[i++];
-        if (expected.empty() ? !is_plain_id(segment) : segment != expected) return false;
+        if (expected.empty() ? !is_id(segment) : segment != expected) return false;
         built.segments().push_back(segment);
     }
     std::string written(built.buffer());
@@ -336,6 +346,33 @@ bool is_directory_host(const boost::urls::url& url) {
     return host == kDirectoryHost;
 }
 
+bool is_places_host(const boost::urls::url& url) {
+    std::string host = text::ascii_lower(url.host());
+    while (host.ends_with('.')) host.pop_back();
+    return host == kPlacesHost;
+}
+
+namespace {
+
+// https://places.googleapis.com/v1/places/{id}: no query, so neither a key
+// nor a field mask travels in the address (both are headers).
+bool is_place_url(const boost::urls::url& url) {
+    static constexpr std::array<std::string_view, 3> shape{"v1", "places", ""};
+    return has_shape(url, kPlacesHost, shape, {}, is_place_id);
+}
+
+}  // namespace
+
+bool is_place_time_zone_request(const ClientRequest& request) {
+    if (request.method != ClientMethod::get || !is_place_url(request.url)) return false;
+    // One mask and only the time zone: another field is another (dearer) SKU, and "*" is every field.
+    int masks = 0;
+    for (const auto& [name, value] : request.headers) {
+        if (text::ascii_iequals(name, "X-Goog-FieldMask") && (++masks > 1 || value != "timeZone")) return false;
+    }
+    return masks == 1;
+}
+
 bool is_gbp_host(const boost::urls::url& url) {
     std::string host = text::ascii_lower(url.host());
     while (host.ends_with('.')) host.pop_back();
@@ -424,6 +461,20 @@ std::optional<std::string_view> why_storage_refused(ClientMethod method, const b
 
 }  // namespace
 
+namespace {
+
+// The Google hosts the client only reads from, each one request wide.
+std::optional<std::string_view> why_read_only_host_refused(ClientMethod method, const boost::urls::url& url) {
+    if (is_directory_host(url) && (method != ClientMethod::get || !is_directory_user_list_url(url))) {
+        return "the outbound client only sends Google's Admin SDK a GET of the list of users";
+    }
+    // The field mask is a header: the whole request is checked in the overload that takes it.
+    if (is_places_host(url) && (method != ClientMethod::get || !is_place_url(url))) return kPlacesRefusal;
+    return std::nullopt;
+}
+
+}  // namespace
+
 std::optional<std::string_view> why_refused(ClientMethod method, const boost::urls::url& url, std::string_view public_bucket) {
     if (!is_plain_host(url)) return "the outbound client only sends to a host named with letters, digits, '.' and '-'";
     // The host however it is written; the one allowed address only as the engine writes it.
@@ -431,9 +482,7 @@ std::optional<std::string_view> why_refused(ClientMethod method, const boost::ur
         return "the outbound client only sends Apple's push service a POST of a notification to one device";
     }
     if (is_storage_host(url)) return why_storage_refused(method, url, public_bucket);
-    if (is_directory_host(url) && (method != ClientMethod::get || !is_directory_user_list_url(url))) {
-        return "the outbound client only sends Google's Admin SDK a GET of the list of users";
-    }
+    if (const auto refusal = why_read_only_host_refused(method, url)) return refusal;
     switch (method) {
         case ClientMethod::get: return std::nullopt;
         case ClientMethod::put:
@@ -459,6 +508,7 @@ std::optional<std::string_view> why_refused(ClientMethod method, const boost::ur
 
 std::optional<std::string_view> why_refused(const ClientRequest& request, std::string_view public_bucket) {
     if (const auto refusal = why_refused(request.method, request.url, public_bucket)) return refusal;
+    if (is_places_host(request.url) && !is_place_time_zone_request(request)) return kPlacesRefusal;
     // Google's front ends take a method from these headers on a POST; the
     // others would change where the request goes or how its body is read.
     static constexpr std::array<std::string_view, 6> forbidden{"Host",           "X-HTTP-Method-Override", "X-HTTP-Method",

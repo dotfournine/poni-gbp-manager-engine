@@ -243,6 +243,11 @@ TEST(GoogleMockAddress, KeepsThePathAndQueryUnderTheGoogleHost) {
     ASSERT_TRUE(users);
     EXPECT_EQ(users->buffer(), "http://127.0.0.1:8090/admin.googleapis.com/admin/directory/v1/users?customer=my_customer&maxResults=500&pageToken=abc-DEF_123.~%2F%3D");
 
+    // Google Places' read of a place's time zone (D-109).
+    const auto place = http::google_mock_address(mock, boost::urls::url("https://places.googleapis.com/v1/places/mock-place-9001"));
+    ASSERT_TRUE(place);
+    EXPECT_EQ(place->buffer(), "http://127.0.0.1:8090/places.googleapis.com/v1/places/mock-place-9001");
+
     for (const auto* other : {"https://api.openai.com/v1/chat/completions", "https://pubsub.googleapis.com/v1/x",
                               "http://mybusiness.googleapis.com/v4/accounts", "https://mybusiness.googleapis.com.evil.example/v4"}) {
         EXPECT_FALSE(http::google_mock_address(mock, boost::urls::url(other))) << other;

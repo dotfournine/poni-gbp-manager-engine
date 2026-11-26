@@ -408,6 +408,32 @@ TEST(Config, AgainstTheGoogleMockNothingMayReachARealGoogleService) {
     EXPECT_TRUE(load_config(env_of({{"PONI_PUBSUB_SUBSCRIPTION", "projects/p/subscriptions/s"}}), std::nullopt));
 }
 
+TEST(Config, AGbpClientNeedsAPlacesKeyUnlessTheMockIsOn) {
+    // A location's time zone is read from Google Places at discovery (D-109).
+    const Environment gbp{{"PONI_GBP_OAUTH_CLIENT_ID", "client-id"}, {"PONI_GBP_OAUTH_CLIENT_SECRET", "client-secret"}};
+    const auto refused = load_config(env_of(gbp), std::nullopt);
+    ASSERT_FALSE(refused);
+    EXPECT_EQ(refused.error(),
+              "PONI_GOOGLE_PLACES_API_KEY is required with a GBP OAuth client: a newly discovered location's time zone is read from "
+              "Google Places.");
+
+    auto with_key = gbp;
+    with_key.emplace("PONI_GOOGLE_PLACES_API_KEY", "test-places-key");
+    const auto c = load_config(env_of(with_key), std::nullopt);
+    ASSERT_TRUE(c) << c.error();
+    EXPECT_EQ(c->google_places_api_key, "test-places-key");
+
+    // No GBP client: nothing to discover, so no key is needed.
+    const auto without_client = load_config(env_of({}), std::nullopt);
+    ASSERT_TRUE(without_client) << without_client.error();
+    EXPECT_TRUE(without_client->google_places_api_key.empty());
+
+    // The mock stands in for Places and takes any key.
+    auto mock = gbp;
+    mock.emplace("PONI_GOOGLE_MOCK_URL", "http://127.0.0.1:8090");
+    EXPECT_TRUE(load_config(env_of(mock), std::nullopt));
+}
+
 // ---- the settings -------------------------------------------------------------------
 
 namespace {
