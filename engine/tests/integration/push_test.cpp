@@ -88,6 +88,7 @@ TEST_F(Push, APushRuleIsForEscalationsAndSystemProblemsOnAnEngineThatCanPush) {
     EXPECT_EQ(make_rule("escalation", "push", {"x@xvisionmediaus.com"}).error().code, "rule_exists");
 
     EXPECT_EQ(make_rule("approval_needed", "push", {"x@xvisionmediaus.com"}).error().kind, repo::Failure::Kind::invalid);
+    // No rule is for a location's reports at all (D-111).
     EXPECT_EQ(make_rule("location_report", "push", {"x@xvisionmediaus.com"}).error().kind, repo::Failure::Kind::invalid);
     EXPECT_EQ(make_rule("escalation", "sms", {"x@xvisionmediaus.com"}).error().kind, repo::Failure::Kind::invalid);
     EXPECT_EQ(make_rule("system_problem", "push", {"x@xvisionmediaus.com"}, false).error().code, "push_not_configured");

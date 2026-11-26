@@ -824,14 +824,10 @@ try {
       check(`DELETE ${path} (again)`, scheduleSpec, "DELETE", again);
       expectStatus(`DELETE ${path} (again)`, again, 404, "not_found");
     }
-    // A location's recipients are a rule; one for every location is refused.
-    const recipients = await call("POST", "/api/notification-rules", { body: { event_type: "location_report", location_id: locationId, recipients: ["contract-check@example.com"] } });
-    check("POST /api/notification-rules (location_report)", "/api/notification-rules", "POST", recipients);
-    if (recipients.status === 201) {
-      const rulePath = `/api/notification-rules/${recipients.json.id}`;
-      check("DELETE the location_report rule", "/api/notification-rules/{id}", "DELETE", await call("DELETE", rulePath, { headers: ifMatch(await etagOf(rulePath)) }));
-    }
-    expectStatus("POST /api/notification-rules (location_report, no location)", await call("POST", "/api/notification-rules", { body: { event_type: "location_report", recipients: ["contract-check@example.com"] } }), 400, "invalid_request");
+    // A location's recipients are its schedules' (D-111): no rule is for its reports.
+    const reportRule = await call("POST", "/api/notification-rules", { body: { event_type: "location_report", location_id: locationId, recipients: ["contract-check@example.com"] } });
+    check("POST /api/notification-rules (location_report)", "/api/notification-rules", "POST", reportRule);
+    expectStatus("POST /api/notification-rules (location_report)", reportRule, 400, "invalid_request");
   } else if (requireData) {
     fail("POST /api/locations/{id}/reports", "the seeded location is missing; was the seed applied?");
   }

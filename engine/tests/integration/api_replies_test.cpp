@@ -498,6 +498,13 @@ TEST_F(RepliesApi, NotificationRulesAreManagedAndTheLogShowsWhatHappened) {
     EXPECT_EQ(post("/api/notification-rules", R"({"event_type": "escalation", "recipients": ["not an address"]})").status, 400u);
     EXPECT_EQ(error_code(post("/api/notification-rules", R"({"event_type": "escalation", "location_id": 4242, "recipients": ["a@example.com"]})")),
               "location_not_found");
+    // A report's recipients are its schedules' (D-111): no rule is for it, nor for the test message.
+    for (const auto* type : {"location_report", "test"}) {
+        const auto refused = post("/api/notification-rules", std::format(R"({{"event_type": "{}", "location_id": {}, "recipients": ["a@example.com"]}})",
+                                                                         type, location));
+        EXPECT_EQ(refused.status, 400u) << type;
+        EXPECT_EQ(error_code(refused), "invalid_request") << type;
+    }
     const auto created = post("/api/notification-rules",
                               R"({"event_type": "approval_needed", "location_id": )" + location + R"(, "recipients": ["Team@XVisionMediaUS.com"]})");
     ASSERT_EQ(created.status, 201u) << created.body;
