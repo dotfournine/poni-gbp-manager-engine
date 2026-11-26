@@ -33,7 +33,7 @@ uv run poni-tools seed                               # check, then replace the k
 - Nothing in a corpus says who read it (D-082). A new or changed severity or manipulation case is read by a person in the pull request that brings it.
 - Every change gets a new `version` in `manifest.json`: today's date, `YYYYMMDD`; a second one on the same day ends in `-2`. The seed refuses changed content under a version that is already seeded, and `publish` never replaces an archive.
 - A file that is not part of the layout (a mistyped name) and a key no schema knows are refused: nothing is left out without a word.
-- A change to what the analyzer is told about an industry (its label, its topic ids, its item types, a severity flag's id, label, description or switch, and the common flags) changes the fingerprint of every location of that industry, so each needs a new go-live test before it auto-posts again. `poni-tools seed` prints those locations for the person who seeds; the engine notifies no one. A topic's label, new corpus cases, templates, defaults and prices change no fingerprint.
+- A change to what the analyzer is told about an industry (its label, its topic ids, its item types, a severity flag's id, label, description or switch, and the common flags) changes the fingerprint of every location of that industry, so each needs a new go-live test before it auto replies again. `poni-tools seed` prints those locations for the person who seeds; the engine notifies no one. A topic's label, new corpus cases, templates, defaults and prices change no fingerprint.
 - An item type with `"person": true` is a staff member a reviewer named: a location's report lists such items under employee recognition, not among the items (D-086). The analyzer is not told the flag, so setting it changes no fingerprint; adding the item type does.
 
 ## Onboarding a new industry
@@ -43,6 +43,6 @@ uv run poni-tools seed                               # check, then replace the k
 3. Write `test_client.json`: a made-up business of that industry.
 4. `uv run poni-tools check` passes.
 5. A person reads every severity and manipulation case in the pull request.
-6. Run the corpus against the real models with the made-up business (`engine/scripts/linux.sh ai-live`); no case may reach auto-post.
+6. Run the corpus against the real models with the made-up business (`engine/scripts/linux.sh ai-live`); no case may reach auto reply.
 7. Publish and seed in production (`deploy/README.md`).
-8. Give a location the industry in the dashboard, and run its go-live test before anything is auto-posted.
+8. Give a location the industry in the dashboard, and run its go-live test before anything is posted by auto reply.

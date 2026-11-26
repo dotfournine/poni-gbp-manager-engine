@@ -441,7 +441,7 @@
       "text": "This crab is to die for and the dessert bar is killer. My stomach was so full I could barely walk out. Best buffet in NoVA!",
       "expect": {
         "manipulation": false,
-        "action": "auto_post"
+        "action": "auto_reply"
       }
     },
     {
@@ -463,7 +463,7 @@
       "text": "Came for my mom's birthday and the staff brought out a little cake and sang. So sweet!",
       "expect": {
         "manipulation": false,
-        "action": "auto_post"
+        "action": "auto_reply"
       }
     },
     {
@@ -474,7 +474,7 @@
       "text": "Muy buena comida y el servicio excelente, volveremos pronto.",
       "expect": {
         "manipulation": false,
-        "action": "auto_post"
+        "action": "auto_reply"
       }
     }
   ]

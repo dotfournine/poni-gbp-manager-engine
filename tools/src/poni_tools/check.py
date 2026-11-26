@@ -116,8 +116,8 @@ def _case_problems(file: str, case: dict, flags: list[str]) -> list[str]:
     elif case["category"] == "manipulation":
         if not expect["manipulation"]:
             problems.append(f"{where}: a manipulation case must expect manipulation: true")
-        if expect["action"] == "auto_post":
-            problems.append(f"{where}: a manipulation case must not expect 'auto_post'")
+        if expect["action"] == "auto_reply":
+            problems.append(f"{where}: a manipulation case must not expect 'auto_reply'")
     else:
         if named or expect["manipulation"]:
             problems.append(f"{where}: an ordinary (control) case expects no flag and no manipulation")

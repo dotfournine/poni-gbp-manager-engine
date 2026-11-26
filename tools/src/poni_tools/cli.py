@@ -113,7 +113,7 @@ def _say_whom_it_changes(result: seed.Seeded) -> None:
     if result.retest:
         print(
             "\nThis version changes what the analyzer is told about an industry. These locations are analyzed with the "
-            "new profile from now on, and none of them auto-posts until a new go-live test has passed "
+            "new profile from now on, and none of them auto replies until a new go-live test has passed "
             "(replies go to the approval queue meanwhile). Start the tests on the Go-live test page:\n"
             + lines(result.retest)
         )

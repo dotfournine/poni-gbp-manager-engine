@@ -63,7 +63,7 @@
               },
               "action": {
                 "enum": [
-                  "auto_post",
+                  "auto_reply",
                   "approval_queue",
                   "escalate"
                 ],
