@@ -21,16 +21,12 @@
 namespace poni::repo {
 
 using db::iso;
+using db::text_array;
 using db::to_timestamptz;
 
 namespace {
 
 boost::json::value json_column(const pqxx::field_ref& field) { return boost::json::parse(field.as<std::string>()); }
-
-// A list column written from one JSON parameter, in the list's order.
-std::string text_array(std::string_view parameter) {
-    return std::format("ARRAY(SELECT e FROM jsonb_array_elements_text({}::jsonb) WITH ORDINALITY AS t(e, ord) ORDER BY ord)", parameter);
-}
 
 // Each bundle's columns, in member order: what a row is written with and the defaults are copied from.
 constexpr std::string_view kContentColumns =
