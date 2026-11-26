@@ -197,6 +197,17 @@ async function etagOf(path) {
   return etag ?? "";
 }
 const ifMatch = (etag) => ({ "if-match": etag });
+// A tag no stored thing has: what a client sends back after someone else changed the thing.
+const staleTag = `"${"0".repeat(64)}"`;
+// A change of `path` without If-Match is a 428, and with a tag that is not the stored one a 412; neither changes anything (D-108).
+async function expectGuarded(specPath, method, path, body) {
+  const without = await call(method, path, { body });
+  check(`${method} ${path} without If-Match`, specPath, method, without);
+  expectStatus(`${method} ${path} without If-Match`, without, 428, "precondition_required");
+  const stale = await call(method, path, { body, headers: ifMatch(staleTag) });
+  check(`${method} ${path} with a stale If-Match`, specPath, method, stale);
+  expectStatus(`${method} ${path} with a stale If-Match`, stale, 412, "precondition_failed");
+}
 
 const isOpen = (operation) => Array.isArray(operation.security) && operation.security.length === 0;
 const plainGets = Object.entries(spec.paths ?? {}).filter(
@@ -265,13 +276,17 @@ try {
   }
   if (seededLocation) {
     const path = `/api/locations/${seededLocation.id}`;
-    check(`PATCH ${path} (no change)`, "/api/locations/{id}", "PATCH", await call("PATCH", path, { body: {} }));
+    const read = await etagOf(path);
+    const unchanged = await call("PATCH", path, { body: {}, headers: ifMatch(read) });
+    check(`PATCH ${path} (no change)`, "/api/locations/{id}", "PATCH", unchanged);
+    if (unchanged.response.headers.get("etag") !== read) fail(`PATCH ${path} (no change)`, "a change that changes nothing answered with another ETag");
     // Its own fields (D-102), sent as the seed left them: a change that changes nothing.
     const own = { enabled: true, industry_key: "wellness", analyze_from: null, audience: "" };
-    const same = await call("PATCH", path, { body: own });
+    const same = await call("PATCH", path, { body: own, headers: ifMatch(read) });
     check(`PATCH ${path} (its own fields, as they are)`, "/api/locations/{id}", "PATCH", same);
     if (same.status !== 200 || !same.json?.enabled || same.json?.industry_key !== "wellness") fail(`PATCH ${path}`, `the seeded location is not switched on with its industry: ${same.text.slice(0, 200)}`);
-    check(`PATCH ${path} (an industry the knowledge base lacks)`, "/api/locations/{id}", "PATCH", await call("PATCH", path, { body: { industry_key: "no_such_industry" } }));
+    check(`PATCH ${path} (an industry the knowledge base lacks)`, "/api/locations/{id}", "PATCH", await call("PATCH", path, { body: { industry_key: "no_such_industry" }, headers: ifMatch(await etagOf(path)) }));
+    await expectGuarded("/api/locations/{id}", "PATCH", path, {});
     // Queues a read of the location's posts. Its account does not exist, so the job reads nothing and says so.
     check(`POST ${path}/local-posts/refresh`, "/api/locations/{id}/local-posts/refresh", "POST", await call("POST", `${path}/local-posts/refresh`));
   } else if (requireData) {
@@ -328,7 +343,8 @@ try {
       let copyPath;
       try {
         const edited = { ...content, summary: "Written by check-contract.mjs, then edited.", call_to_action: { action_type: "call", url: null } };
-        const saved = await call("PUT", path, { body: edited });
+        await expectGuarded("/api/local-posts/{id}", "PUT", path, edited);
+        const saved = await call("PUT", path, { body: edited, headers: ifMatch(await etagOf(path)) });
         check(`PUT ${path}`, "/api/local-posts/{id}", "PUT", saved);
         if (saved.status === 200) {
           // The first content is not the stored content any more; the stored one meets the switch.
@@ -339,7 +355,7 @@ try {
         }
         check(`POST ${path}/reject`, "/api/local-posts/{id}/reject", "POST", await call("POST", `${path}/reject`, { body: { reason: "Only a check." } }));
         check(`POST ${path}/reject (again)`, "/api/local-posts/{id}/reject", "POST", await call("POST", `${path}/reject`));
-        check(`PUT ${path} (rejected)`, "/api/local-posts/{id}", "PUT", await call("PUT", path, { body: edited }));
+        check(`PUT ${path} (rejected)`, "/api/local-posts/{id}", "PUT", await call("PUT", path, { body: edited, headers: ifMatch(await etagOf(path)) }));
         // Only the refusal: the check never asks for a post at Google to be deleted.
         check(`POST ${path}/remove (not at Google)`, "/api/local-posts/{id}/remove", "POST", await call("POST", `${path}/remove`));
         // A copy of the rejected draft is a new draft (D-094); both are then deleted, which touches nothing at Google.
@@ -354,8 +370,9 @@ try {
         // Whatever happened above, no draft of the check's stays behind. (A draft that is not yet rejected is
         // rejected first; one that was approved against every guard cannot be deleted, and that is reported.)
         await call("POST", `${path}/reject`, { body: { reason: "Only a check." } });
-        if (copyPath) check(`DELETE ${copyPath} (the copy)`, "/api/local-posts/{id}", "DELETE", await call("DELETE", copyPath));
-        const deleted = await call("DELETE", path);
+        if (copyPath) check(`DELETE ${copyPath} (the copy)`, "/api/local-posts/{id}", "DELETE", await call("DELETE", copyPath, { headers: ifMatch(await etagOf(copyPath)) }));
+        await expectGuarded("/api/local-posts/{id}", "DELETE", path);
+        const deleted = await call("DELETE", path, { headers: ifMatch(await etagOf(path)) });
         check(`DELETE ${path} (rejected)`, "/api/local-posts/{id}", "DELETE", deleted);
         if (deleted.status !== 204) fail(`DELETE ${path}`, `the check left its draft behind: ${deleted.status} ${deleted.text.slice(0, 200)}`);
       }
@@ -365,7 +382,7 @@ try {
   // A post Google has is never deleted here: only the refusal.
   const atGoogle = (localPosts.json?.items ?? []).find((post) => post.status === "sent");
   if (atGoogle) {
-    const refused = await call("DELETE", `/api/local-posts/${atGoogle.id}`);
+    const refused = await call("DELETE", `/api/local-posts/${atGoogle.id}`, { headers: ifMatch(await etagOf(`/api/local-posts/${atGoogle.id}`)) });
     check(`DELETE /api/local-posts/${atGoogle.id} (at Google)`, "/api/local-posts/{id}", "DELETE", refused);
     if (refused.status !== 409) fail(`DELETE /api/local-posts/${atGoogle.id}`, `expected a refusal for a post at Google, got ${refused.status}`);
   }
@@ -528,8 +545,12 @@ try {
     console.log("skip  reply settings: this database has no seeded location, and the check saves no other location's settings");
   }
   expectStatus("GET /api/locations/999999999/reply-settings", await call("GET", "/api/locations/999999999/reply-settings"), 404, "not_found");
-  check("PATCH /api/ai/settings (no change)", "/api/ai/settings", "PATCH", await call("PATCH", "/api/ai/settings", { body: {} }));
-  check("PATCH /api/ai/settings (bad value)", "/api/ai/settings", "PATCH", await call("PATCH", "/api/ai/settings", { body: { batch_size: 1000 } }));
+  const aiTag = await etagOf("/api/ai/settings");
+  const aiUnchanged = await call("PATCH", "/api/ai/settings", { body: {}, headers: ifMatch(aiTag) });
+  check("PATCH /api/ai/settings (no change)", "/api/ai/settings", "PATCH", aiUnchanged);
+  if (aiUnchanged.response.headers.get("etag") !== aiTag) fail("PATCH /api/ai/settings (no change)", "a change that changes nothing answered with another ETag");
+  check("PATCH /api/ai/settings (bad value)", "/api/ai/settings", "PATCH", await call("PATCH", "/api/ai/settings", { body: { batch_size: 1000 }, headers: ifMatch(aiTag) }));
+  await expectGuarded("/api/ai/settings", "PATCH", "/api/ai/settings", {});
   check("GET /api/llm/usage?from&to", "/api/llm/usage", "GET", await call("GET", "/api/llm/usage?from=2026-01-01&to=2026-12-31"));
   check("GET /api/llm/calls?per_page=5", "/api/llm/calls", "GET", await call("GET", "/api/llm/calls?per_page=5"));
   expectStatus("GET /api/llm/usage?from=nonsense", await call("GET", "/api/llm/usage?from=nonsense"), 400, "invalid_request");
@@ -538,13 +559,16 @@ try {
   // The check never posts a reply: it approves only to see the refusal, and
   // only while the posting switch is off.
   const switches = await call("GET", "/api/system/settings");
-  check("PATCH /api/system/settings (no change)", "/api/system/settings", "PATCH", await call("PATCH", "/api/system/settings", { body: {} }));
+  const systemTag = await etagOf("/api/system/settings");
+  check("PATCH /api/system/settings (no change)", "/api/system/settings", "PATCH", await call("PATCH", "/api/system/settings", { body: {}, headers: ifMatch(systemTag) }));
   check("PATCH /api/system/settings (bad value)", "/api/system/settings", "PATCH", await call("PATCH", "/api/system/settings", { body: { posting_enabled: "yes" } }));
+  await expectGuarded("/api/system/settings", "PATCH", "/api/system/settings", {});
   if (drafted?.draft) {
     const path = `/api/drafts/${drafted.draft.id}`;
     const draft = await call("GET", path);
     check(`GET ${path}`, "/api/drafts/{id}", "GET", draft);
-    check(`PATCH ${path}`, "/api/drafts/{id}", "PATCH", await call("PATCH", path, { body: { text: draft.json?.text ?? "x" } }));
+    check(`PATCH ${path}`, "/api/drafts/{id}", "PATCH", await call("PATCH", path, { body: { text: draft.json?.text ?? "x" }, headers: ifMatch(await etagOf(path)) }));
+    await expectGuarded("/api/drafts/{id}", "PATCH", path, { text: draft.json?.text ?? "x" });
     check(`POST ${path}/reject (no reason)`, "/api/drafts/{id}/reject", "POST", await call("POST", `${path}/reject`, { body: {} }));
     check(`POST ${path}/regenerate (no instructions)`, "/api/drafts/{id}/regenerate", "POST", await call("POST", `${path}/regenerate`, { body: {} }));
     if (switches.json?.posting_enabled === false) {
@@ -643,8 +667,16 @@ try {
     if (rule.status === 201) {
       const path = `/api/notification-rules/${rule.json.id}`;
       check(`GET ${path}`, "/api/notification-rules/{id}", "GET", await call("GET", path));
-      check(`PATCH ${path}`, "/api/notification-rules/{id}", "PATCH", await call("PATCH", path, { body: { enabled: false } }));
-      check(`DELETE ${path}`, "/api/notification-rules/{id}", "DELETE", await call("DELETE", path));
+      const read = await etagOf(path);
+      const disabled = await call("PATCH", path, { body: { enabled: false }, headers: ifMatch(read) });
+      check(`PATCH ${path}`, "/api/notification-rules/{id}", "PATCH", disabled);
+      if (disabled.response.headers.get("etag") === read) fail(`PATCH ${path}`, "the change answered with the ETag it was made against");
+      await expectGuarded("/api/notification-rules/{id}", "PATCH", path, { enabled: true });
+      // The tag read before the change is stale now.
+      const staleDelete = await call("DELETE", path, { headers: ifMatch(read) });
+      check(`DELETE ${path} with a stale If-Match`, "/api/notification-rules/{id}", "DELETE", staleDelete);
+      expectStatus(`DELETE ${path} with a stale If-Match`, staleDelete, 412, "precondition_failed");
+      check(`DELETE ${path}`, "/api/notification-rules/{id}", "DELETE", await call("DELETE", path, { headers: ifMatch(await etagOf(path)) }));
       check(`DELETE ${path} (again)`, "/api/notification-rules/{id}", "DELETE", await call("DELETE", path));
     }
   }
@@ -652,7 +684,8 @@ try {
   const pushRule = await call("POST", "/api/notification-rules", { body: { event_type: "system_problem", channel: "push", recipients: ["contract-check@example.com"] } });
   check("POST /api/notification-rules (push)", "/api/notification-rules", "POST", pushRule);
   if (pushRule.status === 201) {
-    check("DELETE the push rule", "/api/notification-rules/{id}", "DELETE", await call("DELETE", `/api/notification-rules/${pushRule.json.id}`));
+    const pushPath = `/api/notification-rules/${pushRule.json.id}`;
+    check("DELETE the push rule", "/api/notification-rules/{id}", "DELETE", await call("DELETE", pushPath, { headers: ifMatch(await etagOf(pushPath)) }));
   } else {
     expectStatus("POST /api/notification-rules (push, no APNs settings)", pushRule, 409, "push_not_configured");
   }
@@ -743,7 +776,10 @@ try {
     // A location's recipients are a rule; one for every location is refused.
     const recipients = await call("POST", "/api/notification-rules", { body: { event_type: "location_report", location_id: locationId, recipients: ["contract-check@example.com"] } });
     check("POST /api/notification-rules (location_report)", "/api/notification-rules", "POST", recipients);
-    if (recipients.status === 201) check("DELETE the location_report rule", "/api/notification-rules/{id}", "DELETE", await call("DELETE", `/api/notification-rules/${recipients.json.id}`));
+    if (recipients.status === 201) {
+      const rulePath = `/api/notification-rules/${recipients.json.id}`;
+      check("DELETE the location_report rule", "/api/notification-rules/{id}", "DELETE", await call("DELETE", rulePath, { headers: ifMatch(await etagOf(rulePath)) }));
+    }
     expectStatus("POST /api/notification-rules (location_report, no location)", await call("POST", "/api/notification-rules", { body: { event_type: "location_report", recipients: ["contract-check@example.com"] } }), 400, "invalid_request");
   } else if (requireData) {
     fail("POST /api/locations/{id}/reports", "the seeded location is missing; was the seed applied?");
