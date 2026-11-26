@@ -69,9 +69,10 @@ const ok = (what, detail = "") => {
 
 const session = { cookie: "", csrf: "" };
 
-// `token`: the phone app's bearer token, sent beside whatever else the call carries.
-async function call(method, path, { body, signedIn = true, csrf = true, token } = {}) {
-  const headers = { accept: "application/json" };
+// `token`: the phone app's bearer token, sent beside whatever else the call carries. `headers`: more headers
+// (`If-Match`, D-108).
+async function call(method, path, { body, signedIn = true, csrf = true, token, headers: extra = {} } = {}) {
+  const headers = { accept: "application/json", ...extra };
   if (signedIn && session.cookie) headers.cookie = session.cookie;
   if (signedIn && csrf && session.csrf && method !== "GET") headers["x-csrf-token"] = session.csrf;
   if (token) headers.authorization = `Bearer ${token}`;
@@ -107,6 +108,11 @@ function check(name, specPath, method, got) {
   const { declared, schemaPath } = declaredResponse(operation, got.status);
   if (!declared) {
     return fail(name, `status ${got.status} is not in the spec (declared: ${Object.keys(operation.responses ?? {}).join(", ")})\n      ${got.text.slice(0, 300)}`);
+  }
+  // An ETag is answered exactly where the spec declares one (D-108).
+  const etag = got.response.headers.get("etag");
+  if (Boolean(declared.headers?.ETag) !== (etag !== null)) {
+    return fail(name, declared.headers?.ETag ? "the spec declares an ETag and the answer has none" : `an ETag the spec does not declare: ${etag}`);
   }
   if (!declared.content?.["application/json"]) return ok(name, `-> ${got.status}`);
   if (!got.contentType.startsWith("application/json") || got.json === undefined) {
@@ -183,6 +189,15 @@ async function checkRefusedBodies() {
   }
 }
 
+// The ETag a GET of `path` answers with, or "" (and a failure) if it has none.
+async function etagOf(path) {
+  const got = await call("GET", path);
+  const etag = got.response.headers.get("etag");
+  if (got.status !== 200 || !etag) fail(`ETag of ${path}`, `expected a 200 with an ETag, got ${got.status} with ${etag}`);
+  return etag ?? "";
+}
+const ifMatch = (etag) => ({ "if-match": etag });
+
 const isOpen = (operation) => Array.isArray(operation.security) && operation.security.length === 0;
 const plainGets = Object.entries(spec.paths ?? {}).filter(
   ([path, item]) => item.get && !path.includes("{") && !(item.get.parameters ?? []).some((p) => p.required),
@@ -214,11 +229,21 @@ try {
   if (created.status === 201) {
     const path = `/api/clients/${created.json.id}`;
     check(`GET ${path}`, "/api/clients/{id}", "GET", await call("GET", path));
-    check(`PATCH ${path}`, "/api/clients/{id}", "PATCH", await call("PATCH", path, { body: { archived: true } }));
+    const read = await etagOf(path);
+    const archived = await call("PATCH", path, { body: { archived: true }, headers: ifMatch(read) });
+    check(`PATCH ${path}`, "/api/clients/{id}", "PATCH", archived);
+    if (archived.response.headers.get("etag") === read) fail(`PATCH ${path}`, "the change answered with the ETag it was made against");
+    // A change needs the ETag of what was read, and one made against an older read is refused (D-108).
+    const without = await call("PATCH", path, { body: { notes: "x" } });
+    check(`PATCH ${path} without If-Match`, "/api/clients/{id}", "PATCH", without);
+    expectStatus(`PATCH ${path} without If-Match`, without, 428, "precondition_required");
+    const stale = await call("PATCH", path, { body: { notes: "x" }, headers: ifMatch(read) });
+    check(`PATCH ${path} with a stale If-Match`, "/api/clients/{id}", "PATCH", stale);
+    expectStatus(`PATCH ${path} with a stale If-Match`, stale, 412, "precondition_failed");
     check("POST /api/clients (same name)", "/api/clients", "POST", await call("POST", "/api/clients", { body: { name } }));
     // A client is bookkeeping (D-102): deleting it unlinks its locations, and this one has none.
-    check(`DELETE ${path}`, "/api/clients/{id}", "DELETE", await call("DELETE", path));
-    check(`DELETE ${path} (again)`, "/api/clients/{id}", "DELETE", await call("DELETE", path));
+    check(`DELETE ${path}`, "/api/clients/{id}", "DELETE", await call("DELETE", path, { headers: ifMatch(await etagOf(path)) }));
+    check(`DELETE ${path} (again)`, "/api/clients/{id}", "DELETE", await call("DELETE", path, { headers: ifMatch(read) }));
     expectStatus(`GET ${path} (deleted)`, await call("GET", path), 404, "not_found");
   }
   check("POST /api/clients (bad body)", "/api/clients", "POST", await call("POST", "/api/clients", { body: { name: 5 } }));
