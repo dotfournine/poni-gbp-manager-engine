@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://poni-gbp.invalid/knowledge/settings.schema.json",
-  "title": "Content and reply settings: a layer holds any of the fields, a complete set holds all",
+  "title": "Content, reply and report settings: a layer holds any of the content or reply fields, a complete set holds all",
   "$defs": {
     "lengthRange": {
       "type": "object",
@@ -275,6 +275,38 @@
             "temperature"
           ]
         }
+      ]
+    },
+    "report": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "format": {
+          "enum": [
+            "html",
+            "pdf"
+          ]
+        },
+        "sections": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "summary",
+              "at_a_glance",
+              "reviews",
+              "topics",
+              "employee_recognition",
+              "highlights",
+              "visibility"
+            ]
+          }
+        }
+      },
+      "required": [
+        "format",
+        "sections"
       ]
     }
   }

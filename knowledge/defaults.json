@@ -95,6 +95,18 @@
     "auto_reply_daily_cap": 100,
     "auto_reply_pause_after_failures": 3
   },
+  "report": {
+    "format": "html",
+    "sections": [
+      "summary",
+      "at_a_glance",
+      "reviews",
+      "topics",
+      "employee_recognition",
+      "highlights",
+      "visibility"
+    ]
+  },
   "analysis": {
     "enabled": true,
     "analyzer_provider": "dashscope",

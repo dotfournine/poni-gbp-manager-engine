@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 
+import psycopg
 import pytest
 
 from poni_tools import cli, knowledge, migrate, seed
@@ -35,7 +36,7 @@ def test_seed_fills_every_table(migrated, kb):
     assert result.changed and result.previous is None and result.version == files.version()
 
     assert migrated.execute("SELECT version, format, seeded_at, content_hash FROM kb_meta").fetchall() == [
-        (files.version(), 2, T1, files.content_hash())
+        (files.version(), 3, T1, files.content_hash())
     ]
     assert [r[0] for r in migrated.execute("SELECT key FROM kb_industries ORDER BY position")] == [
         "food_beverage",
@@ -48,6 +49,9 @@ def test_seed_fills_every_table(migrated, kb):
     # The defaults are typed columns, one row per bundle (D-107); read back as JSON they are the file's objects.
     assert one(migrated, "SELECT to_jsonb(d) - 'id' FROM kb_content_defaults d") == files.defaults["content"]
     assert one(migrated, "SELECT to_jsonb(d) - 'id' FROM kb_reply_defaults d") == files.defaults["reply"]
+    assert one(migrated, "SELECT to_jsonb(d) - 'id' FROM kb_report_defaults d") == files.defaults["report"]
+    # A list keeps the file's order through the text[] column (D-111).
+    assert one(migrated, "SELECT sections FROM kb_report_defaults") == files.defaults["report"]["sections"]
     assert (
         one(migrated, "SELECT words_to_avoid FROM kb_content_defaults") == files.defaults["content"]["words_to_avoid"]
     )
@@ -140,6 +144,20 @@ def test_an_incomplete_pack_is_refused_and_nothing_changes(migrated, kb):
     assert "Nothing was seeded" in message
     assert migrated.execute("SELECT version, seeded_at FROM kb_meta").fetchall() == [(first.version, T1)]
     assert one(migrated, "SELECT count(*) FROM kb_model_prices") == 4
+
+
+def test_a_reply_default_that_switches_auto_reply_on_is_refused_by_the_database(migrated, kb):
+    # Discovery copies this row into every new location (D-111): the table itself refuses a switch that is on,
+    # whatever wrote the row, and the seed's own check refuses it first (test_check).
+    seed.seed(migrated, knowledge.load(kb.root), T1)
+    with pytest.raises(psycopg.errors.CheckViolation, match="kb_reply_defaults_auto_reply_enabled_check"):
+        migrated.execute("UPDATE kb_reply_defaults SET auto_reply_enabled = true")
+    # A row written whole, as a seed writes it.
+    migrated.execute("CREATE TEMP TABLE switched_on AS SELECT * FROM kb_reply_defaults")
+    migrated.execute("UPDATE switched_on SET auto_reply_enabled = true")
+    migrated.execute("DELETE FROM kb_reply_defaults")
+    with pytest.raises(psycopg.errors.CheckViolation, match="kb_reply_defaults_auto_reply_enabled_check"):
+        migrated.execute("INSERT INTO kb_reply_defaults SELECT * FROM switched_on")
 
 
 def test_a_database_that_was_not_migrated_says_so(db, kb):

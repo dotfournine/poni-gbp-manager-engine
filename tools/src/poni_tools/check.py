@@ -244,6 +244,10 @@ def check(kb: Knowledge) -> list[str]:
     problems += _reply_problems("defaults.json", kb.defaults["reply"], complete=True)
     if kb.defaults["reply"]["fallback_language"] not in kb.defaults["reply"]["reply_languages"]:
         problems.append("defaults.json: reply.fallback_language is not one of reply_languages")
+    # Every new location gets these, and a save of `pdf` is refused until PDF reports exist (D-111): a `pdf`
+    # default would leave every new location with report settings it cannot save as they are.
+    if kb.defaults["report"]["format"] != "html":
+        problems.append("defaults.json: report.format must be html; PDF reports are not supported yet")
     for task in ("analyzer", "generator", "judge", "summary", "posts"):
         model = kb.defaults["analysis"][f"{task}_model"]
         if model not in kb.models["prices"]:
