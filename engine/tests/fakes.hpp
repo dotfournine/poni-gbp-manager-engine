@@ -9,6 +9,7 @@
 #include "connectors/gbp/performance.hpp"
 #include "connectors/gbp/reader.hpp"
 #include "connectors/gbp/writer.hpp"
+#include "connectors/google/places.hpp"
 #include "connectors/notify/apns.hpp"
 #include "connectors/notify/channel.hpp"
 #include "connectors/identity/provider.hpp"
@@ -195,7 +196,10 @@ public:
         gbp::Location location;
         location.name = "locations/" + location_id;
         location.title = std::move(title);
-        location.raw = boost::json::object{{"name", location.name}, {"title", *location.title}};
+        // Every location is on Maps, so discovery can ask Places for its time zone (D-109).
+        location.metadata = gbp::LocationMetadata{.placeId = "place-" + location_id, .mapsUri = std::nullopt};
+        location.raw = boost::json::object{
+            {"name", location.name}, {"title", *location.title}, {"metadata", boost::json::object{{"placeId", *location.metadata->placeId}}}};
         locations.push_back(std::move(location));
     }
 
@@ -808,6 +812,23 @@ public:
         if (on_list) on_list();
         if (failure) co_return std::unexpected(*failure);
         co_return users;
+    }
+};
+
+// Google Places' time zones: the zone of each place id the test names, the
+// fallback for any other, or a failure; and every id that was asked.
+class FakePlaceTimeZones final : public google::PlaceTimeZones {
+public:
+    std::map<std::string, std::string> zones;
+    std::string fallback = "America/New_York";
+    std::optional<google::ApiError> fail;
+    std::vector<std::string> asked;
+
+    boost::asio::awaitable<google::Result<std::string>> time_zone(std::string place_id) override {
+        asked.push_back(place_id);
+        if (fail) co_return std::unexpected(*fail);
+        const auto found = zones.find(place_id);
+        co_return found == zones.end() ? fallback : found->second;
     }
 };
 
