@@ -133,6 +133,11 @@ bool is_directory_host(const boost::urls::url& url);
 // characters and %XX escapes, as form_encode writes it.
 bool is_directory_user_list_url(const boost::urls::url& url);
 
+// True when the address names Google Places' host, places.googleapis.com,
+// in any case, with a trailing dot, a port or another scheme: the host to
+// which the client sends one kind of request, the one below, and nothing else.
+bool is_places_host(const boost::urls::url& url);
+
 // An id as Google's are, of accounts, locations, reviews and local posts:
 // letters, digits, '-' and '_' (ASCII, whatever the locale), at most 128 of
 // them. The ids the four write addresses take.
@@ -203,6 +208,12 @@ struct ClientResponse {
     std::string body;
     bool ok() const { return status >= 200 && status < 300; }
 };
+
+// True for the only request the client sends Google Places, a place's time
+// zone (D-109): a GET of https://places.googleapis.com/v1/places/{id}, the id
+// as is_plain_id says, no query, and the header X-Goog-FieldMask exactly once
+// and exactly "timeZone". The key travels in X-Goog-Api-Key, never in the address.
+bool is_place_time_zone_request(const ClientRequest& request);
 
 // Why the client will not send this request, or nothing if it may be sent:
 // the rule above for its method and address, and what its headers and body

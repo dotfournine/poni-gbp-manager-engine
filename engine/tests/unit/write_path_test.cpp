@@ -4,8 +4,8 @@
 // post, the edit of a local post), each of which the client refuses to send
 // anywhere else; the copy and the delete of a report's page in the public
 // bucket (D-104), which go to that bucket and nowhere else; the one read
-// of Google's Admin SDK, the list of users (D-106); and the email the Gmail
-// channel builds.
+// of Google's Admin SDK, the list of users (D-106); the one read of Google
+// Places, a place's time zone (D-109); and the email the Gmail channel builds.
 
 #include "connectors/gbp/writer.hpp"
 #include "connectors/notify/gmail.hpp"
@@ -1344,5 +1344,148 @@ TEST(OutboundDirectory, TheScriptedClientRefusesThemToo) {
     ASSERT_EQ(http.refused.size(), 2u);
     http.reply(200, R"({"users": []})");
     EXPECT_EQ(test::run(io, http.send(request_to(http::ClientMethod::get, kUserListUrl))).status, 200u);
+    EXPECT_EQ(http.requests.size(), 1u);
+}
+
+// ---- the outbound client: Google Places takes one GET, a place's time zone (D-109) ----------
+
+namespace {
+
+constexpr std::string_view kPlaceUrl = "https://places.googleapis.com/v1/places/ChIJ-made_up-0123";
+
+http::ClientRequest place_request(http::ClientMethod method, std::string_view address, std::vector<std::string> masks = {"timeZone"}) {
+    auto request = request_to(method, address);
+    request.headers.emplace_back("X-Goog-Api-Key", "test-places-key");
+    for (auto& mask : masks) request.headers.emplace_back("X-Goog-FieldMask", std::move(mask));
+    return request;
+}
+
+std::vector<std::string> other_place_addresses() {
+    const std::string place(kPlaceUrl);
+    return {
+        "https://places.googleapis.com/v1/places",
+        "https://places.googleapis.com/v1/places/",
+        place + "/photos",
+        place + "/photos/p1/media",
+        "https://places.googleapis.com/v1/places:searchText",
+        "https://places.googleapis.com/v1/places:searchNearby",
+        "https://places.googleapis.com/v1/places:autocomplete",
+        "https://places.googleapis.com/v2/places/ChIJ-made_up-0123",
+        "https://places.googleapis.com/places/ChIJ-made_up-0123",
+        place + "?fields=timeZone",
+        place + "?key=test-places-key",
+        place + "?",
+        place + "#x",
+        "https://places.googleapis.com/v1/places/%2E%2E",
+        "https://places.googleapis.com/v1/places/..",
+        "https://places.googleapis.com/v1/places/a%2Fb",
+        "https://places.googleapis.com/v1/places/ChIJ%2Dx",
+        "https://places.googleapis.com:443/v1/places/ChIJ-made_up-0123",
+        "https://user@places.googleapis.com/v1/places/ChIJ-made_up-0123",
+        "http://places.googleapis.com/v1/places/ChIJ-made_up-0123",
+        "https://PLACES.googleapis.com/v1/places/ChIJ-made_up-0123",
+        "https://places.googleapis.com./v1/places/ChIJ-made_up-0123",
+    };
+}
+
+}  // namespace
+
+TEST(OutboundPlaces, TheOneRequestIsAGetOfAPlacesTimeZone) {
+    EXPECT_FALSE(http::why_refused(place_request(http::ClientMethod::get, kPlaceUrl)));
+    EXPECT_TRUE(http::is_place_time_zone_request(place_request(http::ClientMethod::get, kPlaceUrl)));
+    EXPECT_TRUE(http::is_places_host(boost::urls::url(kPlaceUrl)));
+    // The header's name in any case, as HTTP takes it.
+    auto lower = request_to(http::ClientMethod::get, kPlaceUrl);
+    lower.headers.emplace_back("x-goog-fieldmask", "timeZone");
+    EXPECT_FALSE(http::why_refused(lower));
+}
+
+TEST(OutboundPlaces, EveryOtherMethodIsRefused) {
+    for (const auto method : {http::ClientMethod::post, http::ClientMethod::put, http::ClientMethod::patch, http::ClientMethod::del}) {
+        const auto refusal = http::why_refused(place_request(method, kPlaceUrl));
+        ASSERT_TRUE(refusal);
+        EXPECT_THAT(std::string(*refusal), HasSubstr("Places"));
+        // The address alone says so too.
+        EXPECT_TRUE(http::why_refused(method, boost::urls::url(kPlaceUrl)));
+    }
+}
+
+TEST(OutboundPlaces, EveryOtherAddressIsRefused) {
+    for (const auto& address : other_place_addresses()) {
+        const boost::urls::url url(address);
+        EXPECT_TRUE(http::is_places_host(url)) << address;
+        for (const auto method : {http::ClientMethod::get, http::ClientMethod::post, http::ClientMethod::put, http::ClientMethod::patch,
+                                  http::ClientMethod::del}) {
+            const auto request = place_request(method, address);
+            EXPECT_FALSE(http::is_place_time_zone_request(request)) << address;
+            const auto refusal = http::why_refused(request);
+            ASSERT_TRUE(refusal) << address;
+            EXPECT_THAT(std::string(*refusal), HasSubstr("Places")) << address;
+            EXPECT_TRUE(http::why_refused(method, url)) << address;
+        }
+    }
+}
+
+TEST(OutboundPlaces, TheFieldMaskIsTheTimeZoneOnceAndNothingElse) {
+    const std::vector<std::vector<std::string>> masks{
+        {}, {""}, {"timeZone", "timeZone"}, {"timeZone", "location"}, {"timeZone,location"}, {"*"}, {"timezone"}, {" timeZone"},
+        {"timeZone "}, {"location"}, {"utcOffsetMinutes"}, {"places.timeZone"},
+    };
+    for (const auto& mask : masks) {
+        const auto request = place_request(http::ClientMethod::get, kPlaceUrl, mask);
+        EXPECT_FALSE(http::is_place_time_zone_request(request)) << mask.size();
+        const auto refusal = http::why_refused(request);
+        ASSERT_TRUE(refusal) << mask.size();
+        EXPECT_THAT(std::string(*refusal), HasSubstr("Places"));
+    }
+}
+
+TEST(OutboundPlaces, AHostThatOnlyLooksLikeItIsAnotherHost) {
+    EXPECT_FALSE(http::is_places_host(boost::urls::url("https://places.googleapis.com.example/v1/places/x")));
+    EXPECT_FALSE(http::is_places_host(boost::urls::url("https://xplaces.googleapis.com/v1/places/x")));
+    EXPECT_FALSE(http::is_place_time_zone_request(place_request(http::ClientMethod::get, "https://places.googleapis.com.example/v1/places/x")));
+}
+
+TEST(OutboundPlaces, TheClientRefusesThemBeforeOpeningAConnection) {
+    RefusingClient refusing;
+    const auto rule = std::string(*http::why_refused(place_request(http::ClientMethod::post, kPlaceUrl)));
+    std::vector<http::ClientRequest> requests;
+    for (const auto method : {http::ClientMethod::post, http::ClientMethod::put, http::ClientMethod::patch, http::ClientMethod::del}) {
+        requests.push_back(place_request(method, kPlaceUrl));
+    }
+    for (const auto& address : other_place_addresses()) requests.push_back(place_request(http::ClientMethod::get, address));
+    requests.push_back(place_request(http::ClientMethod::get, kPlaceUrl, {}));
+    requests.push_back(place_request(http::ClientMethod::get, kPlaceUrl, {"timeZone", "timeZone"}));
+    requests.push_back(place_request(http::ClientMethod::get, kPlaceUrl, {"*"}));
+    for (auto& request : requests) {
+        const std::string address(request.url.buffer());
+        // invalid_argument, not a network error: nothing was resolved or connected.
+        try {
+            refusing.send(std::move(request));
+            ADD_FAILURE() << "sent: " << address;
+        } catch (const std::invalid_argument& e) {
+            EXPECT_THAT(std::string(e.what()), HasSubstr("Places")) << address;
+        }
+    }
+    EXPECT_THAT(rule, HasSubstr("Places"));
+}
+
+TEST(OutboundPlaces, TheClientLetsTheTimeZoneThrough) {
+    // It passes the rule and is sent to the mock's address, where nothing listens: a transport error, not a refusal.
+    RefusingClient refusing;
+    EXPECT_THROW(refusing.send(place_request(http::ClientMethod::get, kPlaceUrl)), boost::system::system_error);
+}
+
+TEST(OutboundPlaces, TheScriptedClientRefusesThemToo) {
+    boost::asio::io_context io;
+    test::FakeHttp http;
+    EXPECT_THROW(test::run(io, http.send(place_request(http::ClientMethod::post, kPlaceUrl))), std::invalid_argument);
+    EXPECT_THROW(test::run(io, http.send(place_request(http::ClientMethod::get, "https://places.googleapis.com/v1/places:searchText"))),
+                 std::invalid_argument);
+    EXPECT_THROW(test::run(io, http.send(place_request(http::ClientMethod::get, kPlaceUrl, {"*"}))), std::invalid_argument);
+    EXPECT_TRUE(http.requests.empty()) << "a refused request is not a sent one";
+    ASSERT_EQ(http.refused.size(), 3u);
+    http.reply(200, R"({"timeZone": {"id": "America/New_York"}})");
+    EXPECT_EQ(test::run(io, http.send(place_request(http::ClientMethod::get, kPlaceUrl))).status, 200u);
     EXPECT_EQ(http.requests.size(), 1u);
 }
