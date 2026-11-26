@@ -205,13 +205,13 @@ std::optional<model::NotificationRule> get_rule(pqxx::transaction_base& tx, std:
 }
 
 Result<model::NotificationRule> create_rule(pqxx::transaction_base& tx, audit::Writer& audit, const NewRule& rule, bool push_configured) {
-    if (!std::ranges::contains(kEventTypes, std::string_view(rule.event_type)) || rule.event_type == kEventTest) {
-        return invalid("\"event_type\" must be escalation, approval_needed, system_problem or location_report.");
+    if (!std::ranges::contains(kRuleEventTypes, std::string_view(rule.event_type))) {
+        return invalid("\"event_type\" must be escalation, approval_needed or system_problem.");
     }
     const std::string channel = rule.channel.value_or(std::string(kEmailChannel));
     if (channel != kEmailChannel && channel != kPushChannel) return invalid("\"channel\" must be email or push.");
     if (channel == kPushChannel) {
-        // Drafts waiting and a location's reports stay email (D-097).
+        // Drafts waiting stay email (D-097).
         if (rule.event_type != kEventEscalation && rule.event_type != kEventSystemProblem) {
             return invalid("A push rule is for escalation or system_problem only.");
         }
@@ -220,9 +220,6 @@ Result<model::NotificationRule> create_rule(pqxx::transaction_base& tx, audit::W
         }
     }
     const auto& location_id = rule.location_id.value();
-    if (rule.event_type == kEventLocationReport && !location_id) {
-        return invalid("A rule for a location's reports must name the location whose reports it sends.");
-    }
     const auto recipients = clean_recipients(rule.recipients, 1);
     if (!recipients) {
         return invalid("\"recipients\" must be 1 to 20 valid email addresses.");
@@ -308,20 +305,6 @@ std::optional<model::NotificationDelivery> get_delivery(pqxx::transaction_base& 
 }
 
 // ---- a report's sends ------------------------------------------------------------
-
-std::vector<std::string> report_recipients(pqxx::transaction_base& tx, std::int64_t location_id) {
-    std::vector<std::string> out;
-    for (const auto& row : tx.exec("SELECT a.address FROM notification_rules n, unnest(n.recipients) a(address) "
-                                   "WHERE n.event_type = $1 AND n.channel = $2 AND n.enabled AND n.location_id = $3",
-                                   pqxx::params{kEventLocationReport, kEmailChannel, location_id})) {
-        out.push_back(row[0].as<std::string>());
-    }
-    // Sorted here, by bytes: the database's collation would not sort the punctuation of an address the same everywhere.
-    std::ranges::sort(out);
-    const auto repeats = std::ranges::unique(out);
-    out.erase(repeats.begin(), repeats.end());
-    return out;
-}
 
 void record_report_deliveries(pqxx::transaction_base& tx, std::int64_t report_id, std::int64_t location_id,
                               std::optional<std::int64_t> requested_by, std::string_view event_key, std::string_view subject,

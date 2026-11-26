@@ -202,7 +202,9 @@ asio::awaitable<repo::Result<model::Report>> Reporter::send(std::int64_t report_
                                                           audit::Actor actor) {
     // The row's lock ends with this transaction: none is open while the emails go out.
     auto mail = co_await db_.tx(
-        [report_id, &only, base = link_base()](pqxx::work& tx) { return repo::prepare_report_send(tx, report_id, only, base); });
+        [report_id, &only, base = link_base()](pqxx::work& tx) {
+            return repo::prepare_report_send(tx, report_id, only, base, repo::SendFor::person);
+        });
     if (!mail) co_return std::unexpected(mail.error());
     auto sent = co_await deliver(report_id, std::move(*mail), std::move(actor));
     co_return sent;

@@ -2218,12 +2218,14 @@ paths:
       operationId: sendReport
       summary: Send a report by email
       description: |
-        Sends a `ready` report to the location's recipients (D-104), as often
-        as a person likes. Each address gets its own email with the report's
-        link: one `To:` and no copy. Without a body, or without
-        `recipients`, it goes to every address in `Report.recipients`; with
-        `recipients`, to those, each of which must be one of
-        `Report.recipients` (compared after trimming and lower-casing).
+        Sends a `ready` report to its location's recipients (D-104), as often
+        as a person likes: the recipients of every report schedule of the
+        location, enabled or not (D-111). Each address gets its own email
+        with the report's link: one `To:` and no copy. Without a body, or
+        without `recipients`, it goes to every address in
+        `Report.recipients`; with `recipients`, to those, each of which must
+        be one of `Report.recipients` (compared after trimming and
+        lower-casing). Any other address is a 400, and nothing is sent.
 
         The request blocks until every address was tried, one after
         another: a few seconds for ten addresses, and minutes when Gmail
@@ -2236,7 +2238,7 @@ paths:
         that it arrived; a `failed` row after a network error or a timeout
         may be a message Gmail did accept. What was read when the send began
         decides: sending switched off, the location switched off or an
-        address taken out of the rule while a send is under way does not
+        address taken out of a schedule while a send is under way does not
         stop the emails still to come.
 
         The engine does not check earlier sends: a second send to an
@@ -3397,10 +3399,9 @@ paths:
       description: |
         Who is told about what (FR-7): event type × location → recipients
         (D-102). A rule without a location applies to every location and to
-        events that belong to none (system problems). A rule for
-        `location_report` holds the addresses a location's reports are sent
-        to, for example its store manager's, and must name the location
-        (D-085). A `push` rule (D-097) is for `escalation` or
+        events that belong to none (system problems). No rule is for a
+        location's reports: their recipients are the location's report
+        schedules' (D-111). A `push` rule (D-097) is for `escalation` or
         `system_problem` only; its recipients are staff, and each is
         delivered to that person's devices with the phone app.
       tags: [notifications]
@@ -4016,8 +4017,11 @@ components:
         (`PONI_PUBLIC_BUCKET`): a report is not created without one, one
         cannot be sent after the bucket was taken away, because its page
         has no address, and a report with a page cannot be discarded,
-        because the page cannot be moved. `no_recipients`: no enabled `location_report`
-        rule names an address for the location.
+        because the page cannot be moved. `no_recipients`: no report
+        schedule of the location names an address (D-111), or, for a
+        schedule's own send, the schedule that made the report names none,
+        is gone, or was switched off or had its `auto_send` switched off
+        while the report was built.
       content:
         application/json:
           schema:
@@ -6673,9 +6677,10 @@ components:
         only; its ids are the review and the location.
 
         `location_report`: a location's report was sent (D-102, D-104). It
-        is the report's email to the location's recipients: subject `Your
-        Google reviews and visibility report, <period>`. Email only, and a
-        rule for it names one location. Its deliveries are written by a send
+        is the type of a report's delivery rows only, and no rule has it
+        (D-111): the report's email to the recipients of the location's
+        report schedules, subject `Your Google reviews and visibility
+        report, <period>`. Email only. Its deliveries are written by a send
         of a report, one per address, already `sent` or `failed`, with
         `report_id` and `requested_by`. It carries the location's id.
 
@@ -6761,7 +6766,7 @@ components:
           format: int64
         event_type:
           type: string
-          enum: [escalation, approval_needed, system_problem, location_report]
+          enum: [escalation, approval_needed, system_problem]
         location_id:
           type: [integer, "null"]
           format: int64
@@ -6805,7 +6810,7 @@ components:
       properties:
         event_type:
           type: string
-          enum: [escalation, approval_needed, system_problem, location_report]
+          enum: [escalation, approval_needed, system_problem]
         channel:
           type: string
           enum: [email, push]
@@ -6819,7 +6824,7 @@ components:
           format: int64
           description: |
             The location the rule is for; null or left out for every
-            location. A `location_report` rule must name one.
+            location.
         recipients:
           type: array
           minItems: 1
@@ -7716,9 +7721,9 @@ components:
           items:
             type: string
           description: |
-            The addresses a send can go to now: those of the location's
-            enabled `location_report` rule, sorted, each once. Empty in a
-            list of reports.
+            The addresses a person's send can go to now: every recipient of
+            the location's report schedules, enabled or not, sorted, each
+            once (D-111). Empty in a list of reports.
         deliveries:
           type: array
           items:
@@ -7806,9 +7811,10 @@ components:
           items:
             type: string
           description: |
-            Some of `Report.recipients`, compared after trimming and
-            lower-casing; an address that is not one of them is a 400. Left
-            out: every one of them.
+            Some of `Report.recipients`, the union of the recipients of the
+            location's report schedules, compared after trimming and
+            lower-casing; an address that is not one of them is a 400 and
+            nothing is sent. Left out: every one of them.
     ReportFrequency:
       type: string
       enum: [daily, weekly, monthly]
@@ -7870,9 +7876,14 @@ components:
           type: boolean
           description: |
             Off (the default): a report this schedule builds is `ready` and
-            nothing is sent (`auto_send_status` `off`). On: it is sent once,
-            when it is built, if the checks of a send pass then
-            (`auto_send_status` `done`); otherwise it stays `pending` for a
+            nothing is sent (`auto_send_status` `off`). On: it sends the
+            reports this schedule builds to this schedule's `recipients`,
+            once, by itself, when each is built, if the checks of a send pass
+            then (`auto_send_status` `done`). This switch and `enabled` are
+            read again when a report becomes ready: a schedule switched off,
+            or whose `auto_send` was switched off, while its report builds
+            sends nothing, and neither does a schedule deleted meanwhile.
+            Whenever a report is not sent by itself, it stays `pending` for a
             person to send. No reason is stored: a person's send says why it
             is refused.
         recipients:

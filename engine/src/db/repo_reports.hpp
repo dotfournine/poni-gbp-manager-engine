@@ -94,13 +94,23 @@ struct ReportMail {
     std::string body;
 };
 
+// The union of the recipients of every schedule of the location, enabled or not, sorted by bytes, each once:
+// whom a person's send can reach (D-111).
+std::vector<std::string> report_recipients(pqxx::transaction_base& tx, std::int64_t location_id);
+
+// Whose send it is, which decides its recipients (D-111). `person`: the location's report_recipients, or
+// those of them a request names. `schedule`: the recipients of the schedule that made the report, of
+// the report's own location, while it is on and sends by itself; none, no schedule any more, or a
+// schedule switched off, and the send is refused.
+enum class SendFor { person, schedule };
+
 // The checks of a send, under the report's row lock, in this order: `only`, when given, names at
 // least one address; the report is ready; its location is switched on; email sending is on and a
-// mailbox is connected; there is a public bucket (`link_base`); the location has recipients; and
-// each address of `only` is one of them (trimmed and lower-cased first). Then the mail: to every
-// recipient, or to those of `only`, with the report's link in its body. Writes nothing.
+// mailbox is connected; there is a public bucket (`link_base`); there are recipients, as `who`
+// decides; and each address of `only` is one of them (trimmed and lower-cased first). Then the
+// mail: to every recipient, or to those of `only`, with the report's link in its body. Writes nothing.
 Result<ReportMail> prepare_report_send(pqxx::transaction_base& tx, std::int64_t report_id,
-                                       const std::optional<std::vector<std::string>>& only, std::string_view link_base);
+                                       const std::optional<std::vector<std::string>>& only, std::string_view link_base, SendFor who);
 
 // After the sends: one delivery row per address as it ended, under `event_key` and in the name of
 // the audit's actor (a person, or nobody: its schedule), the audit entry with the counts, and the

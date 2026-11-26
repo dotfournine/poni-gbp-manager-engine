@@ -700,7 +700,7 @@ using EscalationList = Paged<Escalation>;
 
 struct NotificationRule {
     std::int64_t id = 0;
-    std::string event_type;  // "escalation", "approval_needed", "system_problem" or "location_report"
+    std::string event_type;  // "escalation", "approval_needed" or "system_problem"
     std::optional<std::int64_t> location_id;  // nothing: every location
     std::optional<std::string> location_title;
     std::string channel;
@@ -984,8 +984,9 @@ struct Report {
     std::optional<std::string> summary;
     std::optional<std::string> summary_note;
     std::string created_at;
-    // The addresses a send can go to now (the location's enabled location_report rule), sorted, each once,
-    // and the report's rows of the delivery log, newest first. Both empty in a list.
+    // The addresses a person's send can go to now (every recipient of the location's report schedules,
+    // enabled or not, D-111), sorted, each once, and the report's rows of the delivery log, newest first.
+    // Both empty in a list.
     std::vector<std::string> recipients;
     std::vector<NotificationDelivery> deliveries;
 };
