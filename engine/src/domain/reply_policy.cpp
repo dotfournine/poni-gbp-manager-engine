@@ -58,12 +58,12 @@ GateDecision gate(const GateInput& input, const PolicyRules& policy) {
     } else if (input.contains_complaint) {
         reasons.emplace_back("contains a complaint");
     } else if (!input.has_text && !policy.auto_post_rating_only) {
-        reasons.emplace_back("auto-post is off for rating-only reviews");
+        reasons.emplace_back("auto reply is off for rating-only reviews");
     } else if (input.has_text && !policy.auto_post_positive) {
-        reasons.emplace_back("auto-post is off for positive reviews");
+        reasons.emplace_back("auto reply is off for positive reviews");
     }
     if (!reasons.empty()) return {std::string(kRouteApproval), std::move(reasons)};
-    return {std::string(kRouteAutoPost), {}};
+    return {std::string(kRouteAutoReply), {}};
 }
 
 }  // namespace poni::domain

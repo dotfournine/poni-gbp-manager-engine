@@ -548,7 +548,7 @@ TEST_F(Reports, TheSummaryTaskHasItsOwnProviderAndModel) {
     generate(chelsea_);
     EXPECT_EQ(llm_.requests.back().provider, "anthropic");
     EXPECT_EQ(llm_.requests.back().model, "claude-haiku-5-5");
-    // A change to it is no change to what was tested for auto-posting: the writer and the analyzer are as they were.
+    // A change to it is no change to what was tested for auto reply: the writer and the analyzer are as they were.
     EXPECT_EQ(read("/api/ai/settings").at("generator_model").as_string(), settings.at("generator_model").as_string());
 }
 

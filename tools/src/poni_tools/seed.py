@@ -9,7 +9,7 @@ never seeded.
 The engine keeps nothing of the knowledge base in memory and watches for
 nothing (D-084): the next read finds the new version. A version that changes
 what the analyzer is told about an industry changes the fingerprint of that
-industry's locations, so none of them auto-posts until a new go-live test
+industry's locations, so none of them auto replies until a new go-live test
 passes. The seed is where that is said: it returns those locations, and the
 command prints them for the person who seeds.
 """

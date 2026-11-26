@@ -130,9 +130,9 @@ TEST_F(Bodies, EveryRouteWithABodyRefusesWhatItsSchemaDoesNotAllow) {
     EXPECT_EQ(count("jobs"), queued) << "and queues nothing";
 }
 
-TEST_F(Bodies, ARefusedAutoPostingBodySwitchesNothingOn) {
+TEST_F(Bodies, ARefusedAutoReplyBodySwitchesNothingOn) {
     const auto target = spa_path("/auto-posting");
-    const auto on = [&] { return count(std::format("locations WHERE id = {} AND (auto_post_enabled OR auto_post_five_star)", spa_)); };
+    const auto on = [&] { return count(std::format("locations WHERE id = {} AND (auto_reply_enabled OR auto_reply_five_star)", spa_)); };
     const auto audited = count("audit_log");
 
     // Each of these was taken until D-092, with the member it does not know or the null left out.
@@ -226,7 +226,7 @@ TEST_F(Bodies, ReplySettingsTravelWholeAndTakeOnlyTheirOwnMembersAtEveryDepth) {
     expect_refused(with("voice", "emoji", R"({"allowed": true, "max": 1, "preferred": [], "size": 2})"), "voice.emoji.size", "inside the emoji rule");
     expect_refused(with("voice", "sign_off", "null"), "voice.sign_off", "a null field");
     expect_refused(with("localization", "script", R"("x")"), "localization.script", "localization");
-    expect_refused(with("policy", "auto_post", "true"), "policy.auto_post", "a rule it does not have");
+    expect_refused(with("policy", "auto_reply", "true"), "policy.auto_reply", "a rule it does not have");
     expect_refused(with("policy", "auto_post_min_stars", "null"), "policy.auto_post_min_stars", "a null rule");
     {
         auto body = settings_body(spa_);

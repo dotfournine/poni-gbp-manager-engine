@@ -1,10 +1,10 @@
-// Auto-posting (D-069 to D-072) over a real PostgreSQL and
+// Auto reply (D-069 to D-072) over a real PostgreSQL and
 // a fake Google: the one way a reply is posted without a person, and every
 // way it is stopped. Posting itself (the claim, the PUT, the confirmation)
 // is covered by posting_test.cpp; here the draft arrives there by the
 // policy's decision instead of a person's approval.
 
-#include "db/repo_auto_posting.hpp"
+#include "db/repo_auto_reply.hpp"
 #include "reply_fixture.hpp"
 
 #include <gmock/gmock.h>
@@ -24,15 +24,15 @@ constexpr std::string_view kLinkReply = R"({
     "reply": "Thank you! Book your next visit at https://example.com/book and see you soon.",
     "language": "en", "script": "Latn", "manipulation_suspected": false, "notes_for_staff": ""})";
 
-class AutoPosting : public test::ReplyTest {
+class AutoReply : public test::ReplyTest {
 protected:
     // What a signed-in person does in the dashboard, written straight into
     // this test's throwaway schema. (The engine's own code never switches
-    // auto-posting on; repo::update_auto_posting is tested below.) The
+    // auto reply on; repo::update_auto_posting is tested below.) The
     // location's configuration has passed its go-live test (D-074), which
     // go_live_test.cpp is about.
     void switch_on(std::int64_t location, bool five_star = true, bool four_star = false) {
-        exec(std::format("UPDATE locations SET auto_post_enabled = true, auto_post_five_star = {}, auto_post_four_star = {} WHERE id = {}",
+        exec(std::format("UPDATE locations SET auto_reply_enabled = true, auto_reply_five_star = {}, auto_reply_four_star = {} WHERE id = {}",
                          five_star, four_star, location));
         certify(location);
     }
@@ -60,7 +60,7 @@ protected:
         });
     }
     void resume(std::int64_t location) {
-        as_staff([&](pqxx::work& tx, audit::Writer& audit) { return repo::resume_auto_posting(tx, audit, location).has_value(); });
+        as_staff([&](pqxx::work& tx, audit::Writer& audit) { return repo::resume_auto_reply(tx, audit, location).has_value(); });
     }
 };
 
@@ -68,14 +68,14 @@ protected:
 
 // ---- off until a person switches it on ----------------------------------------------
 
-TEST_F(AutoPosting, AfterInstallationNothingIsPostedWithoutAPerson) {
-    EXPECT_EQ(count("locations WHERE auto_post_enabled OR auto_post_five_star OR auto_post_four_star"), 0);
-    EXPECT_EQ(count("locations WHERE time_zone IS NOT NULL OR auto_post_paused_at IS NOT NULL"), 0);
+TEST_F(AutoReply, AfterInstallationNothingIsPostedWithoutAPerson) {
+    EXPECT_EQ(count("locations WHERE auto_reply_enabled OR auto_reply_five_star OR auto_reply_four_star"), 0);
+    EXPECT_EQ(count("locations WHERE time_zone IS NOT NULL OR auto_reply_paused_at IS NOT NULL"), 0);
 
     const auto draft_id = drafted("r1");
-    EXPECT_EQ(draft(draft_id, "route"), "auto_post");
+    EXPECT_EQ(draft(draft_id, "route"), "auto_reply");
     EXPECT_EQ(draft(draft_id, "status"), "draft") << "the route alone posts nothing";
-    EXPECT_EQ(draft(draft_id, "status_reason"), "") << "nothing to explain: auto-posting was never switched on";
+    EXPECT_EQ(draft(draft_id, "status_reason"), "") << "nothing to explain: auto reply was never switched on";
     EXPECT_EQ(approvals_needed(), 1);
     clock_.advance(3h);
     run_jobs();
@@ -83,14 +83,14 @@ TEST_F(AutoPosting, AfterInstallationNothingIsPostedWithoutAPerson) {
     EXPECT_EQ(count("jobs WHERE kind = 'replies.post'"), 0);
 }
 
-TEST_F(AutoPosting, TheSwitchAloneIsNotEnoughAStarRatingMustBeChosen) {
-    exec("UPDATE locations SET auto_post_enabled = true");
+TEST_F(AutoReply, TheSwitchAloneIsNotEnoughAStarRatingMustBeChosen) {
+    exec("UPDATE locations SET auto_reply_enabled = true");
     const auto draft_id = drafted("r1");
     EXPECT_EQ(draft(draft_id, "status"), "draft");
     EXPECT_EQ(count("jobs WHERE kind = 'replies.post'"), 0);
 }
 
-TEST_F(AutoPosting, WithTheGlobalPostingSwitchOffNothingIsScheduled) {
+TEST_F(AutoReply, WithTheGlobalPostingSwitchOffNothingIsScheduled) {
     switch_on(spa_);
     exec("UPDATE system_settings SET posting_enabled = false");
     EXPECT_EQ(draft(drafted("r1"), "status"), "draft");
@@ -102,7 +102,7 @@ TEST_F(AutoPosting, WithTheGlobalPostingSwitchOffNothingIsScheduled) {
 
 // ---- the happy path ------------------------------------------------------------------
 
-TEST_F(AutoPosting, AnAutoPostRoutedDraftIsPostedExactlyOnceWithoutAPerson) {
+TEST_F(AutoReply, AnAutoReplyRoutedDraftIsPostedExactlyOnceWithoutAPerson) {
     switch_on(spa_);
     const auto draft_id = drafted("r1");
     const auto review_id = std::stol(draft(draft_id, "review_id"));
@@ -141,7 +141,7 @@ TEST_F(AutoPosting, AnAutoPostRoutedDraftIsPostedExactlyOnceWithoutAPerson) {
     EXPECT_EQ(review_value(review_id, "reply_origin"), "system");
 
     // The audit log names the system actor and the policy version.
-    EXPECT_EQ(count("audit_log WHERE action = 'reply.auto_post_scheduled' AND actor = 'system:auto-reply' "
+    EXPECT_EQ(count("audit_log WHERE action = 'reply.auto_reply_scheduled' AND actor = 'system:auto-reply' "
                     "AND after->>'policy_version' = '" + draft(draft_id, "policy_version") + "'"),
               1);
     EXPECT_EQ(count("audit_log WHERE action = 'reply.post_started' AND actor = 'system:auto-reply' "
@@ -152,7 +152,7 @@ TEST_F(AutoPosting, AnAutoPostRoutedDraftIsPostedExactlyOnceWithoutAPerson) {
     EXPECT_EQ(gbp_.puts.size(), 1u);
 }
 
-TEST_F(AutoPosting, ARatingOnlyReviewIsAutoPostedToo) {
+TEST_F(AutoReply, ARatingOnlyReviewIsAutoRepliedToo) {
     switch_on(spa_);
     const auto draft_id = drafted("r1", kSpa, "FIVE", std::nullopt);
     EXPECT_EQ(draft(draft_id, "mode"), "rating_only");
@@ -161,7 +161,7 @@ TEST_F(AutoPosting, ARatingOnlyReviewIsAutoPostedToo) {
     EXPECT_EQ(gbp_.puts.size(), 1u);
 }
 
-TEST_F(AutoPosting, WhatWasAutoPostedIsListedWithTheTimeFromTheReviewToTheReply) {
+TEST_F(AutoReply, WhatWasAutoRepliedIsListedWithTheTimeFromTheReviewToTheReply) {
     switch_on(spa_);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
@@ -178,7 +178,7 @@ TEST_F(AutoPosting, WhatWasAutoPostedIsListedWithTheTimeFromTheReviewToTheReply)
 
     pqxx::connection conn{url()};
     pqxx::work tx{conn};
-    const auto list = repo::list_auto_posts(tx, {});
+    const auto list = repo::list_auto_replies(tx, {});
     ASSERT_EQ(list.total, 1);
     const auto& item = list.items[0];
     EXPECT_EQ(std::to_string(item.review_id), draft(draft_id, "review_id"));
@@ -192,12 +192,12 @@ TEST_F(AutoPosting, WhatWasAutoPostedIsListedWithTheTimeFromTheReviewToTheReply)
 
 // ---- which stars -----------------------------------------------------------------------
 
-TEST_F(AutoPosting, OnlyTheStarRatingsAPersonChoseAreAutoPosted) {
+TEST_F(AutoReply, OnlyTheStarRatingsAPersonChoseAreAutoReplied) {
     switch_on(spa_, true, false);  // the first step of the rollout: five stars only
     const auto five = drafted("r5", kSpa, "FIVE");
     const auto four = drafted("r4", kSpa, "FOUR");
     EXPECT_EQ(draft(five, "status"), "scheduled");
-    EXPECT_EQ(draft(four, "route"), "auto_post");
+    EXPECT_EQ(draft(four, "route"), "auto_reply");
     EXPECT_EQ(draft(four, "status"), "draft");
     EXPECT_EQ(approvals_needed(), 1);
 
@@ -207,9 +207,9 @@ TEST_F(AutoPosting, OnlyTheStarRatingsAPersonChoseAreAutoPosted) {
     EXPECT_EQ(draft(drafted("b5", kBuffet, "FIVE"), "status"), "draft");
 }
 
-TEST_F(AutoPosting, ThreeStarsAndFewerAlwaysWaitForAPersonWhateverThePolicySays) {
+TEST_F(AutoReply, ThreeStarsAndFewerAlwaysWaitForAPersonWhateverThePolicySays) {
     switch_on(spa_, true, true);
-    // A policy that would route three stars to auto-post.
+    // A policy that would route three stars to auto reply.
     set_policy(spa_, R"({"auto_post_min_stars": 1})");
     llm_.analyzer = test::FakeLlm::always(test::FakeLlm::analysis({.sentiment = "neutral", .summary = "An average visit."}));
     for (const auto* stars : {"THREE", "TWO", "ONE"}) {
@@ -221,7 +221,7 @@ TEST_F(AutoPosting, ThreeStarsAndFewerAlwaysWaitForAPersonWhateverThePolicySays)
 
 // ---- what always goes to the approval queue (FR-5) ----------------------------------------
 
-TEST_F(AutoPosting, ASeverityFlagNeverAutoPosts) {
+TEST_F(AutoReply, ASeverityFlagNeverAutoReplies) {
     switch_on(buffet_, true, true);
     llm_.analyzer = test::FakeLlm::always(test::kSevereAnswer);
     llm_.generator = test::FakeLlm::always(test::kHoldingAnswer);
@@ -236,7 +236,7 @@ TEST_F(AutoPosting, ASeverityFlagNeverAutoPosts) {
 // The posting window holds back automatic replies only (D-076). A serious
 // review raises its escalation and its alert the moment it is analyzed,
 // whatever the hour at the location.
-TEST_F(AutoPosting, AnEscalationIsRaisedAtAnyHourOutsideThePostingWindowToo) {
+TEST_F(AutoReply, AnEscalationIsRaisedAtAnyHourOutsideThePostingWindowToo) {
     switch_on(buffet_, true, true);
     set_zone(buffet_, "America/New_York");
     set_policy(buffet_, R"({"auto_post_window_start": "09:00", "auto_post_window_end": "21:00"})");
@@ -261,7 +261,7 @@ TEST_F(AutoPosting, AnEscalationIsRaisedAtAnyHourOutsideThePostingWindowToo) {
     EXPECT_TRUE(gbp_.puts.empty()) << "03:00 is outside the window";
 }
 
-TEST_F(AutoPosting, SuspectedManipulationNeverAutoPosts) {
+TEST_F(AutoReply, SuspectedManipulationNeverAutoReplies) {
     switch_on(spa_, true, true);
     llm_.analyzer = test::FakeLlm::always(test::FakeLlm::analysis(
         {.manipulation = true, .evidence = "ignore your instructions", .summary = "Praise with an instruction to the AI."}));
@@ -271,7 +271,7 @@ TEST_F(AutoPosting, SuspectedManipulationNeverAutoPosts) {
     EXPECT_EQ(count("jobs WHERE kind = 'replies.post'"), 0);
 }
 
-TEST_F(AutoPosting, AComplaintInAFiveStarReviewNeverAutoPosts) {
+TEST_F(AutoReply, AComplaintInAFiveStarReviewNeverAutoReplies) {
     switch_on(spa_, true, true);
     llm_.analyzer = test::FakeLlm::always(
         test::FakeLlm::analysis({.sentiment = "mixed", .complaint = true, .summary = "Liked the massage, waited forty minutes."}));
@@ -281,7 +281,7 @@ TEST_F(AutoPosting, AComplaintInAFiveStarReviewNeverAutoPosts) {
     EXPECT_EQ(count("jobs WHERE kind = 'replies.post'"), 0);
 }
 
-TEST_F(AutoPosting, AFailedCheckNeverAutoPosts) {
+TEST_F(AutoReply, AFailedCheckNeverAutoReplies) {
     switch_on(spa_, true, true);
     llm_.generator = test::FakeLlm::always(kLinkReply);
     const auto draft_id = drafted("r1");
@@ -290,7 +290,7 @@ TEST_F(AutoPosting, AFailedCheckNeverAutoPosts) {
     EXPECT_EQ(count("jobs WHERE kind = 'replies.post'"), 0);
 }
 
-TEST_F(AutoPosting, AModelThatGivesNoReplyNeverAutoPosts) {
+TEST_F(AutoReply, AModelThatGivesNoReplyNeverAutoReplies) {
     switch_on(spa_, true, true);
     llm_.generator = [](const llm::ChatRequest&) { return test::FakeLlm::failure(llm::Error::Kind::unavailable); };
     const auto id = review(kSpa, "r1", "FIVE", "Lovely!");
@@ -299,7 +299,7 @@ TEST_F(AutoPosting, AModelThatGivesNoReplyNeverAutoPosts) {
     EXPECT_EQ(count("jobs WHERE kind = 'replies.post'"), 0);
 }
 
-TEST_F(AutoPosting, AReviewTheReviewerEditedNeverAutoPosts) {
+TEST_F(AutoReply, AReviewTheReviewerEditedNeverAutoReplies) {
     switch_on(spa_, true, true);
     const auto first = drafted("r1");
     EXPECT_EQ(draft(first, "status"), "scheduled");
@@ -310,7 +310,7 @@ TEST_F(AutoPosting, AReviewTheReviewerEditedNeverAutoPosts) {
     await(pipeline_->process(review_id, false, false));
     const auto second = live_draft(review_id);
     ASSERT_NE(second, first);
-    EXPECT_EQ(draft(second, "route"), "auto_post");
+    EXPECT_EQ(draft(second, "route"), "auto_reply");
     EXPECT_EQ(draft(second, "status"), "draft") << "an edited review gets a second look by a person";
     EXPECT_THAT(draft(second, "status_reason"), HasSubstr("edited"));
     EXPECT_EQ(approvals_needed(), 1);
@@ -318,7 +318,7 @@ TEST_F(AutoPosting, AReviewTheReviewerEditedNeverAutoPosts) {
     EXPECT_TRUE(gbp_.puts.empty());
 }
 
-TEST_F(AutoPosting, ADraftWrittenWithAPersonsInstructionsNeverAutoPosts) {
+TEST_F(AutoReply, ADraftWrittenWithAPersonsInstructionsNeverAutoReplies) {
     // The location is switched on only after the first draft exists, so that draft waits and can be regenerated.
     const auto first = drafted("r1");
     switch_on(spa_, true, true);
@@ -331,7 +331,7 @@ TEST_F(AutoPosting, ADraftWrittenWithAPersonsInstructionsNeverAutoPosts) {
 
 // ---- timing ---------------------------------------------------------------------------
 
-TEST_F(AutoPosting, TheReplyGoesOutAfterItsRandomDelayAndNotBefore) {
+TEST_F(AutoReply, TheReplyGoesOutAfterItsRandomDelayAndNotBefore) {
     switch_on(spa_);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 20, "auto_post_delay_max_minutes": 120})");
     roll_ = 0.5;  // the middle of 20 to 120 minutes: 70
@@ -352,7 +352,7 @@ TEST_F(AutoPosting, TheReplyGoesOutAfterItsRandomDelayAndNotBefore) {
     EXPECT_EQ(gbp_.puts.size(), 1u);
 }
 
-TEST_F(AutoPosting, AReplyDueOutsideThePostingWindowMovesIntoTheNextOne) {
+TEST_F(AutoReply, AReplyDueOutsideThePostingWindowMovesIntoTheNextOne) {
     switch_on(spa_);
     set_zone(spa_, "America/New_York");
     set_policy(spa_, R"({"auto_post_window_start": "09:00", "auto_post_window_end": "21:00"})");
@@ -374,7 +374,7 @@ TEST_F(AutoPosting, AReplyDueOutsideThePostingWindowMovesIntoTheNextOne) {
     EXPECT_THAT(draft(untimed, "status_reason"), HasSubstr("time zone"));
 }
 
-TEST_F(AutoPosting, AReplyThatWaitsForTheWindowGetsItsDelayAgainFromTheOpening) {
+TEST_F(AutoReply, AReplyThatWaitsForTheWindowGetsItsDelayAgainFromTheOpening) {
     switch_on(spa_);
     set_zone(spa_, "America/New_York");
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 60, "auto_post_delay_max_minutes": 60,
@@ -393,7 +393,7 @@ TEST_F(AutoPosting, AReplyThatWaitsForTheWindowGetsItsDelayAgainFromTheOpening) 
     EXPECT_EQ(draft(draft_id, "status"), "posted");
 }
 
-TEST_F(AutoPosting, TheWindowFollowsTheLocationsClockWhenItGoesForward) {
+TEST_F(AutoReply, TheWindowFollowsTheLocationsClockWhenItGoesForward) {
     switch_on(spa_);
     set_zone(spa_, "America/New_York");
     set_policy(spa_, R"({"auto_post_window_start": "09:00", "auto_post_window_end": "21:00"})");
@@ -410,7 +410,7 @@ TEST_F(AutoPosting, TheWindowFollowsTheLocationsClockWhenItGoesForward) {
     EXPECT_EQ(gbp_.puts.size(), 1u) << "09:00 EDT";
 }
 
-TEST_F(AutoPosting, TheWindowFollowsTheLocationsClockWhenItGoesBack) {
+TEST_F(AutoReply, TheWindowFollowsTheLocationsClockWhenItGoesBack) {
     switch_on(spa_);
     set_zone(spa_, "America/New_York");
     set_policy(spa_, R"({"auto_post_window_start": "09:00", "auto_post_window_end": "21:00"})");
@@ -426,7 +426,7 @@ TEST_F(AutoPosting, TheWindowFollowsTheLocationsClockWhenItGoesBack) {
     EXPECT_EQ(gbp_.puts.size(), 1u) << "09:00 EST";
 }
 
-TEST_F(AutoPosting, AJobThatRunsLateDoesNotPostOutsideTheWindow) {
+TEST_F(AutoReply, AJobThatRunsLateDoesNotPostOutsideTheWindow) {
     switch_on(spa_);
     set_zone(spa_, "America/New_York");
     set_policy(spa_, R"({"auto_post_window_start": "09:00", "auto_post_window_end": "21:00"})");
@@ -440,7 +440,7 @@ TEST_F(AutoPosting, AJobThatRunsLateDoesNotPostOutsideTheWindow) {
     EXPECT_EQ(draft(draft_id, "status"), "draft");
     EXPECT_THAT(draft(draft_id, "status_reason"), HasSubstr("missed its posting window"));
     EXPECT_EQ(approvals_needed(), 1) << "a person hears about the draft that is now waiting";
-    EXPECT_EQ(count("audit_log WHERE action = 'reply.auto_post_cancelled' AND actor = 'system:auto-reply'"), 1);
+    EXPECT_EQ(count("audit_log WHERE action = 'reply.auto_reply_cancelled' AND actor = 'system:auto-reply'"), 1);
     // It is not scheduled again by itself, in the next window or ever.
     clock_.set(utc(2026y / November / 11, 15h));
     EXPECT_EQ(await(pipeline_->enqueue_pending()), 0u);
@@ -456,7 +456,7 @@ TEST_F(AutoPosting, AJobThatRunsLateDoesNotPostOutsideTheWindow) {
 
 // ---- stopped between scheduling and posting -----------------------------------------------
 
-TEST_F(AutoPosting, ASwitchFlippedOffAfterSchedulingStopsThePost) {
+TEST_F(AutoReply, ASwitchFlippedOffAfterSchedulingStopsThePost) {
     switch_on(spa_);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
     const auto by_location_switch = drafted("r1");
@@ -473,17 +473,17 @@ TEST_F(AutoPosting, ASwitchFlippedOffAfterSchedulingStopsThePost) {
     };
     clock_.advance(30min);
 
-    exec(std::format("UPDATE locations SET auto_post_enabled = false WHERE id = {}", spa_));
+    exec(std::format("UPDATE locations SET auto_reply_enabled = false WHERE id = {}", spa_));
     run_only(by_location_switch);
     EXPECT_EQ(draft(by_location_switch, "status"), "draft");
-    EXPECT_THAT(draft(by_location_switch, "status_reason"), HasSubstr("Auto-posting is switched off"));
+    EXPECT_THAT(draft(by_location_switch, "status_reason"), HasSubstr("Auto reply is switched off"));
 
-    exec(std::format("UPDATE locations SET auto_post_enabled = true, auto_post_five_star = false, auto_post_four_star = true WHERE id = {}", spa_));
+    exec(std::format("UPDATE locations SET auto_reply_enabled = true, auto_reply_five_star = false, auto_reply_four_star = true WHERE id = {}", spa_));
     run_only(by_star);
     EXPECT_EQ(draft(by_star, "status"), "draft");
     EXPECT_THAT(draft(by_star, "status_reason"), HasSubstr("5-star"));
 
-    exec(std::format("UPDATE locations SET auto_post_five_star = true WHERE id = {}", spa_));
+    exec(std::format("UPDATE locations SET auto_reply_five_star = true WHERE id = {}", spa_));
     exec("UPDATE system_settings SET posting_enabled = false");
     run_only(by_posting_switch);
     EXPECT_EQ(draft(by_posting_switch, "status"), "draft");
@@ -500,7 +500,7 @@ TEST_F(AutoPosting, ASwitchFlippedOffAfterSchedulingStopsThePost) {
     EXPECT_TRUE(gbp_.puts.empty());
 }
 
-TEST_F(AutoPosting, AReviewEditedOnGoogleBeforeThePostIsNotRepliedTo) {
+TEST_F(AutoReply, AReviewEditedOnGoogleBeforeThePostIsNotRepliedTo) {
     switch_on(spa_);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
@@ -519,7 +519,7 @@ TEST_F(AutoPosting, AReviewEditedOnGoogleBeforeThePostIsNotRepliedTo) {
     EXPECT_TRUE(gbp_.puts.empty());
 }
 
-TEST_F(AutoPosting, AReplyFromOutsideOrARemovedReviewStopsThePost) {
+TEST_F(AutoReply, AReplyFromOutsideOrARemovedReviewStopsThePost) {
     switch_on(spa_);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
     const auto replied = drafted("r1");
@@ -535,7 +535,7 @@ TEST_F(AutoPosting, AReplyFromOutsideOrARemovedReviewStopsThePost) {
     EXPECT_EQ(count("reply_posts"), 0);
 }
 
-TEST_F(AutoPosting, AReplyFromOutsideSeenByTheSyncCancelsAScheduledDraft) {
+TEST_F(AutoReply, AReplyFromOutsideSeenByTheSyncCancelsAScheduledDraft) {
     switch_on(spa_);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
@@ -546,7 +546,7 @@ TEST_F(AutoPosting, AReplyFromOutsideSeenByTheSyncCancelsAScheduledDraft) {
     EXPECT_TRUE(gbp_.puts.empty());
 }
 
-TEST_F(AutoPosting, APersonCanTakeAScheduledReplyBack) {
+TEST_F(AutoReply, APersonCanTakeAScheduledReplyBack) {
     switch_on(spa_);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
@@ -568,7 +568,7 @@ TEST_F(AutoPosting, APersonCanTakeAScheduledReplyBack) {
     EXPECT_EQ(gbp_.puts.size(), 1u);
 }
 
-TEST_F(AutoPosting, AScheduledReplyCannotBeApprovedOnTopOfItsSchedule) {
+TEST_F(AutoReply, AScheduledReplyCannotBeApprovedOnTopOfItsSchedule) {
     switch_on(spa_);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
@@ -581,7 +581,7 @@ TEST_F(AutoPosting, AScheduledReplyCannotBeApprovedOnTopOfItsSchedule) {
     EXPECT_EQ(count("reply_posts"), 1);
 }
 
-TEST_F(AutoPosting, MarkingTheReviewAsNeedingNoReplyCancelsItsScheduledDraft) {
+TEST_F(AutoReply, MarkingTheReviewAsNeedingNoReplyCancelsItsScheduledDraft) {
     switch_on(spa_);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
@@ -597,7 +597,7 @@ TEST_F(AutoPosting, MarkingTheReviewAsNeedingNoReplyCancelsItsScheduledDraft) {
     EXPECT_TRUE(gbp_.puts.empty());
 }
 
-TEST_F(AutoPosting, AVoiceThatChangedSinceTheDraftWasCheckedIsCheckedAgainBeforeThePost) {
+TEST_F(AutoReply, AVoiceThatChangedSinceTheDraftWasCheckedIsCheckedAgainBeforeThePost) {
     switch_on(spa_);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
@@ -610,7 +610,7 @@ TEST_F(AutoPosting, AVoiceThatChangedSinceTheDraftWasCheckedIsCheckedAgainBefore
     EXPECT_THAT(draft(draft_id, "status_reason"), HasSubstr("fails a check"));
 }
 
-TEST_F(AutoPosting, AnAnalysisNewerThanTheDraftStopsThePost) {
+TEST_F(AutoReply, AnAnalysisNewerThanTheDraftStopsThePost) {
     switch_on(spa_);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
@@ -625,7 +625,7 @@ TEST_F(AutoPosting, AnAnalysisNewerThanTheDraftStopsThePost) {
     EXPECT_THAT(draft(draft_id, "status_reason"), HasSubstr("analyzed again"));
 }
 
-TEST_F(AutoPosting, TwoWorkersThatReachTheClaimTogetherProduceOnePost) {
+TEST_F(AutoReply, TwoWorkersThatReachTheClaimTogetherProduceOnePost) {
     switch_on(spa_);
     const auto draft_id = drafted("r1");
     const auto claim = [&](pqxx::work& tx) { return repo::claim_post(tx, draft_id, clock_.now()); };
@@ -636,7 +636,7 @@ TEST_F(AutoPosting, TwoWorkersThatReachTheClaimTogetherProduceOnePost) {
     EXPECT_EQ(count("reply_posts"), 1);
 }
 
-TEST_F(AutoPosting, TheDatabaseRefusesAPostThatNobodyAndNothingStandsBehind) {
+TEST_F(AutoReply, TheDatabaseRefusesAPostThatNobodyAndNothingStandsBehind) {
     const auto draft_id = drafted("r1");
     const auto insert = [&](const std::string& approved_by, const std::string& policy_version) {
         exec(std::format("INSERT INTO reply_posts (review_id, draft_id, text, approved_by, policy_version, status, started_at, updated_at) "
@@ -649,7 +649,7 @@ TEST_F(AutoPosting, TheDatabaseRefusesAPostThatNobodyAndNothingStandsBehind) {
         << "a draft can't be scheduled without a time and a policy version";
 }
 
-TEST_F(AutoPosting, WhenGoogleCannotBeReadTheJobTriesAgainAndThenGivesTheDraftToAPerson) {
+TEST_F(AutoReply, WhenGoogleCannotBeReadTheJobTriesAgainAndThenGivesTheDraftToAPerson) {
     switch_on(spa_);
     const auto draft_id = drafted("r1");
     gbp_.fail_get = gbp::ApiError{gbp::ApiError::Kind::unavailable, 503, "HTTP 503"};
@@ -665,7 +665,7 @@ TEST_F(AutoPosting, WhenGoogleCannotBeReadTheJobTriesAgainAndThenGivesTheDraftTo
     EXPECT_EQ(problems(), 1);
 }
 
-TEST_F(AutoPosting, AScheduledDraftWhoseJobDiedReturnsToTheQueue) {
+TEST_F(AutoReply, AScheduledDraftWhoseJobDiedReturnsToTheQueue) {
     switch_on(spa_);
     const auto draft_id = drafted("r1");
     exec("UPDATE jobs SET status = 'failed' WHERE kind = 'replies.post'");
@@ -680,14 +680,14 @@ TEST_F(AutoPosting, AScheduledDraftWhoseJobDiedReturnsToTheQueue) {
     EXPECT_TRUE(gbp_.puts.empty());
 }
 
-TEST_F(AutoPosting, ARateLimitedPutIsRetriedBecauseNothingWasPosted) {
+TEST_F(AutoReply, ARateLimitedPutIsRetriedBecauseNothingWasPosted) {
     switch_on(spa_);
     const auto draft_id = drafted("r1");
     gbp_.fail_put = gbp::ApiError{gbp::ApiError::Kind::rate_limited, 429, "HTTP 429"};
     run_jobs();
     EXPECT_EQ(post(draft_id, "status"), "failed");
     EXPECT_EQ(draft(draft_id, "status"), "scheduled") << "back to where it came from, not to 'approved'";
-    EXPECT_EQ(location_value(spa_, "auto_post_paused_at"), "") << "a refusal that will be retried pauses nothing";
+    EXPECT_EQ(location_value(spa_, "auto_reply_paused_at"), "") << "a refusal that will be retried pauses nothing";
     gbp_.fail_put.reset();
     clock_.advance(2min);
     run_jobs();
@@ -698,10 +698,10 @@ TEST_F(AutoPosting, ARateLimitedPutIsRetriedBecauseNothingWasPosted) {
 
 // ---- the daily cap ---------------------------------------------------------------------
 
-TEST_F(AutoPosting, TheDailyCapSendsTheNextDraftToTheApprovalQueue) {
+TEST_F(AutoReply, TheDailyCapSendsTheNextDraftToTheApprovalQueue) {
     switch_on(spa_);
     switch_on(buffet_);
-    exec(std::format("UPDATE locations SET auto_post_daily_cap = 2 WHERE id = {}", spa_));
+    exec(std::format("UPDATE locations SET auto_reply_daily_cap = 2 WHERE id = {}", spa_));
     const auto first = drafted("r1");
     const auto second = drafted("r2");
     const auto third = drafted("r3");
@@ -724,13 +724,13 @@ TEST_F(AutoPosting, TheDailyCapSendsTheNextDraftToTheApprovalQueue) {
     EXPECT_EQ(gbp_.puts.size(), 4u);
 }
 
-TEST_F(AutoPosting, TheCapIsReadAgainImmediatelyBeforeThePut) {
+TEST_F(AutoReply, TheCapIsReadAgainImmediatelyBeforeThePut) {
     switch_on(spa_);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
     const auto first = drafted("r1");
     const auto second = drafted("r2");
     // A person lowers the cap while both are scheduled.
-    exec(std::format("UPDATE locations SET auto_post_daily_cap = 1 WHERE id = {}", spa_));
+    exec(std::format("UPDATE locations SET auto_reply_daily_cap = 1 WHERE id = {}", spa_));
     clock_.advance(30min);
     run_jobs();
     EXPECT_EQ(gbp_.puts.size(), 1u);
@@ -741,7 +741,7 @@ TEST_F(AutoPosting, TheCapIsReadAgainImmediatelyBeforeThePut) {
 
 // ---- pauses -----------------------------------------------------------------------------
 
-TEST_F(AutoPosting, ChecksThatKeepFailingPauseTheLocationUntilAPersonResumesIt) {
+TEST_F(AutoReply, ChecksThatKeepFailingPauseTheLocationUntilAPersonResumesIt) {
     switch_on(spa_);
     switch_on(buffet_);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
@@ -752,16 +752,16 @@ TEST_F(AutoPosting, ChecksThatKeepFailingPauseTheLocationUntilAPersonResumesIt) 
     llm_.generator = test::FakeLlm::always(kLinkReply);
     drafted("r1");
     drafted("r2");
-    EXPECT_EQ(location_value(spa_, "auto_post_paused_at"), "") << "two failures in a row are not yet three";
+    EXPECT_EQ(location_value(spa_, "auto_reply_paused_at"), "") << "two failures in a row are not yet three";
     drafted("r3");
-    EXPECT_NE(location_value(spa_, "auto_post_paused_at"), "");
-    EXPECT_THAT(location_value(spa_, "auto_post_pause_detail"), HasSubstr("3 replies in a row"));
-    EXPECT_EQ(location_value(spa_, "auto_post_pause_reason"), "checks_failing");
-    EXPECT_EQ(location_value(spa_, "auto_post_enabled"), "true") << "a pause is not the switch: a person's choice stays as it was";
-    EXPECT_EQ(location_value(buffet_, "auto_post_paused_at"), "") << "the other location carries on";
+    EXPECT_NE(location_value(spa_, "auto_reply_paused_at"), "");
+    EXPECT_THAT(location_value(spa_, "auto_reply_pause_detail"), HasSubstr("3 replies in a row"));
+    EXPECT_EQ(location_value(spa_, "auto_reply_pause_reason"), "checks_failing");
+    EXPECT_EQ(location_value(spa_, "auto_reply_enabled"), "true") << "a pause is not the switch: a person's choice stays as it was";
+    EXPECT_EQ(location_value(buffet_, "auto_reply_paused_at"), "") << "the other location carries on";
     EXPECT_EQ(problems(), 1);
-    EXPECT_EQ(count("notification_deliveries WHERE event_type = 'system_problem' AND subject = 'Auto-posting paused: LU DREAM SPA - Chelsea'"), 1);
-    EXPECT_EQ(count("audit_log WHERE action = 'location.auto_post_paused' AND actor = 'system:auto-reply'"), 1);
+    EXPECT_EQ(count("notification_deliveries WHERE event_type = 'system_problem' AND subject = 'Auto reply paused: LU DREAM SPA - Chelsea'"), 1);
+    EXPECT_EQ(count("audit_log WHERE action = 'location.auto_reply_paused' AND actor = 'system:auto-reply'"), 1);
 
     // The model behaves again; the location stays paused all the same.
     llm_.generator = test::FakeLlm::always(test::FakeLlm::kCleanReply);
@@ -778,12 +778,12 @@ TEST_F(AutoPosting, ChecksThatKeepFailingPauseTheLocationUntilAPersonResumesIt) 
 
     // A person resumes it. The old failures don't pause it again.
     resume(spa_);
-    EXPECT_EQ(location_value(spa_, "auto_post_paused_at"), "");
-    EXPECT_EQ(count("audit_log WHERE action = 'location.auto_post_resumed' AND actor = 'staff@xvisionmediaus.com'"), 1);
+    EXPECT_EQ(location_value(spa_, "auto_reply_paused_at"), "");
+    EXPECT_EQ(count("audit_log WHERE action = 'location.auto_reply_resumed' AND actor = 'staff@xvisionmediaus.com'"), 1);
     clock_.advance(1min);
     const auto after = drafted("r5");
     EXPECT_EQ(draft(after, "status"), "scheduled");
-    EXPECT_EQ(location_value(spa_, "auto_post_paused_at"), "");
+    EXPECT_EQ(location_value(spa_, "auto_reply_paused_at"), "");
     // Resuming posted nothing that was stopped meanwhile.
     clock_.advance(30min);
     run_jobs();
@@ -791,7 +791,7 @@ TEST_F(AutoPosting, ChecksThatKeepFailingPauseTheLocationUntilAPersonResumesIt) 
     EXPECT_EQ(gbp_.puts[0].review_id, "r5");
 }
 
-TEST_F(AutoPosting, OnlyFailuresInARowPauseAndHowManyIsTheLocationsSetting) {
+TEST_F(AutoReply, OnlyFailuresInARowPauseAndHowManyIsTheLocationsSetting) {
     switch_on(spa_);
     switch_on(buffet_);
     const auto link = test::FakeLlm::always(kLinkReply);
@@ -806,26 +806,26 @@ TEST_F(AutoPosting, OnlyFailuresInARowPauseAndHowManyIsTheLocationsSetting) {
     llm_.generator = link;
     drafted("r4");
     drafted("r5");
-    EXPECT_EQ(location_value(spa_, "auto_post_paused_at"), "") << "a good reply in between starts the count again (D-076)";
+    EXPECT_EQ(location_value(spa_, "auto_reply_paused_at"), "") << "a good reply in between starts the count again (D-076)";
     drafted("r6");
-    EXPECT_NE(location_value(spa_, "auto_post_paused_at"), "") << "the third in a row";
+    EXPECT_NE(location_value(spa_, "auto_reply_paused_at"), "") << "the third in a row";
 
     // The number is a setting per location: this one pauses at the first failure.
     ASSERT_TRUE(update(buffet_, {.pause_after_failures = 1}));
-    EXPECT_EQ(count("audit_log WHERE action = 'location.auto_post_settings' AND after->>'pause_after_failures' = '1'"), 1);
+    EXPECT_EQ(count("audit_log WHERE action = 'location.auto_reply_settings' AND after->>'pause_after_failures' = '1'"), 1);
     drafted("b1", kBuffet);
-    EXPECT_EQ(location_value(buffet_, "auto_post_pause_reason"), "checks_failing");
-    EXPECT_THAT(location_value(buffet_, "auto_post_pause_detail"), HasSubstr("The last reply written"));
+    EXPECT_EQ(location_value(buffet_, "auto_reply_pause_reason"), "checks_failing");
+    EXPECT_THAT(location_value(buffet_, "auto_reply_pause_detail"), HasSubstr("The last reply written"));
 }
 
-TEST_F(AutoPosting, FailingChecksPauseNothingWhereAutoPostingIsOff) {
+TEST_F(AutoReply, FailingChecksPauseNothingWhereAutoReplyIsOff) {
     llm_.generator = test::FakeLlm::always(kLinkReply);
     for (int i = 0; i < 5; ++i) drafted("r" + std::to_string(i));
-    EXPECT_EQ(count("locations WHERE auto_post_paused_at IS NOT NULL"), 0);
+    EXPECT_EQ(count("locations WHERE auto_reply_paused_at IS NOT NULL"), 0);
     EXPECT_EQ(problems(), 0);
 }
 
-TEST_F(AutoPosting, AnAutoPostWhoseOutcomeStaysUnknownPausesTheLocation) {
+TEST_F(AutoReply, AnAutoReplyWhoseOutcomeStaysUnknownPausesTheLocation) {
     switch_on(spa_);
     switch_on(buffet_);
     const auto draft_id = drafted("r1");
@@ -833,18 +833,18 @@ TEST_F(AutoPosting, AnAutoPostWhoseOutcomeStaysUnknownPausesTheLocation) {
     run_jobs();
     EXPECT_EQ(gbp_.puts.size(), 1u);
     EXPECT_EQ(draft(draft_id, "status"), "posting");
-    EXPECT_EQ(location_value(spa_, "auto_post_paused_at"), "") << "unknown for a few minutes is how Google always behaves";
+    EXPECT_EQ(location_value(spa_, "auto_reply_paused_at"), "") << "unknown for a few minutes is how Google always behaves";
     gbp_.put_times_out = false;
 
     clock_.advance(10min);
     EXPECT_EQ(confirm(), 1u);
-    EXPECT_EQ(location_value(spa_, "auto_post_paused_at"), "");
+    EXPECT_EQ(location_value(spa_, "auto_reply_paused_at"), "");
     clock_.advance(21min);
     EXPECT_EQ(confirm(), 0u);
     EXPECT_EQ(post(draft_id, "status"), "unconfirmed");
     EXPECT_EQ(draft(draft_id, "status"), "draft") << "a person looks at the review on Google and decides";
-    EXPECT_EQ(location_value(spa_, "auto_post_pause_reason"), "post_unconfirmed");
-    EXPECT_EQ(location_value(buffet_, "auto_post_paused_at"), "");
+    EXPECT_EQ(location_value(spa_, "auto_reply_pause_reason"), "post_unconfirmed");
+    EXPECT_EQ(location_value(buffet_, "auto_reply_paused_at"), "");
     EXPECT_EQ(problems(), 2) << "the unconfirmed reply, and the pause";
 
     // Nothing more goes out at this location, and the engine never repeats the PUT.
@@ -854,7 +854,7 @@ TEST_F(AutoPosting, AnAutoPostWhoseOutcomeStaysUnknownPausesTheLocation) {
     EXPECT_EQ(gbp_.puts.size(), 1u);
 }
 
-TEST_F(AutoPosting, AnApprovedPostThatStaysUnconfirmedPausesNothing) {
+TEST_F(AutoReply, AnApprovedPostThatStaysUnconfirmedPausesNothing) {
     switch_on(spa_, false, true);  // on, but not for this review's five stars
     const auto draft_id = drafted("r1");
     ASSERT_TRUE(approve(draft_id));
@@ -864,10 +864,10 @@ TEST_F(AutoPosting, AnApprovedPostThatStaysUnconfirmedPausesNothing) {
     clock_.advance(31min);
     confirm();
     EXPECT_EQ(post(draft_id, "status"), "unconfirmed");
-    EXPECT_EQ(location_value(spa_, "auto_post_paused_at"), "") << "the pause is about posts no person stood behind";
+    EXPECT_EQ(location_value(spa_, "auto_reply_paused_at"), "") << "the pause is about posts no person stood behind";
 }
 
-TEST_F(AutoPosting, GoogleRefusingAnAutoPostPausesTheLocation) {
+TEST_F(AutoReply, GoogleRefusingAnAutoReplyPausesTheLocation) {
     switch_on(spa_);
     switch_on(buffet_);
     const auto draft_id = drafted("r1");
@@ -876,10 +876,10 @@ TEST_F(AutoPosting, GoogleRefusingAnAutoPostPausesTheLocation) {
     EXPECT_EQ(gbp_.puts.size(), 1u);
     EXPECT_EQ(post(draft_id, "status"), "failed");
     EXPECT_EQ(draft(draft_id, "status"), "draft");
-    EXPECT_EQ(location_value(spa_, "auto_post_pause_reason"), "post_refused");
-    EXPECT_THAT(location_value(spa_, "auto_post_pause_detail"), HasSubstr("HTTP 403"));
-    EXPECT_EQ(location_value(buffet_, "auto_post_paused_at"), "");
-    EXPECT_EQ(value<std::string>("SELECT coalesce(auto_post_paused_at::text, '') FROM system_settings"), "");
+    EXPECT_EQ(location_value(spa_, "auto_reply_pause_reason"), "post_refused");
+    EXPECT_THAT(location_value(spa_, "auto_reply_pause_detail"), HasSubstr("HTTP 403"));
+    EXPECT_EQ(location_value(buffet_, "auto_reply_paused_at"), "");
+    EXPECT_EQ(value<std::string>("SELECT coalesce(auto_reply_paused_at::text, '') FROM system_settings"), "");
     EXPECT_EQ(problems(), 2) << "the refusal, and the pause";
 
     gbp_.fail_put.reset();
@@ -890,7 +890,7 @@ TEST_F(AutoPosting, GoogleRefusingAnAutoPostPausesTheLocation) {
     EXPECT_EQ(gbp_.puts[1].review_id, "b1");
 }
 
-TEST_F(AutoPosting, ATokenThatGoogleRefusesPausesEveryLocation) {
+TEST_F(AutoReply, ATokenThatGoogleRefusesPausesEveryLocation) {
     switch_on(spa_);
     switch_on(buffet_);
     const auto draft_id = drafted("r1");
@@ -898,16 +898,16 @@ TEST_F(AutoPosting, ATokenThatGoogleRefusesPausesEveryLocation) {
     // A refused token is retried: it may be a passing failure of the token service.
     run_jobs();
     EXPECT_EQ(draft(draft_id, "status"), "scheduled");
-    EXPECT_EQ(value<std::string>("SELECT coalesce(auto_post_paused_at::text, '') FROM system_settings"), "");
+    EXPECT_EQ(value<std::string>("SELECT coalesce(auto_reply_paused_at::text, '') FROM system_settings"), "");
     for (int i = 0; i < 6; ++i) {
         clock_.advance(2h);
         run_jobs();
     }
     EXPECT_EQ(draft(draft_id, "status"), "draft");
-    EXPECT_NE(value<std::string>("SELECT coalesce(auto_post_paused_at::text, '') FROM system_settings"), "");
-    EXPECT_EQ(value<std::string>("SELECT auto_post_pause_reason FROM system_settings"), "post_refused");
-    EXPECT_EQ(count("audit_log WHERE action = 'auto_posting.paused' AND actor = 'system:auto-reply'"), 1);
-    EXPECT_EQ(count("notification_deliveries WHERE subject = 'Auto-posting paused for every location'"), 1);
+    EXPECT_NE(value<std::string>("SELECT coalesce(auto_reply_paused_at::text, '') FROM system_settings"), "");
+    EXPECT_EQ(value<std::string>("SELECT auto_reply_pause_reason FROM system_settings"), "post_refused");
+    EXPECT_EQ(count("audit_log WHERE action = 'auto_reply.paused' AND actor = 'system:auto-reply'"), 1);
+    EXPECT_EQ(count("notification_deliveries WHERE subject = 'Auto reply paused for every location'"), 1);
 
     // Every location is stopped, and each keeps its own switch.
     gbp_.fail_put.reset();
@@ -915,33 +915,33 @@ TEST_F(AutoPosting, ATokenThatGoogleRefusesPausesEveryLocation) {
     const auto other = drafted("b1", kBuffet);
     EXPECT_EQ(draft(other, "status"), "draft");
     EXPECT_THAT(draft(other, "status_reason"), HasSubstr("paused for every location"));
-    EXPECT_EQ(location_value(buffet_, "auto_post_enabled"), "true");
+    EXPECT_EQ(location_value(buffet_, "auto_reply_enabled"), "true");
 
     // A person resumes everything.
     {
-        as_staff([&](pqxx::work& tx, audit::Writer& audit) { return repo::resume_all_auto_posting(tx, audit).paused; });
+        as_staff([&](pqxx::work& tx, audit::Writer& audit) { return repo::resume_all_auto_reply(tx, audit).paused; });
     }
-    EXPECT_EQ(count("audit_log WHERE action = 'auto_posting.resumed' AND actor = 'staff@xvisionmediaus.com'"), 1);
+    EXPECT_EQ(count("audit_log WHERE action = 'auto_reply.resumed' AND actor = 'staff@xvisionmediaus.com'"), 1);
     EXPECT_EQ(draft(drafted("b2", kBuffet), "status"), "scheduled");
     run_jobs();
     EXPECT_EQ(gbp_.puts.size(), puts + 1);
 }
 
-TEST_F(AutoPosting, ARefusedApprovedPostPausesNothing) {
+TEST_F(AutoReply, ARefusedApprovedPostPausesNothing) {
     switch_on(spa_, false, true);
     const auto draft_id = drafted("r1");
     ASSERT_TRUE(approve(draft_id));
     gbp_.fail_put = gbp::ApiError{gbp::ApiError::Kind::permission_denied, 403, "HTTP 403 PERMISSION_DENIED"};
     run_jobs();
     EXPECT_EQ(post(draft_id, "status"), "failed");
-    EXPECT_EQ(location_value(spa_, "auto_post_paused_at"), "");
+    EXPECT_EQ(location_value(spa_, "auto_reply_paused_at"), "");
 }
 
 // ---- the switches are a person's -----------------------------------------------------------
 
-TEST_F(AutoPosting, SwitchingOnNeedsNoFirstPostByAPersonButNothingGoesOutBeforeAGoLivePass) {
+TEST_F(AutoReply, SwitchingOnNeedsNoFirstPostByAPersonButNothingGoesOutBeforeAGoLivePass) {
     EXPECT_THAT(update(spa_, {.enabled = true}).error().message, HasSubstr("star ratings"));
-    EXPECT_EQ(location_value(spa_, "auto_post_enabled"), "false") << "a refused request changes nothing";
+    EXPECT_EQ(location_value(spa_, "auto_reply_enabled"), "false") << "a refused request changes nothing";
 
     // No reply approved by a person has been published, and the switch moves all the same (D-076).
     ASSERT_EQ(count("reply_posts"), 0);
@@ -953,10 +953,10 @@ TEST_F(AutoPosting, SwitchingOnNeedsNoFirstPostByAPersonButNothingGoesOutBeforeA
     EXPECT_EQ(on->daily_cap, 100) << "the default (D-076)";
     EXPECT_EQ(on->pause_after_failures, 3);
     EXPECT_EQ(on->go_live_state, "not_tested") << "the page says why nothing is posted yet";
-    EXPECT_EQ(count("audit_log WHERE action = 'location.auto_post_enabled' AND actor = 'staff@xvisionmediaus.com' "
+    EXPECT_EQ(count("audit_log WHERE action = 'location.auto_reply_enabled' AND actor = 'staff@xvisionmediaus.com' "
                     "AND before->>'enabled' = 'false' AND after->>'five_star' = 'true'"),
               1);
-    EXPECT_EQ(location_value(buffet_, "auto_post_enabled"), "false") << "one location at a time";
+    EXPECT_EQ(location_value(buffet_, "auto_reply_enabled"), "false") << "one location at a time";
 
     // The safeguard is the go-live test (D-074): switched on and untested, a review waits for a person.
     const auto waiting = drafted("r1");
@@ -969,13 +969,13 @@ TEST_F(AutoPosting, SwitchingOnNeedsNoFirstPostByAPersonButNothingGoesOutBeforeA
     EXPECT_EQ(draft(drafted("r2"), "status"), "scheduled");
 
     ASSERT_TRUE(update(spa_, {.four_star = true, .daily_cap = 5}));
-    EXPECT_EQ(count("audit_log WHERE action = 'location.auto_post_settings' AND after->>'daily_cap' = '5'"), 1);
+    EXPECT_EQ(count("audit_log WHERE action = 'location.auto_reply_settings' AND after->>'daily_cap' = '5'"), 1);
     ASSERT_TRUE(update(spa_, {.enabled = false}));
-    EXPECT_EQ(count("audit_log WHERE action = 'location.auto_post_disabled'"), 1);
+    EXPECT_EQ(count("audit_log WHERE action = 'location.auto_reply_disabled'"), 1);
     EXPECT_EQ(draft(drafted("r3"), "status"), "draft");
 }
 
-TEST_F(AutoPosting, TheSettingsAreCheckedBeforeAnythingIsStored) {
+TEST_F(AutoReply, TheSettingsAreCheckedBeforeAnythingIsStored) {
     EXPECT_THAT(update(spa_, {.daily_cap = 0}).error().message, HasSubstr("daily_cap"));
     EXPECT_THAT(update(spa_, {.daily_cap = 5000}).error().message, HasSubstr("daily_cap"));
     EXPECT_TRUE(update(spa_, {.daily_cap = 500})) << "up to 1000 (D-076)";
@@ -984,7 +984,7 @@ TEST_F(AutoPosting, TheSettingsAreCheckedBeforeAnythingIsStored) {
     EXPECT_THAT(update(spa_, {.time_zone = "Mars/Olympus"}).error().message, HasSubstr("time zone"));
     EXPECT_EQ(update(9999, {.daily_cap = 3}).error().kind, repo::Failure::Kind::not_found);
 
-    // A posting window needs the time zone before auto-posting can be on.
+    // A posting window needs the time zone before auto reply can be on.
     set_policy(spa_, R"({"auto_post_window_start": "09:00", "auto_post_window_end": "21:00"})");
     EXPECT_THAT(update(spa_, {.enabled = true, .five_star = true}).error().message, HasSubstr("time zone"));
     const auto on = update(spa_, {.enabled = true, .five_star = true, .time_zone = "America/New_York"});
@@ -995,20 +995,20 @@ TEST_F(AutoPosting, TheSettingsAreCheckedBeforeAnythingIsStored) {
     // And the zone can't be taken away while it is.
     EXPECT_THAT(update(spa_, {.time_zone = std::nullopt}).error().message, HasSubstr("time zone"));
 
-    // A location that is switched off can't auto-post (D-102).
+    // A location that is switched off can't auto reply (D-102).
     switch_location(buffet_, false);
     EXPECT_THAT(update(buffet_, {.enabled = true, .five_star = true}).error().message, HasSubstr("switched on"));
 }
 
-TEST_F(AutoPosting, TheOverviewShowsEveryLocationsSwitchesAndPause) {
+TEST_F(AutoReply, TheOverviewShowsEveryLocationsSwitchesAndPause) {
     switch_on(spa_);
     drafted("r1");
     tx([&](pqxx::work& tx) {
-        repo::pause_auto_posting(tx, buffet_, repo::kPausePostRefused, "Google refused an automatic reply (HTTP 403).", clock_.now());
-        EXPECT_FALSE(repo::pause_auto_posting(tx, buffet_, repo::kPauseChecksFailing, "again", clock_.now())) << "already paused";
+        repo::pause_auto_reply(tx, buffet_, repo::kPausePostRefused, "Google refused an automatic reply (HTTP 403).", clock_.now());
+        EXPECT_FALSE(repo::pause_auto_reply(tx, buffet_, repo::kPauseChecksFailing, "again", clock_.now())) << "already paused";
     });
     pqxx::work tx{conn()};
-    const auto overview = repo::auto_posting_overview(tx, clock_.now());
+    const auto overview = repo::auto_reply_overview(tx, clock_.now());
     EXPECT_TRUE(overview.posting_enabled);
     EXPECT_FALSE(overview.paused);
     ASSERT_EQ(overview.locations.size(), 2u);
@@ -1029,25 +1029,25 @@ TEST_F(AutoPosting, TheOverviewShowsEveryLocationsSwitchesAndPause) {
     EXPECT_EQ(buffet.go_live_state, "not_tested");
 }
 
-TEST_F(AutoPosting, TwoDraftsDecidedTogetherCannotBothTakeTheLastPlaceUnderTheCap) {
+TEST_F(AutoReply, TwoDraftsDecidedTogetherCannotBothTakeTheLastPlaceUnderTheCap) {
     switch_on(spa_);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
     const auto first = drafted("r1");
     const auto second = drafted("r2");
-    exec(std::format("UPDATE locations SET auto_post_daily_cap = 1 WHERE id = {}", spa_));
+    exec(std::format("UPDATE locations SET auto_reply_daily_cap = 1 WHERE id = {}", spa_));
     clock_.advance(30min);
     // The first worker has claimed and not yet committed; the second arrives with the other draft and waits for the location.
     const auto [mine, theirs] = race([&](pqxx::work& tx) { return repo::claim_post(tx, first, clock_.now()); },
                                      [&](pqxx::work& tx) { return repo::claim_post(tx, second, clock_.now()); });
     ASSERT_EQ(mine.outcome, repo::Claim::Outcome::claimed);
-    EXPECT_EQ(theirs.outcome, repo::Claim::Outcome::auto_post_stopped);
+    EXPECT_EQ(theirs.outcome, repo::Claim::Outcome::auto_reply_stopped);
     EXPECT_THAT(theirs.detail, HasSubstr("daily cap"));
     EXPECT_EQ(count("reply_posts"), 1);
 }
 
 // ---- "analyze again" is not a way around a stop ----------------------------------------------
 
-TEST_F(AutoPosting, AnalyzingAgainNeverReArmsAnAutoPost) {
+TEST_F(AutoReply, AnalyzingAgainNeverReArmsAnAutoReply) {
     switch_on(spa_);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
     const auto first = drafted("r1");
@@ -1059,7 +1059,7 @@ TEST_F(AutoPosting, AnalyzingAgainNeverReArmsAnAutoPost) {
     await(pipeline_->process(review_id, true, false));
     const auto second = live_draft(review_id);
     ASSERT_NE(second, first);
-    EXPECT_EQ(draft(second, "route"), "auto_post");
+    EXPECT_EQ(draft(second, "route"), "auto_reply");
     EXPECT_EQ(draft(second, "status"), "draft") << "a review that already had a draft is a person's to decide";
     EXPECT_THAT(draft(second, "status_reason"), HasSubstr("already had a draft"));
     clock_.advance(3h);
@@ -1067,7 +1067,7 @@ TEST_F(AutoPosting, AnalyzingAgainNeverReArmsAnAutoPost) {
     EXPECT_TRUE(gbp_.puts.empty());
 }
 
-TEST_F(AutoPosting, AfterAnUnconfirmedPostAnalyzingAgainDoesNotPostASecondTime) {
+TEST_F(AutoReply, AfterAnUnconfirmedPostAnalyzingAgainDoesNotPostASecondTime) {
     // A person approves; the PUT times out and the reply never shows.
     const auto first = drafted("r1");
     const auto review_id = std::stol(draft(first, "review_id"));
@@ -1081,7 +1081,7 @@ TEST_F(AutoPosting, AfterAnUnconfirmedPostAnalyzingAgainDoesNotPostASecondTime) 
     ASSERT_EQ(draft(first, "status"), "draft");
     ASSERT_EQ(gbp_.puts.size(), 1u);
 
-    // Auto-posting is on, and somebody clicks "analyze again".
+    // Auto reply is on, and somebody clicks "analyze again".
     switch_on(spa_);
     await(pipeline_->process(review_id, true, false));
     const auto second = live_draft(review_id);
@@ -1092,7 +1092,7 @@ TEST_F(AutoPosting, AfterAnUnconfirmedPostAnalyzingAgainDoesNotPostASecondTime) 
     EXPECT_EQ(gbp_.puts.size(), 1u) << "the engine never sends a second PUT by itself";
 }
 
-TEST_F(AutoPosting, AReplyPolicyChangedAfterSchedulingStopsThePost) {
+TEST_F(AutoReply, AReplyPolicyChangedAfterSchedulingStopsThePost) {
     switch_on(spa_);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
@@ -1107,27 +1107,27 @@ TEST_F(AutoPosting, AReplyPolicyChangedAfterSchedulingStopsThePost) {
     EXPECT_EQ(approvals_needed(), 1);
 }
 
-// D-102 point 2: switching the location off switches its auto-posting off,
+// D-102 point 2: switching the location off switches its auto reply off,
 // and a post that was scheduled stops at the claim, which reads the switch.
-TEST_F(AutoPosting, SwitchingTheLocationOffSwitchesAutoPostingOffAndStopsAScheduledPost) {
+TEST_F(AutoReply, SwitchingTheLocationOffSwitchesAutoReplyOffAndStopsAScheduledPost) {
     switch_on(spa_, true, true);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
     ASSERT_EQ(draft(draft_id, "status"), "scheduled");
 
     switch_location(spa_, false);
-    EXPECT_EQ(location_value(spa_, "auto_post_enabled"), "false");
-    EXPECT_EQ(location_value(spa_, "auto_post_five_star"), "false");
-    EXPECT_EQ(location_value(spa_, "auto_post_four_star"), "false");
+    EXPECT_EQ(location_value(spa_, "auto_reply_enabled"), "false");
+    EXPECT_EQ(location_value(spa_, "auto_reply_five_star"), "false");
+    EXPECT_EQ(location_value(spa_, "auto_reply_four_star"), "false");
     clock_.advance(30min);
     run_jobs();
     EXPECT_TRUE(gbp_.puts.empty());
     EXPECT_EQ(draft(draft_id, "status"), "draft");
-    EXPECT_THAT(draft(draft_id, "status_reason"), HasSubstr("no longer synced")) << "the location's switch, read before auto-posting's";
+    EXPECT_THAT(draft(draft_id, "status_reason"), HasSubstr("no longer synced")) << "the location's switch, read before auto reply's";
 
-    // Switching it on again brings neither auto-posting nor the post back: a person decides again.
+    // Switching it on again brings neither auto reply nor the post back: a person decides again.
     switch_location(spa_, true);
-    EXPECT_EQ(location_value(spa_, "auto_post_enabled"), "false");
+    EXPECT_EQ(location_value(spa_, "auto_reply_enabled"), "false");
     clock_.advance(3h);
     run_jobs();
     EXPECT_TRUE(gbp_.puts.empty());

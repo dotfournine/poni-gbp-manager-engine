@@ -1,4 +1,4 @@
-// When an auto-post goes out (FR-5): a random delay, then moved into the
+// When an auto reply goes out (FR-5): a random delay, then moved into the
 // location's posting window. The window is in the location's local time, so
 // this is the one place that knows about time zones (D-029, D-071): cctz
 // reads the operating system's time-zone database, which follows the IANA
@@ -32,7 +32,7 @@ struct PostingTiming {
 
 // The timing the policy asks for, or what is wrong with its delay or its
 // window as a pair. A save is refused for it (domain::check_settings); a
-// stored row is not a save's word, so a policy like that never auto-posts.
+// stored row is not a save's word, so a policy like that never auto replies.
 std::expected<PostingTiming, std::string> posting_timing(const PolicyRules& policy);
 
 // True if the operating system's database knows this IANA name.

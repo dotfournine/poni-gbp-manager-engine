@@ -35,7 +35,7 @@ TEST_F(Posting, AnApprovedDraftIsPostedOnceAndLaterConfirmedAsPublished) {
     const auto review_id = std::stol(draft(draft_id, "review_id"));
     EXPECT_EQ(draft(draft_id, "status"), "draft");
     EXPECT_TRUE(gbp_.puts.empty()) << "nothing is posted without an approval, whatever the route";
-    EXPECT_EQ(draft(draft_id, "route"), "auto_post");
+    EXPECT_EQ(draft(draft_id, "route"), "auto_reply");
 
     const auto approved = approve(draft_id);
     ASSERT_TRUE(approved);
@@ -117,11 +117,11 @@ TEST_F(Posting, RunningThePostingJobAgainSendsNothing) {
 }
 
 TEST_F(Posting, ADraftThatNobodyApprovedAndNoPolicyScheduledIsNeverClaimed) {
-    // The route says auto_post; auto-posting was never switched on, so the
+    // The route says auto_reply; auto reply was never switched on, so the
     // draft is waiting. A posting job for it (there is none; this is the
     // guard under the guard) finds nothing it may post.
     const auto draft_id = waiting_draft();
-    ASSERT_EQ(draft(draft_id, "route"), "auto_post");
+    ASSERT_EQ(draft(draft_id, "route"), "auto_reply");
     pqxx::work tx{conn()};
     const auto claim = repo::claim_post(tx, draft_id, clock_.now());
     tx.commit();

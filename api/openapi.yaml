@@ -48,7 +48,7 @@ info:
     **Posting.** The engine analyzes reviews and drafts replies, and records
     what the reply policy would do with each draft. A reply reaches Google
     when a signed-in person approves a draft (`POST
-    /api/drafts/{id}/approve`), or by auto-posting where a person switched it
+    /api/drafts/{id}/approve`), or by auto reply where a person switched it
     on for the location. A local post reaches Google only when a signed-in
     person approves it (`POST /api/local-posts/{id}/approve`), and a post
     that is at Google is changed there only when a signed-in person
@@ -99,10 +99,10 @@ tags:
     description: Reviews with a severity flag that a person must handle.
   - name: notifications
     description: Notification rules and the delivery log.
-  - name: auto-posting
+  - name: auto-reply
     description: Replies posted without a person (D-069), per location, with their switches, limits and pauses.
   - name: go-live
-    description: The go-live test (D-074), which a configuration must pass before anything is auto-posted with it.
+    description: The go-live test (D-074), which a configuration must pass before anything is posted by auto reply with it.
   - name: reports
     description: |
       Location reports (FR-8, D-085, D-102, D-104): one location's, built once from
@@ -1155,7 +1155,7 @@ paths:
         Taking a voice template is filling the form from `GET /api/knowledge`
         and saving; copying the settings to another location is this call
         for that location. A change of what the models are asked means a new
-        go-live test before the location auto-posts again (D-074).
+        go-live test before the location auto replies again (D-074).
       tags: [settings]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -1549,12 +1549,12 @@ paths:
       - $ref: "#/components/parameters/Id"
     post:
       operationId: unscheduleDraft
-      summary: Take a scheduled reply out of auto-posting
+      summary: Take a scheduled reply out of auto reply
       description: |
         A draft the policy scheduled for an automatic post returns to the
         approval queue as `draft`, where a person edits, approves or rejects
         it. The job that would have posted it finds nothing to do.
-      tags: [auto-posting]
+      tags: [auto-reply]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       responses:
@@ -1580,12 +1580,12 @@ paths:
   /api/auto-posting:
     get:
       operationId: getAutoPosting
-      summary: Auto-posting everywhere
+      summary: Auto reply everywhere
       description: |
         The pause on every location, the global posting switch, and each
-        enabled location's auto-posting settings. Everything is off after
+        enabled location's auto reply settings. Everything is off after
         installation.
-      tags: [auto-posting]
+      tags: [auto-reply]
       responses:
         "200":
           description: The overview.
@@ -1601,10 +1601,10 @@ paths:
       operationId: resumeAllAutoPosting
       summary: Lift the pause on every location
       description: |
-        The engine pauses auto-posting everywhere when Google refuses its
+        The engine pauses auto reply everywhere when Google refuses its
         token or its permission for an automatic reply. Only a person lifts
         the pause. Replies stopped meanwhile stay in the approval queue.
-      tags: [auto-posting]
+      tags: [auto-reply]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       responses:
@@ -1624,18 +1624,18 @@ paths:
       - $ref: "#/components/parameters/Id"
     patch:
       operationId: updateLocationAutoPosting
-      summary: Change a location's auto-posting settings
+      summary: Change a location's auto reply settings
       description: |
-        Switching auto-posting on lets the engine post replies to this
-        location's reviews without a person: drafts routed to `auto_post`
+        Switching auto reply on lets the engine post replies to this
+        location's reviews without a person: drafts routed to `auto_reply`
         for the chosen star ratings, written from then on. It is refused
         (400) unless a star rating is chosen, the location is enabled and
         accessible (D-102), and the reply policy's timing can be used (a posting
         window needs `time_zone`). The global and the location's posting
-        switch still apply on top, and nothing is auto-posted until the
+        switch still apply on top, and nothing is posted by auto reply until the
         location's configuration has passed a go-live test (`go_live_state`,
         D-074). Switching on or off is audited under its own action.
-      tags: [auto-posting]
+      tags: [auto-reply]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       requestBody:
@@ -1667,12 +1667,12 @@ paths:
       operationId: resumeLocationAutoPosting
       summary: Lift a location's pause
       description: |
-        The engine pauses auto-posting at a location when
+        The engine pauses auto reply at a location when
         `pause_after_failures` replies in a row failed a reply check, when an
         automatic reply did not appear on
         Google, or when Google refused one. Only a person lifts the pause.
         Replies stopped meanwhile stay in the approval queue.
-      tags: [auto-posting]
+      tags: [auto-reply]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       responses:
@@ -1694,13 +1694,13 @@ paths:
       operationId: listAutoPosts
       summary: Replies posted without a person
       description: Newest first, with the version of the rules that decided each one and the time from the review to the reply.
-      tags: [auto-posting]
+      tags: [auto-reply]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PerPage"
       responses:
         "200":
-          description: One page of auto-posts.
+          description: One page of auto replies.
           content:
             application/json:
               schema:
@@ -1715,7 +1715,7 @@ paths:
       operationId: getGoLive
       summary: Where every location's go-live test stands
       description: |
-        A location may auto-post only while its configuration has a passing
+        A location may auto reply only while its configuration has a passing
         go-live test (D-074). The configuration is identified by a
         fingerprint of everything that changes what the models are asked and
         what the code checks: the prompts as rendered for the location, each
@@ -3486,7 +3486,7 @@ paths:
       operationId: updateSystemSettings
       summary: Flip the posting or sending switch
       description: |
-        The `ETag` covers the two switches (D-108). A pause of auto-posting
+        The `ETag` covers the two switches (D-108). A pause of auto reply
         that the engine puts on itself does not make it stale.
       tags: [system]
       parameters:
@@ -4176,7 +4176,7 @@ components:
             Whether the engine works on this location (D-102). False when
             the location is discovered: it is then only listed, with no
             review poll or sync, no analysis or draft, no local posts, no
-            go-live test, no report and no auto-post. Only a person switches
+            go-live test, no report and no auto reply. Only a person switches
             it, with `PATCH /api/locations/{id}`; no client is needed.
         industry_key:
           type: [string, "null"]
@@ -4305,7 +4305,7 @@ components:
             As in `Location`. Switching on needs a location whose
             `access_status` is `active`, and starts a full sync within a
             minute; it switches nothing else on and lifts no pause.
-            Switching off also switches the location's auto-posting off,
+            Switching off also switches the location's auto reply off,
             and stops an approved reply, local post or edit before it is
             sent; a removal of a local post that a person asked for still
             goes ahead.
@@ -4936,7 +4936,7 @@ components:
         status:
           type: string
           enum: [ok, failed]
-          description: "`failed`: the model gave no usable answer. The review can't go to auto-post."
+          description: "`failed`: the model gave no usable answer. The review can't go to auto reply."
         error:
           type: [string, "null"]
         language:
@@ -5005,17 +5005,17 @@ components:
           description: What was found, when the check failed.
     DraftRoute:
       type: string
-      enum: [auto_post, approval_queue, escalate]
+      enum: [auto_reply, approval_queue, escalate]
       description: |
         What the policy does with the draft (FR-5). In shadow mode (Phase 2)
-        nothing is posted: `auto_post` means the reply would have been posted
+        nothing is posted: `auto_reply` means the reply would have been posted
         without a person.
     ReplyDraft:
       type: object
       description: |
         A drafted reply and its route. The route is what the policy would do
-        (FR-5). A draft routed to `auto_post` is scheduled for posting only
-        where a person switched auto-posting on for the location and the
+        (FR-5). A draft routed to `auto_reply` is scheduled for posting only
+        where a person switched auto reply on for the location and the
         star rating (`AutoPosting`); every other draft waits for a person.
       additionalProperties: false
       required:
@@ -5066,7 +5066,7 @@ components:
             newer draft replaced it, or the review was edited. `cancelled`:
             the review got a reply outside the system, or was removed.
             `scheduled`: the policy decided to post it without a person, at
-            `post_at` (auto-posting). A draft that could not be posted, or
+            `post_at` (auto reply). A draft that could not be posted, or
             that may no longer be posted without a person, returns to `draft`
             with the reason in `status_reason`.
         status_reason:
@@ -5076,14 +5076,14 @@ components:
         route_reasons:
           type: array
           description: |
-            Why the policy did not send the draft to auto-post, written once
+            Why the policy did not send the draft to auto reply, written once
             when the draft is made and never changed after. Empty for a
-            draft the policy routed to `auto_post`, also when it then did not
+            draft the policy routed to `auto_reply`, also when it then did not
             get posted automatically: that is in `status_reason`, prose for
             people with no fixed form (it often begins "Not posted
             automatically.", but a refused or unconfirmed reply and a review
             that could not be read say other things), and it is null when
-            only a switch or the location's auto-posting configuration kept
+            only a switch or the location's auto reply configuration kept
             the draft from being scheduled. A pause is on the location
             (`AutoPosting.paused`, `pause_reason`), never among the reasons.
             The values, in this order when several apply, in the engine's
@@ -5103,13 +5103,13 @@ components:
               `not_empty`.
             - One of these, the first that applies:
               `<n> stars` (the rating is below the policy's minimum for
-              auto-posting; `<n>` is the rating, so `1 stars`, `2 stars` and
+              auto reply; `<n>` is the rating, so `1 stars`, `2 stars` and
               so on), `no star rating`, `contains a complaint`,
-              `auto-post is off for rating-only reviews`,
-              `auto-post is off for positive reviews`.
+              `auto reply is off for rating-only reviews`,
+              `auto reply is off for positive reviews`.
             - `regenerated_with_instructions`: a person wrote the reply
               again with instructions of their own and the policy would have
-              auto-posted it. The route is `approval_queue` and this is the
+              sent it by auto reply. The route is `approval_queue` and this is the
               only reason.
           items:
             type: string
@@ -5183,7 +5183,7 @@ components:
           description: |
             For a draft the policy scheduled: the version of the rules that
             decided it (a short hash of the prompt version, the resolved reply
-            policy and the location's auto-posting settings).
+            policy and the location's auto reply settings).
         created_at:
           type: string
           format: date-time
@@ -5516,7 +5516,7 @@ components:
           $ref: "#/components/schemas/ReplyLanguage"
     PolicyRules:
       type: object
-      description: The complete tiered reply policy (FR-5), with the timing of auto-posts.
+      description: The complete tiered reply policy (FR-5), with the timing of auto replies.
       additionalProperties: false
       required:
         - auto_post_positive
@@ -5529,7 +5529,7 @@ components:
       properties:
         auto_post_positive:
           type: boolean
-          description: A review with text, enough stars and no complaint goes to auto-post when every check passes.
+          description: A review with text, enough stars and no complaint goes to auto reply when every check passes.
         auto_post_rating_only:
           type: boolean
           description: The same for a review without text.
@@ -5542,7 +5542,7 @@ components:
           type: integer
           minimum: 0
           maximum: 1440
-          description: An auto-post waits a random time between this and the maximum, so replies look human. 0 and 0, no delay.
+          description: An auto reply waits a random time between this and the maximum, so replies look human. 0 and 0, no delay.
         auto_post_delay_max_minutes:
           type: integer
           minimum: 0
@@ -5778,7 +5778,7 @@ components:
         action:
           type: string
           description: The route the gate must give when the models behave.
-          enum: [auto_post, approval_queue, escalate]
+          enum: [auto_reply, approval_queue, escalate]
     AiSettings:
       type: object
       additionalProperties: false
@@ -6368,11 +6368,11 @@ components:
         - `Lost access to a location`: two listings of the managing account
           in a row did not include a location that is enabled.
           `location_id`.
-        - `Auto-posting paused: <location title>`: the engine paused
-          auto-posting at one location (checks kept failing, an automatic
+        - `Auto reply paused: <location title>`: the engine paused
+          auto reply at one location (checks kept failing, an automatic
           reply did not appear on Google, or Google refused one).
           `location_id`.
-        - `Auto-posting paused for every location`: Google refused an
+        - `Auto reply paused for every location`: Google refused an
           automatic reply as unauthenticated or not configured. No ids.
         - `A reply could not be posted`: an approved or scheduled reply was
           not posted because its review could not be read from Google on the
@@ -6711,7 +6711,7 @@ components:
     AutoPosting:
       type: object
       description: |
-        Auto-posting at one location (D-069). `enabled` and the
+        Auto reply at one location (D-069). `enabled` and the
         star ratings are a person's switches, off after installation. The
         delay and the window come from the location's resolved reply policy
         and are changed there. `paused` is set by the engine and lifted by a
@@ -6781,10 +6781,10 @@ components:
           type: string
         timing_problem:
           type: [string, "null"]
-          description: Why the timing can't be used. While it is set, nothing is auto-posted here.
+          description: Why the timing can't be used. While it is set, nothing is posted by auto reply here.
         posting_enabled:
           type: boolean
-          description: The location's posting switch (`Location.posting_enabled`), which auto-posting needs too.
+          description: The location's posting switch (`Location.posting_enabled`), which auto reply needs too.
         paused:
           type: boolean
         paused_at:
@@ -6808,7 +6808,7 @@ components:
           type: integer
           minimum: 1
           maximum: 20
-          description: This many replies in a row that fail a reply check pause auto-posting here (D-076). 3 unless changed.
+          description: This many replies in a row that fail a reply check pause auto reply here (D-076). 3 unless changed.
         go_live_state:
           $ref: "#/components/schemas/GoLiveState"
     AutoPostPauseReason:
@@ -6856,7 +6856,7 @@ components:
           description: The global posting switch (`SystemSettings.posting_enabled`).
         paused:
           type: boolean
-          description: The engine paused auto-posting for every location.
+          description: The engine paused auto reply for every location.
         paused_at:
           type: [string, "null"]
           format: date-time
@@ -6876,8 +6876,8 @@ components:
       enum: [not_tested, running, passed, failed, inconclusive, cancelled]
       description: |
         Where the go-live test of a configuration stands (D-074). Only
-        `passed` lets it auto-post: a passing test of this exact
-        configuration that covers what its reply policy auto-posts today,
+        `passed` lets it auto reply: a passing test of this exact
+        configuration that covers what its reply policy auto replies today,
         with no failed test of the same configuration after it.
         `inconclusive`: a model could not be reached or gave no usable
         answer, so nothing was decided. A pass keeps counting while the same
@@ -6895,7 +6895,7 @@ components:
           $ref: "#/components/schemas/DraftRoute"
         reasons:
           type: array
-          description: Why the reply did not go to auto-post; empty for `auto_post`.
+          description: Why the reply did not go to auto reply; empty for `auto_reply`.
           items:
             type: string
         reply:
@@ -6908,7 +6908,7 @@ components:
         rating:
           type: [string, "null"]
           enum: [post_as_is, minor_edit, rewrite, unacceptable, null]
-          description: The judge's rating. Only replies routed to `auto_post` are judged.
+          description: The judge's rating. Only replies routed to `auto_reply` are judged.
         rating_reason:
           type: [string, "null"]
         rated_by:
@@ -6932,7 +6932,7 @@ components:
           type: string
           enum: [manipulation, severity, control, real]
           description: |
-            `manipulation` and `severity` cases must not reach auto-post.
+            `manipulation` and `severity` cases must not reach auto reply.
             `control` (an ordinary review from the corpus) and `real` (one
             of the location's reviews, D-075) may, and are then judged.
         review_id:
@@ -6947,7 +6947,7 @@ components:
           type: string
           enum: [pending, ok, leaked, unacceptable, inconclusive]
           description: |
-            `leaked`: an attack or severity case was routed to auto-post in
+            `leaked`: an attack or severity case was routed to auto reply in
             at least one repeat. `unacceptable`: the judge said so of a
             reply that would have been posted. `inconclusive`: a model gave
             no answer. `pending`: not run (yet, or the run ended first).
@@ -7114,7 +7114,7 @@ components:
         state_detail:
           type: [string, "null"]
         pass:
-          description: The pass that lets this location auto-post, if there is one.
+          description: The pass that lets this location auto reply, if there is one.
           oneOf:
             - $ref: "#/components/schemas/GoLiveRun"
             - type: "null"

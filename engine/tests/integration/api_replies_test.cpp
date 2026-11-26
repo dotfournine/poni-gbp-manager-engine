@@ -4,7 +4,7 @@
 // signed-in person and lands in the audit log under their name.
 
 #include "api_fixture.hpp"
-#include "db/repo_auto_posting.hpp"
+#include "db/repo_auto_reply.hpp"
 #include "db/repo_notifications.hpp"
 #include "db/repo_reviews.hpp"
 #include "jobs/go_live.hpp"
@@ -83,7 +83,7 @@ protected:
     }
     void posting(bool on) { ASSERT_EQ(patch_current("/api/system/settings", on ? R"({"posting_enabled": true})" : R"({"posting_enabled": false})").status, 200u); }
 
-    // A location's auto-posting settings as the dashboard reads them: from the overview.
+    // A location's auto reply settings as the dashboard reads them: from the overview.
     boost::json::value auto_posting_of(std::int64_t location) {
         for (const auto& item : read("/api/auto-posting").at("locations").as_array()) {
             if (item.at("location_id").as_int64() == location) return item;
@@ -281,7 +281,7 @@ TEST_F(RepliesApi, RegeneratingWritesANewDraftWithTheStaffInstructions) {
     EXPECT_EQ(fresh.at("text").as_string(), "Thank you! Eva says hello, and your next head spa is waiting whenever you are.");
     EXPECT_EQ(fresh.at("instructions").as_string(), "Mention Eva by name and keep it to two sentences.");
     EXPECT_EQ(fresh.at("created_by").as_string(), "staff@xvisionmediaus.com");
-    // A draft shaped by a person's words always waits for a person, also once auto-posting exists.
+    // A draft shaped by a person's words always waits for a person, also once auto reply exists.
     EXPECT_EQ(fresh.at("route").as_string(), "approval_queue");
     EXPECT_EQ(read(path).at("status").as_string(), "superseded");
     EXPECT_EQ(audited("draft.regenerate"), 1);
@@ -583,7 +583,7 @@ TEST_F(RepliesApi, TheSwitchesChangeOnlyAgainstTheirCurrentEtagWhichAPauseLeaves
     EXPECT_EQ(error_code(patch("/api/system/settings", R"({"email_sending_enabled": true})")), "precondition_required");
 
     tx([&](pqxx::work& tx) {
-        ASSERT_TRUE(repo::pause_auto_posting(tx, std::nullopt, repo::kPausePostRefused, "Google refused an automatic reply (HTTP 401).", clock_.now()));
+        ASSERT_TRUE(repo::pause_auto_reply(tx, std::nullopt, repo::kPausePostRefused, "Google refused an automatic reply (HTTP 401).", clock_.now()));
     });
     EXPECT_EQ(etag("/api/system/settings", browser_), read_tag);
 
@@ -597,7 +597,7 @@ TEST_F(RepliesApi, TheSwitchesChangeOnlyAgainstTheirCurrentEtagWhichAPauseLeaves
     EXPECT_EQ(audited("email_sending.disabled"), 0);
 }
 
-// ---- auto-posting ------------------------------------------------------
+// ---- auto reply ------------------------------------------------------
 
 TEST_F(RepliesApi, ALocationShowsItsTimeZoneInTheListAndWhenRead) {
     const auto zone_in_list = [&](std::int64_t id) -> boost::json::value {
@@ -610,27 +610,27 @@ TEST_F(RepliesApi, ALocationShowsItsTimeZoneInTheListAndWhenRead) {
     EXPECT_TRUE(read("/api/locations/" + std::to_string(spa_)).at("time_zone").is_null()) << "Google gives none";
     EXPECT_TRUE(zone_in_list(spa_).is_null());
 
-    // It is set where auto-posting's own settings are, and nowhere else: one value, shown in both places.
+    // It is set where auto reply's own settings are, and nowhere else: one value, shown in both places.
     ASSERT_EQ(patch(target, R"({"time_zone": "America/New_York"})").status, 200u);
     EXPECT_EQ(read("/api/locations/" + std::to_string(spa_)).at("time_zone").as_string(), "America/New_York");
     EXPECT_EQ(zone_in_list(spa_).as_string(), "America/New_York");
     EXPECT_EQ(auto_posting_of(spa_).at("time_zone").as_string(), "America/New_York");
     EXPECT_EQ(patch("/api/locations/" + std::to_string(spa_), R"({"time_zone": "Europe/Paris"})").status, 400u)
         << "the location's own update does not take it";
-    EXPECT_EQ(count("locations WHERE auto_post_enabled"), 0);
+    EXPECT_EQ(count("locations WHERE auto_reply_enabled"), 0);
 
     ASSERT_EQ(patch(target, R"({"time_zone": null})").status, 200u);
     EXPECT_TRUE(read("/api/locations/" + std::to_string(spa_)).at("time_zone").is_null());
 }
 
-TEST_F(RepliesApi, AutoPostingEndpointsNeedASessionAndEveryChangeTheCsrfToken) {
+TEST_F(RepliesApi, AutoReplyEndpointsNeedASessionAndEveryChangeTheCsrfToken) {
     draft_for();
     // The routes of this area, from the router's table: the 6 this test names and every one added since.
     EXPECT_GE(expect_session_and_csrf({"auto-post", "/unschedule"}, R"({"enabled": true, "five_star": true})"), 6u);
-    EXPECT_EQ(count("locations WHERE auto_post_enabled"), 0);
+    EXPECT_EQ(count("locations WHERE auto_reply_enabled"), 0);
 }
 
-TEST_F(RepliesApi, AutoPostingIsOffAndNothingGoesOutBeforeTheGoLiveTestPassed) {
+TEST_F(RepliesApi, AutoReplyIsOffAndNothingGoesOutBeforeTheGoLiveTestPassed) {
     const auto target = "/api/locations/" + std::to_string(spa_) + "/auto-posting";
     const auto before = auto_posting_of(spa_);
     EXPECT_FALSE(before.at("enabled").as_bool());
@@ -657,18 +657,18 @@ TEST_F(RepliesApi, AutoPostingIsOffAndNothingGoesOutBeforeTheGoLiveTestPassed) {
     ASSERT_EQ(prepared.status, 200u) << prepared.body;
     EXPECT_EQ(json(prepared).at("time_zone").as_string(), "America/New_York");
     EXPECT_EQ(json(prepared).at("pause_after_failures").as_int64(), 2);
-    EXPECT_EQ(audited("location.auto_post_settings"), 1);
+    EXPECT_EQ(audited("location.auto_reply_settings"), 1);
     EXPECT_EQ(patch(target, R"({"time_zone": null})").status, 200u);
     EXPECT_TRUE(auto_posting_of(spa_).at("time_zone").is_null());
 
-    // A person switches auto-posting on. No reply approved by a person has been
+    // A person switches auto reply on. No reply approved by a person has been
     // published, and it is not refused (D-076): the go-live test is the safeguard.
     posting(true);
     const auto on = patch(target, R"({"enabled": true})");
     ASSERT_EQ(on.status, 200u) << on.body;
     EXPECT_TRUE(json(on).at("enabled").as_bool());
     EXPECT_EQ(json(on).at("go_live_state").as_string(), "not_tested");
-    EXPECT_EQ(audited("location.auto_post_enabled"), 1);
+    EXPECT_EQ(audited("location.auto_reply_enabled"), 1);
     const auto first = draft_for("r1");
     EXPECT_EQ(read("/api/drafts/" + std::to_string(first)).at("status").as_string(), "draft") << "switched on, untested: a person decides";
 
@@ -746,7 +746,7 @@ TEST_F(RepliesApi, AutoPostingIsOffAndNothingGoesOutBeforeTheGoLiveTestPassed) {
 
     const auto off = patch(target, R"({"enabled": false})");
     ASSERT_EQ(off.status, 200u);
-    EXPECT_EQ(audited("location.auto_post_disabled"), 1);
+    EXPECT_EQ(audited("location.auto_reply_disabled"), 1);
 }
 
 TEST_F(RepliesApi, AGoLiveTestCanBeCancelledAndNeedsTheJudgesProvider) {
@@ -775,7 +775,7 @@ TEST_F(RepliesApi, AGoLiveTestCanBeCancelledAndNeedsTheJudgesProvider) {
 TEST_F(RepliesApi, AScheduledReplyCanBeTakenBackThroughTheApi) {
     posting(true);
     // Switched on in this test's schema, with a delay so the reply is still waiting.
-    exec("UPDATE locations SET auto_post_enabled = true, auto_post_five_star = true");
+    exec("UPDATE locations SET auto_reply_enabled = true, auto_reply_five_star = true");
     certify(spa_);
     set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
     const auto draft_id = draft_for("r1");
@@ -799,10 +799,10 @@ TEST_F(RepliesApi, AScheduledReplyCanBeTakenBackThroughTheApi) {
 TEST_F(RepliesApi, APersonResumesAPausedLocationAndAPauseOnEverything) {
     const auto target = "/api/locations/" + std::to_string(spa_) + "/auto-posting";
     EXPECT_EQ(post(target + "/resume").status, 200u) << "resuming what is not paused changes nothing";
-    EXPECT_EQ(audited("location.auto_post_resumed"), 0);
+    EXPECT_EQ(audited("location.auto_reply_resumed"), 0);
     tx([&](pqxx::work& tx) {
-        repo::pause_auto_posting(tx, spa_, repo::kPausePostRefused, "Google refused an automatic reply (HTTP 403).", clock_.now());
-        repo::pause_auto_posting(tx, std::nullopt, repo::kPausePostRefused, "Google refused an automatic reply (HTTP 401).", clock_.now());
+        repo::pause_auto_reply(tx, spa_, repo::kPausePostRefused, "Google refused an automatic reply (HTTP 403).", clock_.now());
+        repo::pause_auto_reply(tx, std::nullopt, repo::kPausePostRefused, "Google refused an automatic reply (HTTP 401).", clock_.now());
     });
     const auto paused = auto_posting_of(spa_);
     EXPECT_TRUE(paused.at("paused").as_bool());
@@ -814,12 +814,12 @@ TEST_F(RepliesApi, APersonResumesAPausedLocationAndAPauseOnEverything) {
     ASSERT_EQ(resumed.status, 200u);
     EXPECT_FALSE(json(resumed).at("paused").as_bool());
     EXPECT_TRUE(json(resumed).at("pause_reason").is_null());
-    EXPECT_EQ(audited("location.auto_post_resumed"), 1);
+    EXPECT_EQ(audited("location.auto_reply_resumed"), 1);
     EXPECT_TRUE(read("/api/auto-posting").at("paused").as_bool()) << "the pause on everything is lifted separately";
     const auto all = post("/api/auto-posting/resume");
     ASSERT_EQ(all.status, 200u);
     EXPECT_FALSE(json(all).at("paused").as_bool());
-    EXPECT_EQ(audited("auto_posting.resumed"), 1);
+    EXPECT_EQ(audited("auto_reply.resumed"), 1);
     EXPECT_EQ(post("/api/locations/999999/auto-posting/resume").status, 404u);
 }
 

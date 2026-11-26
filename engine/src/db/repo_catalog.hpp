@@ -94,7 +94,7 @@ std::optional<model::Location> get_location(pqxx::transaction_base& tx, std::int
 // The one place that changes locations.client_id. The link is bookkeeping
 // and changes nothing else about the location (D-102). Switching the
 // location on needs access to it and makes its reviews due for a full sync
-// at once; switching it off switches its auto-posting off (D-070).
+// at once; switching it off switches its auto reply off (D-070).
 Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const LocationPatch& patch);
 // What PATCH /api/locations/{id} can set, in LocationPatch's order, with the location's values: what its ETag
 // covers (D-108). Nothing a discovery, a poll or a pause writes is in it.

@@ -51,7 +51,7 @@ BOOST_DESCRIBE_STRUCT(RaisedFlag, (), (id, label, evidence))
 
 struct Analysis {
     // False: the analyzer was asked and gave no usable answer. The gate keeps
-    // such a review away from auto-post.
+    // such a review away from auto reply.
     bool ok = true;
     std::string error;
     std::string language;  // ISO 639-1, "other" or "none"
@@ -108,7 +108,7 @@ struct DraftOutcome {
 };
 
 // `answer` is nothing when the generator gave no usable answer; the draft is
-// then empty and can't go to auto-post.
+// then empty and can't go to auto reply.
 DraftOutcome finish_draft(const Analysis& analysis, const DraftPlan& plan, int stars, bool has_text,
                           const std::optional<GeneratorAnswer>& answer, const ResolvedSettings& settings);
 

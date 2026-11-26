@@ -245,7 +245,7 @@ def test_the_command_prints_whom_a_version_changes(db_url, db, kb, tmp_path, mon
     (kb.root / "industries/wellness").rmdir()
     assert cli.main(["seed"]) == 0
     out = capsys.readouterr().out
-    assert "none of them auto-posts until a new go-live test has passed" in out
+    assert "none of them auto replies until a new go-live test has passed" in out
     assert "  - Harbor (food_beverage)" in out
     assert "no longer has the industry of these locations" in out
     assert "  - Willow - Midtown (wellness)" in out

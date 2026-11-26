@@ -8,7 +8,7 @@
 #include "core/text.hpp"
 #include "db/database.hpp"
 #include "db/repo_analysis.hpp"
-#include "db/repo_auto_posting.hpp"
+#include "db/repo_auto_reply.hpp"
 #include "db/repo_notifications.hpp"
 #include "db/repo_reviews.hpp"
 #include "db/repo_settings.hpp"
@@ -246,14 +246,14 @@ Result<model::ReplyDraft> reject_draft(pqxx::transaction_base& tx, audit::Writer
     return *get_draft(tx, draft_id);
 }
 
-// ---- auto-posting (D-069) --------------------------------------------------------
+// ---- auto reply (D-069) --------------------------------------------------------
 
 namespace {
 
 // Whether a draft may be posted without a person, as things are now.
 struct AutoVerdict {
     bool ok = false;
-    // Not ok only because the switches don't ask for an auto-post here.
+    // Not ok only because the switches don't ask for an auto reply here.
     bool by_configuration = false;
     // Why not, as a sentence.
     std::string reason;
@@ -272,7 +272,7 @@ AutoVerdict no(AutoVerdict verdict, std::string reason, bool by_configuration = 
     return verdict;
 }
 
-// Every condition of an auto-post, read in the caller's transaction. Called
+// Every condition of an auto reply, read in the caller's transaction. Called
 // when the pipeline has stored the draft (`at_claim` false) and again by the
 // claim, just before the PUT, so that a switch flipped, a pause, an edit or
 // a changed voice in between stops the post. The review's own state (still
@@ -294,8 +294,8 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
                coalesce(r.rating, 0), r.id, r.location_id, r.ignored_at IS NOT NULL,
                EXISTS (SELECT 1 FROM review_events e WHERE e.review_id = r.id AND e.kind = 'review_edited'),
                EXISTS (SELECT 1 FROM cases k WHERE k.review_id = r.id AND k.status = 'open'),
-               l.auto_post_enabled, l.auto_post_five_star, l.auto_post_four_star, l.auto_post_daily_cap, l.time_zone,
-               l.auto_post_paused_at IS NOT NULL, s.auto_post_paused_at IS NOT NULL, s.posting_enabled, l.posting_enabled,
+               l.auto_reply_enabled, l.auto_reply_five_star, l.auto_reply_four_star, l.auto_reply_daily_cap, l.time_zone,
+               l.auto_reply_paused_at IS NOT NULL, s.auto_reply_paused_at IS NOT NULL, s.posting_enabled, l.posting_enabled,
                l.enabled AND l.access_status = 'active',
                {},
                (SELECT count(*) FROM reply_drafts o JOIN reviews orv ON orv.id = o.review_id
@@ -306,8 +306,8 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
           FROM reply_drafts d JOIN reviews r ON r.id = d.review_id JOIN locations l ON l.id = r.location_id
           CROSS JOIN system_settings s
          WHERE d.id = $1)sql",
-                                          auto_posts_since("l.id", "$2")),
-                              pqxx::params{draft_id, to_timestamptz(now - kAutoPostCapWindow)});
+                                          auto_replies_since("l.id", "$2")),
+                              pqxx::params{draft_id, to_timestamptz(now - kAutoReplyCapWindow)});
     AutoVerdict verdict;
     if (rows.empty()) return no(std::move(verdict), "The draft no longer exists.");
     const auto row = rows[0];
@@ -325,16 +325,16 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
     if (!row[21].as<bool>()) return no(std::move(verdict), "Posting is switched off.", true);
     if (!row[22].as<bool>()) return no(std::move(verdict), "Posting is switched off for this location.", true);
     if (!row[23].as<bool>()) return no(std::move(verdict), "The review's location is no longer synced.", true);
-    if (!row[14].as<bool>()) return no(std::move(verdict), "Auto-posting is switched off for this location.", true);
+    if (!row[14].as<bool>()) return no(std::move(verdict), "Auto reply is switched off for this location.", true);
     // Three stars and fewer always wait for a person (FR-5), whatever the policy says.
     if (!((stars == 5 && five_star) || (stars == 4 && four_star))) {
-        return no(std::move(verdict), std::format("Auto-posting is not switched on for {}-star reviews at this location.", stars), true);
+        return no(std::move(verdict), std::format("Auto reply is not switched on for {}-star reviews at this location.", stars), true);
     }
-    if (row[0].as<std::string>() != domain::kRouteAutoPost) return no(std::move(verdict), "The policy did not route this draft to auto-post.", true);
+    if (row[0].as<std::string>() != domain::kRouteAutoReply) return no(std::move(verdict), "The policy did not route this draft to auto reply.", true);
 
     // 2. Pauses the engine put on itself.
-    if (row[20].as<bool>()) return no(std::move(verdict), "Auto-posting is paused for every location.");
-    if (row[19].as<bool>()) return no(std::move(verdict), "Auto-posting is paused for this location.");
+    if (row[20].as<bool>()) return no(std::move(verdict), "Auto reply is paused for every location.");
+    if (row[19].as<bool>()) return no(std::move(verdict), "Auto reply is paused for this location.");
 
     // 3. The draft and its review.
     if (!row[1].as<bool>() || text::trim(text).empty()) return no(std::move(verdict), "The draft has no text.");
@@ -360,7 +360,7 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
     if (!report.passed()) return no(std::move(verdict), std::format("The reply fails a check ({}).", report.failed_names()));
 
     // 5. The go-live test (D-074): this location's configuration, as it is
-    // now, has passed one that covers what its policy auto-posts. A setting
+    // now, has passed one that covers what its policy auto replies. A setting
     // changed since the pass, at scheduling or between then and the claim,
     // stops the post until a person has run the test again.
     const auto go_live = go_live_gate(tx, verdict.location_id);
@@ -426,11 +426,11 @@ void emit_approval_needed(pqxx::transaction_base& tx, std::int64_t draft_id, con
 
 // A scheduled draft that may not be posted without a person after all: back
 // to the approval queue with the reason, never scheduled again by itself.
-void stop_auto_post(pqxx::transaction_base& tx, std::int64_t draft_id, std::int64_t review_id, const std::string& why,
+void stop_auto_reply(pqxx::transaction_base& tx, std::int64_t draft_id, std::int64_t review_id, const std::string& why,
                     core::TimePoint now) {
     set_draft(tx, draft_id, "draft", "Not posted automatically. " + why, now);
     audit::record(tx, auto_reply(),
-                  {.action = "reply.auto_post_cancelled",
+                  {.action = "reply.auto_reply_cancelled",
                    .object_type = "draft",
                    .object_id = std::to_string(draft_id),
                    .after = {{"review_id", review_id}, {"reason", why}}},
@@ -440,7 +440,7 @@ void stop_auto_post(pqxx::transaction_base& tx, std::int64_t draft_id, std::int6
 
 }  // namespace
 
-bool schedule_auto_post(pqxx::transaction_base& tx, std::int64_t draft_id, core::TimePoint now, double roll) {
+bool schedule_auto_reply(pqxx::transaction_base& tx, std::int64_t draft_id, core::TimePoint now, double roll) {
     const auto verdict = auto_verdict(tx, draft_id, now, false);
     if (!verdict.ok) {
         if (verdict.by_configuration) return false;
@@ -468,7 +468,7 @@ bool schedule_auto_post(pqxx::transaction_base& tx, std::int64_t draft_id, core:
                         .max_attempts = kPostReplyAttempts},
                        now);
     audit::record(tx, auto_reply(),
-                  {.action = "reply.auto_post_scheduled",
+                  {.action = "reply.auto_reply_scheduled",
                    .object_type = "draft",
                    .object_id = std::to_string(draft_id),
                    .after = {{"review_id", verdict.review_id},
@@ -482,7 +482,7 @@ Result<model::ReplyDraft> unschedule_draft(pqxx::transaction_base& tx, audit::Wr
     const auto state = lock_draft(tx, draft_id);
     if (!state) return not_found("draft");
     if (state->status != "scheduled") return conflict("draft_not_scheduled", "The draft is not scheduled for an automatic post.");
-    set_draft(tx, draft_id, "draft", "A person took this reply out of auto-posting.", audit.now());
+    set_draft(tx, draft_id, "draft", "A person took this reply out of auto reply.", audit.now());
     audit.record("draft.unschedule", "draft", draft_id, {.after = {{"review_id", state->review_id}}});
     return *get_draft(tx, draft_id);
 }
@@ -541,7 +541,7 @@ Claim claim_post(pqxx::transaction_base& tx, std::int64_t draft_id, core::TimePo
     if (state->open_post) {
         const std::string waiting = "An earlier reply to this review is still waiting to appear on Google.";
         if (automatic) {
-            stop_auto_post(tx, draft_id, state->review_id, waiting, now);
+            stop_auto_reply(tx, draft_id, state->review_id, waiting, now);
         } else {
             stop("draft", waiting, "an earlier post is unconfirmed");
         }
@@ -554,18 +554,18 @@ Claim claim_post(pqxx::transaction_base& tx, std::int64_t draft_id, core::TimePo
         // Back to the queue: a reply never goes out later on its own because a
         // switch was flipped back. A person approves it again.
         if (automatic) {
-            stop_auto_post(tx, draft_id, state->review_id, *off, now);
+            stop_auto_reply(tx, draft_id, state->review_id, *off, now);
         } else {
             stop("draft", *off + " The approval was not carried out; approve again when posting is on.", *off);
         }
         return {.outcome = Outcome::stopped, .detail = *off};
     }
     if (automatic) {
-        // Everything that allowed the auto-post when it was scheduled, as it is now.
+        // Everything that allowed the auto reply when it was scheduled, as it is now.
         const auto verdict = auto_verdict(tx, draft_id, now, true);
         if (!verdict.ok) {
-            stop_auto_post(tx, draft_id, state->review_id, verdict.reason, now);
-            return {.outcome = Outcome::auto_post_stopped, .detail = verdict.reason};
+            stop_auto_reply(tx, draft_id, state->review_id, verdict.reason, now);
+            return {.outcome = Outcome::auto_reply_stopped, .detail = verdict.reason};
         }
         // The route was decided under the reply policy as it was then. If the
         // policy's rules or timing changed since, that decision no longer stands.
@@ -573,8 +573,8 @@ Claim claim_post(pqxx::transaction_base& tx, std::int64_t draft_id, core::TimePo
         const auto* policy_then = then.is_object() ? then.get_object().if_contains("policy") : nullptr;
         if (!policy_then || *policy_then != verdict.snapshot.at("policy")) {
             const std::string why = "The reply policy changed after this reply was scheduled.";
-            stop_auto_post(tx, draft_id, state->review_id, why, now);
-            return {.outcome = Outcome::auto_post_stopped, .detail = why};
+            stop_auto_reply(tx, draft_id, state->review_id, why, now);
+            return {.outcome = Outcome::auto_reply_stopped, .detail = why};
         }
     }
 
@@ -731,7 +731,7 @@ bool settle_open_post(pqxx::transaction_base& tx, const OpenPost& post, const st
     if (expire_post(tx, post.post_id, now)) {
         if (post.automatic) {
             // An automatic reply whose outcome stayed unknown: no more of them here until a person has looked.
-            pause_auto_posting(tx, post.location_id, kPausePostUnconfirmed,
+            pause_auto_reply(tx, post.location_id, kPausePostUnconfirmed,
                                "An automatic reply was sent to Google and did not appear on the review within the "
                                "confirmation window. Look at the review on Google before resuming.",
                                now);

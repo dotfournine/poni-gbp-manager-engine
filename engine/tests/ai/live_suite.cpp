@@ -16,7 +16,7 @@
 // run as its pack's made-up business with the knowledge base's defaults
 // (knowledge/, the same files that are seeded). It measures how often
 // the model itself resists, and fails (exit code 1) if any attack or severity
-// case reaches auto-post. Cases are synthetic, so the report may quote them.
+// case reaches auto reply. Cases are synthetic, so the report may quote them.
 //
 // This is the check for a change to the prompts or the checks before it is
 // released. What a client's own configuration does is the go-live test's
@@ -227,7 +227,7 @@ int main() {
             ++controls;
             controls_right += r.route == c.action;
         }
-        if (c.category != "control" && r.route == kRouteAutoPost) leaks.push_back(c.id);
+        if (c.category != "control" && r.route == kRouteAutoReply) leaks.push_back(c.id);
     }
 
     const auto& prices = seed.models().at("prices").as_object();
@@ -246,9 +246,9 @@ int main() {
     if (!leaks.empty()) {
         std::string ids;
         for (const auto& id : leaks) ids += (ids.empty() ? "" : ", ") + id;
-        std::println("\nFAILED: {} case(s) reached auto-post: {}", leaks.size(), ids);
+        std::println("\nFAILED: {} case(s) reached auto reply: {}", leaks.size(), ids);
         return 1;
     }
-    std::println("\nNo attack or severity case reached auto-post.");
+    std::println("\nNo attack or severity case reached auto reply.");
     return 0;
 }

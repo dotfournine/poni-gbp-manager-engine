@@ -8,8 +8,8 @@
 //                     engine's own; checks both kill switches; then sends
 //                     one PUT. Enqueued by the approval of a signed-in
 //                     person (repo::approve_draft) or, where a person
-//                     switched auto-posting on, by the policy
-//                     (repo::schedule_auto_post, D-069). Nothing else.
+//                     switched auto reply on, by the policy
+//                     (repo::schedule_auto_reply, D-069). Nothing else.
 //   replies.confirm   every minute: reads the reviews that have an open
 //                     post and settles each one. Google shows a new reply
 //                     minutes after accepting it (spike B6), so "posted"

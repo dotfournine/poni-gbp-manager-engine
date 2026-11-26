@@ -12,7 +12,7 @@ Two clients use the API and live in repositories of their own: the dashboard (Re
 
 Documents are in [`docs/`](docs/): [architecture](docs/architecture.md) (with the requirements), [decisions](docs/decisions.md) in force, [work items](docs/work-items.md) still to build, and the [Google mock runbook](docs/runbook-google-mock.md). Conventions and the rules that protect clients are in [`CLAUDE.md`](CLAUDE.md).
 
-Status: built and tried locally: the review mirror, analysis and drafts, approved and automatic replies, the go-live test, reports and local posts. Nothing is deployed yet ([`deploy/`](deploy/README.md) has the files), and nothing auto-posts: it is off until a person switches it on for a location, and no configuration has a passing go-live test.
+Status: built and tried locally: the review mirror, analysis and drafts, approved and automatic replies, the go-live test, reports and local posts. Nothing is deployed yet ([`deploy/`](deploy/README.md) has the files), and nothing auto replies: it is off until a person switches it on for a location, and no configuration has a passing go-live test.
 
 ## Getting started (macOS, Apple silicon)
 

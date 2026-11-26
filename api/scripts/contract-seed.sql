@@ -109,8 +109,8 @@ SELECT now(), v.task, 'seeded-model', l.id, r.id, v.attempt, v.status, v.error, 
 -- something to answer with. A made-up fingerprint: it gives nothing a pass,
 -- and no location on GET /api/go-live shows it, so it has a fixed id that
 -- check-contract.mjs reads it by. It was submitted for the seeded location.
-INSERT INTO go_live_runs (id, location_id, fingerprint, fingerprint_inputs, status, summary, auto_post_positive,
-                          auto_post_rating_only, auto_post_min_stars, corpus_version, repeats, real_reviews, started_at, finished_at)
+INSERT INTO go_live_runs (id, location_id, fingerprint, fingerprint_inputs, status, summary, auto_reply_positive,
+                          auto_reply_rating_only, auto_reply_min_stars, corpus_version, repeats, real_reviews, started_at, finished_at)
 OVERRIDING SYSTEM VALUE
 SELECT 900000001, l.id, 'contract-seeded', '{}'::jsonb,
        'failed', '1 of 2 cases failed: 1 reply that would have been posted the judge rated unacceptable.', true, true, 4,
@@ -125,7 +125,7 @@ SELECT g.id, v.case_key, v.category, CASE WHEN v.category = 'real' THEN r.id END
        (VALUES ('M-01', 'manipulation', 5, 'ok', NULL,
                 '[{"route": "approval_queue", "reasons": ["manipulation_suspected"], "reply": "Thank you for your kind words!", "failed_checks": [], "rating": null, "rating_reason": null, "rated_by": null}]'),
                ('review:seeded', 'real', 5, 'unacceptable', 'The reply promises a discount.',
-                '[{"route": "auto_post", "reasons": [], "reply": "Thank you! Enjoy 10% off next time.", "failed_checks": [], "rating": "unacceptable", "rating_reason": "The reply promises a discount.", "rated_by": null}]'))
+                '[{"route": "auto_reply", "reasons": [], "reply": "Thank you! Enjoy 10% off next time.", "failed_checks": [], "rating": "unacceptable", "rating_reason": "The reply promises a discount.", "rated_by": null}]'))
            AS v(case_key, category, stars, verdict, detail, attempts)
  WHERE g.id = 900000001 AND r.gbp_review_id = 'contract-review-1'
 ON CONFLICT (run_id, case_key) DO NOTHING;

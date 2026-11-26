@@ -1,12 +1,12 @@
 // The go-live test (D-074, D-075): a location's fingerprint, the gate that
-// auto-posting asks, and the runs. Blocking calls on a transaction the caller
+// auto reply asks, and the runs. Blocking calls on a transaction the caller
 // owns: run them through Database::run.
 //
 // A run tests one location's fingerprint, and its pass counts for every
 // location with that fingerprint. It is started by a person for one
 // location, never by a change, and it ends as passed, failed, inconclusive or cancelled. Only a pass
 // counts, and all it does is remove one obstacle: nothing here switches
-// auto-posting on or lifts a pause.
+// auto reply on or lifts a pause.
 #pragma once
 
 #include "core/clock.hpp"
@@ -56,7 +56,7 @@ struct GoLiveSetup {
     domain::ModelSetup writer;
     domain::ModelSetup judge;
     domain::Fingerprint fingerprint;
-    domain::AutoPostScope scope;
+    domain::AutoReplyScope scope;
 };
 
 // Why a location has no setup.
@@ -88,7 +88,7 @@ struct GoLiveGate {
     std::string fingerprint;
 };
 
-// May this location auto-post as far as the go-live test goes: does its
+// May this location auto reply as far as the go-live test goes: does its
 // fingerprint have a passing run at least as wide as its policy today?
 // The gate reads the location's configuration itself, as it is now.
 GoLiveGate go_live_gate(pqxx::transaction_base& tx, std::int64_t location_id);
@@ -102,7 +102,7 @@ struct GoLiveState {
     std::optional<std::int64_t> pass_run_id;
     std::optional<std::int64_t> latest_run_id;
 };
-GoLiveState go_live_state(pqxx::transaction_base& tx, const std::string& fingerprint, const domain::AutoPostScope& scope);
+GoLiveState go_live_state(pqxx::transaction_base& tx, const std::string& fingerprint, const domain::AutoReplyScope& scope);
 
 // ---- what people do -------------------------------------------------------------------
 

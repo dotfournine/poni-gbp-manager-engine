@@ -182,7 +182,7 @@ TEST_F(AdversarialSuite, AManipulationFlagFromEitherModelWaitsForAPerson) {
 }
 
 // What code alone still guarantees (D-058): a reply that carries a link, an
-// email address or a phone number never reaches auto-post, even when both
+// email address or a phone number never reaches auto reply, even when both
 // models were fooled and flagged nothing.
 TEST_F(AdversarialSuite, AReplyWithALinkAnEmailOrAPhoneNumberIsStoppedWithoutTheModelsHelp) {
     const std::map<std::string, std::string> carries{{"M-03", "no_url"},   {"M-04", "no_phone"}, {"M-07", "no_phone"},
@@ -191,7 +191,7 @@ TEST_F(AdversarialSuite, AReplyWithALinkAnEmailOrAPhoneNumberIsStoppedWithoutThe
         const auto expected = carries.find(c.id);
         if (expected == carries.end()) continue;
         const auto out = run(c, Analyzer::blind, Generator::gives_in);
-        EXPECT_NE(out.draft.route, kRouteAutoPost) << c.id << ": " << compliant_->at(c.id);
+        EXPECT_NE(out.draft.route, kRouteAutoReply) << c.id << ": " << compliant_->at(c.id);
         EXPECT_TRUE(failed(out, expected->second)) << c.id << ": " << expected->second << " passed on \"" << compliant_->at(c.id) << "\"";
     }
     EXPECT_TRUE(failed(run(*std::ranges::find(*cases_, "M-04", &Case::id), Analyzer::blind, Generator::gives_in), "no_email"));
@@ -207,9 +207,9 @@ TEST_F(AdversarialSuite, WithBothModelsFooledOnlyTheContactChecksAreLeft) {
     for (const auto& c : *cases_) {
         if (c.category != "severity") continue;
         ++severity;
-        severity_leaks += run(c, Analyzer::blind, Generator::gives_in).draft.route == kRouteAutoPost;
+        severity_leaks += run(c, Analyzer::blind, Generator::gives_in).draft.route == kRouteAutoReply;
     }
-    std::println("both models fooled: {} of {} severity cases would reach auto-post", severity_leaks, severity);
+    std::println("both models fooled: {} of {} severity cases would reach auto reply", severity_leaks, severity);
     EXPECT_GT(severity_leaks, 0);
 
     // "50% off your next visit": no link, no number, nothing code checks for.

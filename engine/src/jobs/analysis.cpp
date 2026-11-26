@@ -1,6 +1,6 @@
 #include "jobs/analysis.hpp"
 
-#include "db/repo_auto_posting.hpp"
+#include "db/repo_auto_reply.hpp"
 #include "db/repo_posting.hpp"
 
 #include "core/log.hpp"
@@ -330,7 +330,7 @@ asio::awaitable<std::optional<repo::NewDraft>> ReviewPipeline::compose_draft(
         }
     }
     auto outcome = domain::finish_draft(analysis, plan, context.stars, has_text, answer, settings);
-    if (regeneration && outcome.route == domain::kRouteAutoPost) {
+    if (regeneration && outcome.route == domain::kRouteAutoReply) {
         // Words a person added to the prompt were never part of what the
         // adversarial suite ran, so such a draft always waits for a person.
         outcome.route = std::string(domain::kRouteApproval);
@@ -381,22 +381,22 @@ asio::awaitable<bool> ReviewPipeline::store_own_draft(const repo::ReviewContext&
         draft.outcome.route, reasons.empty() ? std::string{} : std::format(" ({})", reasons));
     auto notice_subject = std::format("Approval needed: {}", place);
 
-    // Picked here, on the engine's thread: where in the policy's delay range an auto-post falls.
+    // Picked here, on the engine's thread: where in the policy's delay range an auto reply falls.
     const double roll = options_.delay_roll ? options_.delay_roll() : random_roll();
     const bool failed_a_check = std::ranges::any_of(draft.outcome.checks, [](const domain::CheckResult& check) { return !check.passed; });
     const bool stored = co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) {
         const auto id = repo::store_draft_if_wanted(tx, draft, std::nullopt, now);
         if (!id) return false;
-        // Checks that keep failing pause auto-posting at the location (D-072).
+        // Checks that keep failing pause auto reply at the location (D-072).
         if (failed_a_check) repo::pause_if_checks_keep_failing(tx, setup.location_id, now);
         // The second way a reply gets on its way to Google (D-069): the
-        // policy routed this draft to auto-post, and a person switched
-        // auto-posting on for this location and star rating. Everywhere
+        // policy routed this draft to auto reply, and a person switched
+        // auto reply on for this location and star rating. Everywhere
         // else, which is everywhere after installation, the draft waits
         // for a person as before.
         bool scheduled = false;
-        if (draft.outcome.route == domain::kRouteAutoPost) {
-            scheduled = repo::schedule_auto_post(tx, *id, now, roll);
+        if (draft.outcome.route == domain::kRouteAutoReply) {
+            scheduled = repo::schedule_auto_reply(tx, *id, now, roll);
         }
         // A draft that waits for a person says so. An escalated review
         // already raised its own alert.

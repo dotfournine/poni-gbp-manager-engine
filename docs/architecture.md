@@ -73,9 +73,9 @@ A job is a row in `jobs` (`run_at`, backoff, idempotency keys, `FOR UPDATE SKIP 
 ### 4.1 New review to reply
 
 1. **Analysis.** Every minute `reviews.analyze_pending` finds reviews whose current version has no analysis, or with no reply and no live draft; `reviews.analyze` asks the model, with the industry profile, for FR-3's analysis. Never from Google's translation.
-2. **Policy** (`domain/reply_policy`): auto-post, approval or escalate. A flag on an unreplied review opens an escalation and its alert in the same transaction.
-3. **Draft** in the location's voice and localization; the checks and the policy gate (section 10) decide whether it may auto-post.
-4. **Posting.** Only `repo::approve_draft` and `repo::schedule_auto_post` enqueue `replies.post`; an auto-post waits a random delay inside the window (D-071). The job reads the review from Google again; `repo::claim_post` checks it, both switches, `auto_verdict` and the open-post rule in one transaction (D-061, D-069 to D-072); then the PUT.
+2. **Policy** (`domain/reply_policy`): auto reply, approval or escalate. A flag on an unreplied review opens an escalation and its alert in the same transaction.
+3. **Draft** in the location's voice and localization; the checks and the policy gate (section 10) decide whether it may auto reply.
+4. **Posting.** Only `repo::approve_draft` and `repo::schedule_auto_reply` enqueue `replies.post`; an auto reply waits a random delay inside the window (D-071). The job reads the review from Google again; `repo::claim_post` checks it, both switches, `auto_verdict` and the open-post rule in one transaction (D-061, D-069 to D-072); then the PUT.
 
 ```
 draft ─approve─▶ approved ─claim─▶ posting ─200─▶ posted ─seen on Google─▶ published
@@ -86,7 +86,7 @@ draft ─approve─▶ approved ─claim─▶ posting ─200─▶ posted ─se
                         superseded    └─ unknown (timeout, 5xx): stays posting, never resent
 ```
 
-An auto-post is `scheduled` before `approved`; one that is stopped returns to the queue with a notification. Google shows a reply minutes after accepting it: `replies.confirm` reads reviews with an open post every minute, and the sync knows the engine's reply by its text; any other reply is from outside and cancels the drafts. An auto-post's audit actor is `auto-reply`, and its post carries the policy version instead of an approver.
+An auto reply is `scheduled` before `approved`; one that is stopped returns to the queue with a notification. Google shows a reply minutes after accepting it: `replies.confirm` reads reviews with an open post every minute, and the sync knows the engine's reply by its text; any other reply is from outside and cancels the drafts. An auto reply's audit actor is `auto-reply`, and its post carries the policy version instead of an approver.
 
 ### 4.2 Sync
 
@@ -137,7 +137,7 @@ Migrations in `engine/migrations/`, applied by `poni-tools migrate`, from `0001_
 | Area | Tables |
 | ---- | ------ |
 | People | `users`, `sessions` (kind `browser` or `app`), `app_sign_in_codes`, `audit_log` |
-| Clients | `clients` (a name, notes and an archived flag: grouping only, D-102), `locations` (GBP account and location IDs, the optional `client_id`, the `enabled` switch, industry key, `analyze_from`, audience, time zone, posting switch, auto-posting switches per star rating, daily cap, pause) |
+| Clients | `clients` (a name, notes and an archived flag: grouping only, D-102), `locations` (GBP account and location IDs, the optional `client_id`, the `enabled` switch, industry key, `analyze_from`, audience, time zone, posting switch, auto reply switches per star rating, daily cap, pause) |
 | Settings | `reply_settings` (one complete row per location, written from the defaults at discovery: voice, localization, policy, delay, window; D-093, D-102), `ai_settings` (analysis settings, each task's provider and model) |
 | Reviews | `reviews` (rating, original and translated text, language, script, reviewer, current reply), `review_events`, `review_analyses` |
 | Replies | `reply_drafts` (draft, scheduled, approved, posting, posted, published, rejected, cancelled, superseded; model text beside a person's edit), `reply_posts` (one per PUT, at most one open per review) |
@@ -184,14 +184,14 @@ Strangers write the reviews, so every review is hostile input (D-021). Layered d
 1. **Prompt structure** (`domain/prompts.hpp`): instructions and voice in the system message; the review JSON-escaped in a nonce-tagged data block that the model is told holds no instruction; never the reviewer's name or photo.
 2. **Structured output:** JSON (reply, language, script, suspected manipulation).
 3. **Mechanical checks** in C++ (D-058): no links, email addresses or phone numbers; length and emoji; the language of the review or the fallback. Offers, promises and Chinese script are the model's instructions, not code's.
-4. **The policy gate** (`domain/review_pipeline.hpp`): a flag, suspected manipulation or a failed check goes to the approval queue; auto-post only when everything passes.
-5. **Limits** (D-070, D-072): auto-posting off per location and star rating until a person switches it on; a daily cap; the engine pauses a location when checks keep failing or an automatic reply is refused or does not appear, and a person resumes it.
+4. **The policy gate** (`domain/review_pipeline.hpp`): a flag, suspected manipulation or a failed check goes to the approval queue; auto reply only when everything passes.
+5. **Limits** (D-070, D-072): auto reply off per location and star rating until a person switches it on; a daily cap; the engine pauses a location when checks keep failing or an automatic reply is refused or does not appear, and a person resumes it.
 
 | Suite (`engine/tests/ai/`) | Covers | Runs |
 | ----- | ------ | ---- |
 | Check unit tests | Each check, fixed inputs | Every build |
 | Adversarial corpus, offline | Known attacks (English, Chinese, mixed, hidden in spacing or emoji, role-play, fake "system" text) against scripted models: a raised flag is acted on, and a reply with a link, address or number is stopped even when both models were fooled | Every build |
-| Adversarial corpus, live | The same against the real model with the seeded configuration; nothing may reach auto-post | By hand, before a release that changes prompts or checks |
+| Adversarial corpus, live | The same against the real model with the seeded configuration; nothing may reach auto reply | By hand, before a release that changes prompts or checks |
 | Go-live test (D-074) | The industry's corpus and the location's recent 4 and 5 star reviews, three runs each, with the location's configuration; an AI judge rates the replies | Started by a person per location |
 
 The decisions are plain functions in `domain/review_pipeline.hpp`, called by the job and the offline suite; each case runs as its pack's made-up business.
@@ -228,7 +228,7 @@ PONI runs Google Business Profiles (GBP) for its clients. The system automates r
 - **FR-2 Review ingestion.** Polling is the main path, Pub/Sub a second source, an hourly full reconciliation the safety net (D-037, D-091 point 1). The whole review is stored; a reply posted outside the system is detected.
 - **FR-3 Review analysis.** Sentiment, topics, items (dishes, treatments, staff), language and script, severity flags, suspected manipulation. Topics, item types and industry flags come from the industry profile; every industry also has discrimination or harassment, staff misconduct, legal or regulatory threat, threats of violence. Flags and manipulation are the model's alone (D-058).
 - **FR-4 Reply generation.** Each location has its own complete voice and localization (D-093), started from the knowledge base's defaults or templates. A reply is in the review's language as localization shapes it (section 11). Every draft records model, prompt version and inputs.
-- **FR-5 Tiered reply policy.** Per location: 4 and 5 stars without a complaint may auto-post (no text: a short, varied thank-you); a complaint, three stars or fewer, a severity flag, suspected manipulation, a failed check, an edited review and a draft a person edited go to the approval queue. Auto-posts wait an optional random delay inside an optional posting window in local time (for example 09:00 to 21:00); the review is read again just before posting. In the queue a person edits, regenerates with instructions, approves, rejects, or sets the review aside (D-068).
+- **FR-5 Tiered reply policy.** Per location: 4 and 5 stars without a complaint may auto reply (no text: a short, varied thank-you); a complaint, three stars or fewer, a severity flag, suspected manipulation, a failed check, an edited review and a draft a person edited go to the approval queue. Auto replies wait an optional random delay inside an optional posting window in local time (for example 09:00 to 21:00); the review is read again just before posting. In the queue a person edits, regenerates with instructions, approves, rejects, or sets the review aside (D-068).
 - **FR-6 Escalation.** A severity flag on an unreplied review raises an immediate alert and an escalation (`open` or `closed`, one assignee; D-065), a row in `cases`.
 - **FR-7 Notifications.** Channels behind one interface (D-097): email through Gmail, and push to the phone app through Apple's push service, for escalations and system problems (D-097). Rules map event type × location (or every location) to recipients. Events: `escalation`, `approval_needed`, `system_problem` (lost access, token failure, failing jobs, a post rejected or a send failed, a staff account disabled or active again, a staff check that could not use the directory), `location_report`. Every delivery is logged. A queued one is retried; a report a person sends is tried once per address and not retried (D-104 point 4).
 - **FR-8 Reports.** One kind, a location's report per period (D-085, D-102): reviews, ratings and their change, response rate and time, sentiment, topics and items, highlights, escalations, employee recognition (D-086), Performance API visibility and search keywords, and a model-written summary. Built once; schedules daily, weekly or monthly; PDF is the browser's print (D-035).

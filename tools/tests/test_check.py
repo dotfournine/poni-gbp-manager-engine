@@ -66,7 +66,7 @@ def test_a_new_case_is_accepted(kb):
                 "stars": 5,
                 "lang": "en",
                 "text": "Lovely.",
-                "expect": {"manipulation": False, "action": "auto_post"},
+                "expect": {"manipulation": False, "action": "auto_reply"},
             }
         )
 
@@ -159,10 +159,10 @@ def test_a_case_id_used_in_two_packs(kb):
 
 def test_a_case_that_contradicts_its_category(kb):
     def wrong(corpus):
-        next(c for c in corpus["cases"] if c["category"] == "manipulation")["expect"]["action"] = "auto_post"
+        next(c for c in corpus["cases"] if c["category"] == "manipulation")["expect"]["action"] = "auto_reply"
 
     kb.edit(f"{FOOD}/corpus.json", wrong)
-    only(problems(kb), "a manipulation case must not expect 'auto_post'")
+    only(problems(kb), "a manipulation case must not expect 'auto_reply'")
 
 
 def test_the_folder_and_the_key_must_agree(kb):

@@ -110,7 +110,7 @@ void record_sync_error(pqxx::transaction_base& tx, const std::vector<std::int64_
 // What the inbox can be filtered and sorted by. The API checks a request
 // against these lists before a value reaches a query.
 inline constexpr std::array<std::string_view, 3> kReviewStatuses{"active", "removed", "all"};
-inline constexpr std::array<std::string_view, 3> kDraftRoutes{domain::kRouteAutoPost, domain::kRouteApproval, domain::kRouteEscalate};
+inline constexpr std::array<std::string_view, 3> kDraftRoutes{domain::kRouteAutoReply, domain::kRouteApproval, domain::kRouteEscalate};
 inline constexpr std::array<std::string_view, 9> kDraftStatuses{"draft",  "scheduled", "approved",  "posting",   "posted",
                                                                 "published", "rejected",  "cancelled", "superseded"};
 inline constexpr std::array<std::string_view, 4> kReviewSorts{"created_time", "updated_time", "rating", "draft_time"};

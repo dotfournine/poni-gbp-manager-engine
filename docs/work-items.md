@@ -10,7 +10,7 @@ The app's requests are in the app repository (`poni-gbp-manager-ios/docs/design/
 
 ### Push notifications to the phone app (APNs)
 
-**What and why.** The app has alerts in v1: a new escalation, auto-posting paused at a location, and a local post that Google refused, that failed, or that could not be removed. Without push the app only refreshes when a screen appears, when it returns to the foreground and on pull to refresh. The app's request 4 asks for push; D-097 settles how, with every question this item used to leave open answered there.
+**What and why.** The app has alerts in v1: a new escalation, auto reply paused at a location, and a local post that Google refused, that failed, or that could not be removed. Without push the app only refreshes when a screen appears, when it returns to the foreground and on pull to refresh. The app's request 4 asks for push; D-097 settles how, with every question this item used to leave open answered there.
 
 **What to build** (D-097):
 
@@ -95,7 +95,7 @@ The system runs locally only. The owner postponed the first deployment (D-052); 
 
 ## Going live with the MVP clients
 
-The owner's steps, in this order, once the system is deployed. The engine switches nothing on by itself: a location (`enabled`, D-102), the posting switches, email sending, auto-posting and "send automatically" are a person's (`CLAUDE.md`, rules that protect clients).
+The owner's steps, in this order, once the system is deployed. The engine switches nothing on by itself: a location (`enabled`, D-102), the posting switches, email sending, auto reply and "send automatically" are a person's (`CLAUDE.md`, rules that protect clients).
 
 ### The first real reply, and a week of replies through the system
 
@@ -117,17 +117,17 @@ The owner's steps, in this order, once the system is deployed. The engine switch
 
 **What.** The analyzer's and the writer's prompts changed since the last live run, which changes every location's fingerprint. Run `engine/scripts/linux.sh ai-live` (or the AI live workflow) once with the seeded configuration.
 
-**Done when:** a live run passes in which no case reaches auto-post, before the first go-live test is started.
+**Done when:** a live run passes in which no case reaches auto reply, before the first go-live test is started.
 
 **Touches:** architecture section 10; the rule on prompt changes in `CLAUDE.md`.
 
-### Go-live tests and the auto-posting rollout
+### Go-live tests and the auto reply rollout
 
-**What.** Before anything auto-posts: the judge's provider in the engine's environment (`PONI_LLM_ANTHROPIC_BASE_URL`, `_API_KEY`, `_PROTOCOL=anthropic`; the judge has never been called from this code); the owner's rating of the 58 replies of the spike, compared with the judge's; a first real go-live test of each MVP location, started by the owner, which also shows what a test costs and how long it takes. Then a go-ahead per location: Gangnam AYCE Buffet 5★ first, then all three locations, then 4★, and two weeks of watching. Two known costs are accepted until then and stay open: nothing checks the Chinese script of a reply (D-056), and an offer or a promise in a reply is noticed only by the model (D-058).
+**What.** Before anything auto replies: the judge's provider in the engine's environment (`PONI_LLM_ANTHROPIC_BASE_URL`, `_API_KEY`, `_PROTOCOL=anthropic`; the judge has never been called from this code); the owner's rating of the 58 replies of the spike, compared with the judge's; a first real go-live test of each MVP location, started by the owner, which also shows what a test costs and how long it takes. Then a go-ahead per location: Gangnam AYCE Buffet 5★ first, then all three locations, then 4★, and two weeks of watching. Two known costs are accepted until then and stay open: nothing checks the Chinese script of a reply (D-056), and an offer or a promise in a reply is noticed only by the model (D-058).
 
-**Done when:** two weeks of auto-posting with no incident, and the typical reply time for 4 and 5★ reviews is under an hour.
+**Done when:** two weeks of auto reply with no incident, and the typical reply time for 4 and 5★ reviews is under an hour.
 
-**Touches:** D-069 to D-077; a test is started only by a person; code never switches auto-posting on or lifts a pause.
+**Touches:** D-069 to D-077; a test is started only by a person; code never switches auto reply on or lifts a pause.
 
 ### The first real reports
 
@@ -169,7 +169,7 @@ In the suggested order.
 
 ### Onboard the other clients
 
-**What.** The other 50 to 100 locations, in batches. A client of a new business type needs a complete industry pack first: profile, test corpus with the cases the complete-pack rule asks for, a made-up business, and a live run of the suite (FR-13). Each location is then switched on, given its industry, and needs its reply settings reviewed and a go-live test before it auto-posts.
+**What.** The other 50 to 100 locations, in batches. A client of a new business type needs a complete industry pack first: profile, test corpus with the cases the complete-pack rule asks for, a made-up business, and a live run of the suite (FR-13). Each location is then switched on, given its industry, and needs its reply settings reviewed and a go-live test before it auto replies.
 
 **Done when:** each batch is switched on, has settings, and runs through the approval queue.
 
