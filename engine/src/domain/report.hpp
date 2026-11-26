@@ -12,14 +12,32 @@
 
 #include <boost/describe/class.hpp>
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace poni::domain {
+
+// ---- the sections -------------------------------------------------------------------
+
+// The sections of a report, in the page's fixed order (request 3.H). A section left
+// out is not computed, not on the page and not given to the summary's model.
+inline constexpr std::array<std::string_view, 7> kReportSections{
+    "summary", "at_a_glance", "reviews", "topics", "employee_recognition", "highlights", "visibility"};
+
+// The seven, in that order.
+std::vector<std::string> all_report_sections();
+
+// Nothing: the list is fine. Otherwise one sentence for a person, naming the member
+// "sections": the list is empty, names an unknown key, or names a key twice.
+std::optional<std::string> report_sections_problem(const std::vector<std::string>& sections);
+
+bool has_section(const std::vector<std::string>& sections, std::string_view key);
 
 // ---- what goes in -----------------------------------------------------------------
 
@@ -74,6 +92,8 @@ struct ReportInput {
     Period period;
     std::string time_zone;
     std::string generated_at;
+    // What the report has, in any order; the page keeps its own.
+    std::vector<std::string> sections = all_report_sections();
     // Every review up to the end of the period.
     std::int64_t running_count = 0;
     std::int64_t running_rating_sum = 0;
@@ -212,7 +232,8 @@ BOOST_DESCRIBE_STRUCT(Keywords, (), (month, items))
 struct ReportData {
     // 2: has `staff` (D-086). A report stored before it loads with none.
     // 3: one location's (D-102): no list of locations, and no location in a highlight or a staff row.
-    int version = 3;
+    // 4: has `sections`.
+    int version = 4;
     std::int64_t location_id = 0;
     std::string location_title;
     std::string period_start;
@@ -221,6 +242,8 @@ struct ReportData {
     std::string previous_end;
     std::string time_zone;
     std::string generated_at;
+    // The sections the report has. What a left-out section holds is left at its default.
+    std::vector<std::string> sections = all_report_sections();
 
     ReviewNumbers reviews;
     ReviewNumbers previous;
@@ -248,7 +271,7 @@ struct ReportData {
 };
 BOOST_DESCRIBE_STRUCT(ReportData, (),
                       (version, location_id, location_title, period_start, period_end, previous_start, previous_end, time_zone,
-                       generated_at, reviews, previous, running_count, running_average, trend, topics_praised,
+                       generated_at, sections, reviews, previous, running_count, running_average, trend, topics_praised,
                        topics_complained, items_praised, items_complained, staff, highlights_best, highlights_worst, escalations_opened,
                        escalations_closed, visibility, keywords, summary, summary_note))
 
