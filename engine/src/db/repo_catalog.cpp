@@ -300,6 +300,20 @@ Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Write
     return *get_location(tx, id);
 }
 
+boost::json::object editable(const model::Location& location) {
+    return {{"client_id", location.client_id ? boost::json::value(*location.client_id) : boost::json::value(nullptr)},
+            {"enabled", location.enabled},
+            {"industry_key", optional_json(location.industry_key)},
+            {"analyze_from", optional_json(location.analyze_from)},
+            {"audience", location.audience},
+            {"posting_enabled", location.posting_enabled}};
+}
+
+Result<std::string> current_location_etag(pqxx::transaction_base& tx, std::int64_t id) {
+    if (tx.exec("SELECT 1 FROM locations WHERE id = $1 FOR UPDATE", pqxx::params{id}).empty()) return not_found("location");
+    return core::etag(editable(*get_location(tx, id)));
+}
+
 // ---- location discovery --------------------------------------------------------
 
 void request_discovery(pqxx::transaction_base& tx, audit::Writer& audit) {

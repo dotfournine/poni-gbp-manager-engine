@@ -96,17 +96,23 @@ void add_api_routes(Router& router, db::Database& db, const core::Clock& clock, 
                    co_return enqueued();
                });
 
-    add_get_by_id(router, api, "/api/locations/{id}", "locations.read", "location", repo::get_location);
+    // A location's ETag covers what its PATCH can set, and nothing a discovery or a poll writes (D-108).
+    const auto location_etag = [](const model::Location& location) { return core::etag(repo::editable(location)); };
+
+    add_get_by_id(router, api, "/api/locations/{id}", "locations.read", "location", repo::get_location, location_etag);
 
     router.add(verb::patch, "/api/locations/{id}", {Access::user, "locations.update"},
-               [api](const Request& request) -> asio::awaitable<Response> {
+               [api, location_etag](const Request& request) -> asio::awaitable<Response> {
                    const auto id = path_id(request);
                    if (!id) co_return not_found("location");
                    const auto patch = body_as<repo::LocationPatch>(request);
                    if (!patch) co_return patch.error();
-                   co_return respond(co_await api.change(request, [id = *id, patch = *patch](pqxx::work& tx, audit::Writer& audit) {
-                       return repo::update_location(tx, audit, id, patch);
-                   }));
+                   co_return respond_tagged(co_await api.change_if_match(
+                                                request, [id = *id](pqxx::work& tx) { return repo::current_location_etag(tx, id); },
+                                                [id = *id, patch = *patch](pqxx::work& tx, audit::Writer& audit) {
+                                                    return repo::update_location(tx, audit, id, patch);
+                                                }),
+                                            location_etag);
                });
 
     // ---- reviews -----------------------------------------------------------------

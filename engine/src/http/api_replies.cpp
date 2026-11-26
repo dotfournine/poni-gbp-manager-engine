@@ -6,6 +6,7 @@
 // Approving a draft is the only way a reply reaches Google, and all it does
 // here is mark the draft and enqueue the posting job (jobs/posting.hpp).
 
+#include "core/etag.hpp"
 #include "core/text.hpp"
 #include "db/audit.hpp"
 #include "db/database.hpp"
@@ -76,17 +77,23 @@ BOOST_DESCRIBE_STRUCT(RecipientBody, (), (recipient))
 void add_reply_routes(Router& router, const Api& api, jobs::ReviewPipeline& pipeline) {
     // ---- the approval queue ------------------------------------------------------
 
-    add_get_by_id(router, api, "/api/drafts/{id}", "drafts.read", "draft", repo::get_draft);
+    // A draft's ETag covers its text (D-108); the approval carries the text it approves and needs none.
+    const auto draft_etag = [](const model::ReplyDraft& draft) { return core::etag(repo::editable(draft)); };
+
+    add_get_by_id(router, api, "/api/drafts/{id}", "drafts.read", "draft", repo::get_draft, draft_etag);
 
     router.add(verb::patch, "/api/drafts/{id}", {Access::user, "drafts.edit"},
-               [api](const Request& request) -> asio::awaitable<Response> {
+               [api, draft_etag](const Request& request) -> asio::awaitable<Response> {
                    const auto id = path_id(request);
                    if (!id) co_return not_found("draft");
                    const auto body = body_as<TextBody>(request);
                    if (!body) co_return body.error();
-                   co_return respond(co_await api.change(request, [id = *id, text = body->text](pqxx::work& tx, audit::Writer& audit) {
-                       return repo::edit_draft(tx, audit, id, text);
-                   }));
+                   co_return respond_tagged(co_await api.change_if_match(
+                                                request, [id = *id](pqxx::work& tx) { return repo::current_draft_etag(tx, id); },
+                                                [id = *id, text = body->text](pqxx::work& tx, audit::Writer& audit) {
+                                                    return repo::edit_draft(tx, audit, id, text);
+                                                }),
+                                            draft_etag);
                });
 
     // The one request that leads to a write on Google. It names its own
@@ -208,17 +215,23 @@ void add_reply_routes(Router& router, const Api& api, jobs::ReviewPipeline& pipe
                    }), 201);
                });
 
-    add_get_by_id(router, api, "/api/notification-rules/{id}", "notification_rules.read", "notification rule", repo::get_rule);
+    // A rule's ETag covers what its PATCH can set (D-108).
+    const auto rule_etag = [](const model::NotificationRule& rule) { return core::etag(repo::editable(rule)); };
+
+    add_get_by_id(router, api, "/api/notification-rules/{id}", "notification_rules.read", "notification rule", repo::get_rule, rule_etag);
 
     router.add(verb::patch, "/api/notification-rules/{id}", {Access::user, "notification_rules.update"},
-               [api](const Request& request) -> asio::awaitable<Response> {
+               [api, rule_etag](const Request& request) -> asio::awaitable<Response> {
                    const auto id = path_id(request);
                    if (!id) co_return not_found("notification rule");
                    const auto patch = body_as<repo::RulePatch>(request);
                    if (!patch) co_return patch.error();
-                   co_return respond(co_await api.change(request, [id = *id, patch = *patch](pqxx::work& tx, audit::Writer& audit) {
-                       return repo::update_rule(tx, audit, id, patch);
-                   }));
+                   co_return respond_tagged(co_await api.change_if_match(
+                                                request, [id = *id](pqxx::work& tx) { return repo::current_rule_etag(tx, id); },
+                                                [id = *id, patch = *patch](pqxx::work& tx, audit::Writer& audit) {
+                                                    return repo::update_rule(tx, audit, id, patch);
+                                                }),
+                                            rule_etag);
                });
 
     // Our own row, not anything on Google: the engine never deletes there.
@@ -226,9 +239,10 @@ void add_reply_routes(Router& router, const Api& api, jobs::ReviewPipeline& pipe
                [api](const Request& request) -> asio::awaitable<Response> {
                    const auto id = path_id(request);
                    if (!id) co_return not_found("notification rule");
-                   co_return respond(co_await api.change(request, [id = *id](pqxx::work& tx, audit::Writer& audit) {
-                       return repo::delete_rule(tx, audit, id);
-                   }), Response::no_content());
+                   co_return respond(co_await api.change_if_match(
+                                         request, [id = *id](pqxx::work& tx) { return repo::current_rule_etag(tx, id); },
+                                         [id = *id](pqxx::work& tx, audit::Writer& audit) { return repo::delete_rule(tx, audit, id); }),
+                                     Response::no_content());
                });
 
     // ---- the phone app's devices, for push (D-097) ---------------------------------
@@ -299,18 +313,26 @@ void add_reply_routes(Router& router, const Api& api, jobs::ReviewPipeline& pipe
 
     // ---- the switches ------------------------------------------------------------
 
+    // The ETag covers the two switches, and none of the pause the engine writes to the same row (D-108).
+    const auto system_etag = [](const model::SystemSettings& settings) { return core::etag(repo::editable(settings)); };
+
     router.add(verb::get, "/api/system/settings", {Access::user, "system_settings.read"},
-               [api](const Request&) -> asio::awaitable<Response> {
-                   co_return ok(co_await api.query([](pqxx::work& tx) { return repo::get_system_settings(tx); }));
+               [api, system_etag](const Request&) -> asio::awaitable<Response> {
+                   co_return respond_tagged(
+                       co_await api.query([](pqxx::work& tx) -> repo::Result<model::SystemSettings> { return repo::get_system_settings(tx); }),
+                       system_etag);
                });
 
     router.add(verb::patch, "/api/system/settings", {Access::user, "system_settings.update"},
-               [api](const Request& request) -> asio::awaitable<Response> {
+               [api, system_etag](const Request& request) -> asio::awaitable<Response> {
                    const auto patch = body_as<repo::SystemSettingsPatch>(request);
                    if (!patch) co_return patch.error();
-                   co_return ok(co_await api.change(request, [patch = *patch](pqxx::work& tx, audit::Writer& audit) {
-                       return repo::update_system_settings(tx, audit, patch);
-                   }));
+                   co_return respond_tagged(co_await api.change_if_match(
+                                                request, [](pqxx::work& tx) { return repo::current_system_settings_etag(tx); },
+                                                [patch = *patch](pqxx::work& tx, audit::Writer& audit) -> repo::Result<model::SystemSettings> {
+                                                    return repo::update_system_settings(tx, audit, patch);
+                                                }),
+                                            system_etag);
                });
 }
 

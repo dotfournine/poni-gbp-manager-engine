@@ -15,6 +15,7 @@
 
 #include "connectors/storage/store.hpp"
 #include "core/crypto.hpp"
+#include "core/etag.hpp"
 #include "core/log.hpp"
 #include "core/text.hpp"
 #include "db/audit.hpp"
@@ -100,8 +101,12 @@ void add_local_post_routes(Router& router, const Api& api, storage::ObjectStore*
                    co_return ok(co_await api.query([filter, media_base](pqxx::work& tx) { return repo::list_local_posts(tx, filter, media_base); }));
                });
 
-    add_get_by_id(router, api, "/api/local-posts/{id}", "local_posts.read", "local post",
-                  [media_base](pqxx::work& tx, std::int64_t id) { return repo::get_local_post(tx, id, media_base); });
+    // A post's ETag covers its content, what its PUT sets (D-108). The edit's routes and the approvals need none.
+    const auto post_etag = [](const model::LocalPost& post) { return core::etag(repo::editable(post)); };
+
+    add_get_by_id(
+        router, api, "/api/local-posts/{id}", "local_posts.read", "local post",
+        [media_base](pqxx::work& tx, std::int64_t id) { return repo::get_local_post(tx, id, media_base); }, post_etag);
 
     // A new draft. Nothing goes to Google until a person approves it.
     router.add(verb::post, "/api/locations/{id}/local-posts", {Access::user, "local_posts.create"},
@@ -117,14 +122,17 @@ void add_local_post_routes(Router& router, const Api& api, storage::ObjectStore*
                });
 
     router.add(verb::put, "/api/local-posts/{id}", {Access::user, "local_posts.update"},
-               [api, media_base](const Request& request) -> asio::awaitable<Response> {
+               [api, media_base, post_etag](const Request& request) -> asio::awaitable<Response> {
                    const auto id = path_id(request);
                    if (!id) co_return not_found("local post");
                    const auto body = body_as<domain::LocalPostContent>(request);
                    if (!body) co_return body.error();
-                   co_return respond(co_await api.change(request, [id = *id, content = *body, media_base](pqxx::work& tx, audit::Writer& audit) {
-                       return repo::edit_local_post(tx, audit, id, content, media_base);
-                   }));
+                   co_return respond_tagged(co_await api.change_if_match(
+                                                request, [id = *id](pqxx::work& tx) { return repo::current_local_post_etag(tx, id); },
+                                                [id = *id, content = *body, media_base](pqxx::work& tx, audit::Writer& audit) {
+                                                    return repo::edit_local_post(tx, audit, id, content, media_base);
+                                                }),
+                                            post_etag);
                });
 
     // Only what Google never had: a draft or a rejected one (D-094). Nothing at Google is touched.
@@ -132,9 +140,10 @@ void add_local_post_routes(Router& router, const Api& api, storage::ObjectStore*
                [api](const Request& request) -> asio::awaitable<Response> {
                    const auto id = path_id(request);
                    if (!id) co_return not_found("local post");
-                   co_return respond(co_await api.change(request, [id = *id](pqxx::work& tx, audit::Writer& audit) {
-                       return repo::delete_local_post(tx, audit, id);
-                   }), Response::no_content());
+                   co_return respond(co_await api.change_if_match(
+                                         request, [id = *id](pqxx::work& tx) { return repo::current_local_post_etag(tx, id); },
+                                         [id = *id](pqxx::work& tx, audit::Writer& audit) { return repo::delete_local_post(tx, audit, id); }),
+                                     Response::no_content());
                });
 
     // An edit of a post that is at Google (D-099): written, replaced and discarded here, and nothing goes

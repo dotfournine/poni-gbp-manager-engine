@@ -34,6 +34,7 @@
 #include "db/repo_notifications.hpp"
 #include "domain/models.hpp"
 
+#include <boost/json/object.hpp>
 #include <pqxx/pqxx>
 
 #include <cstdint>
@@ -63,6 +64,10 @@ inline constexpr std::string_view kLiveDrafts = "('draft', 'approved', 'schedule
 
 // Replaces the text of a waiting draft and runs the reply checks on it again.
 Result<model::ReplyDraft> edit_draft(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t draft_id, const std::string& text);
+// What PATCH /api/drafts/{id} can set, its text: what the draft's ETag covers (D-108).
+boost::json::object editable(const model::ReplyDraft& draft);
+// Locks the review and then the draft, as edit_draft does, and gives the ETag of what the draft holds.
+Result<std::string> current_draft_etag(pqxx::transaction_base& tx, std::int64_t draft_id);
 
 // Approves a waiting draft whose stored text is `text` and enqueues the job
 // that posts it. Refuses unless every reply check passes on the text, both

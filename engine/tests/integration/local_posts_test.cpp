@@ -236,7 +236,7 @@ TEST_F(LocalPosts, ADraftIsWrittenEditedAndApprovedThroughTheApi) {
     // An edit replaces the whole content; a failed check is saved with it and says what was found.
     auto with_phone = boost::json::parse(kStandard).as_object();
     with_phone["summary"] = "Call (212) 555-0100 to book.";
-    const auto edited = put(target, boost::json::serialize(with_phone));
+    const auto edited = put_current(target, boost::json::serialize(with_phone));
     ASSERT_EQ(edited.status, 200u) << edited.body;
     EXPECT_EQ(json(edited).at("edited_by").as_string(), "staff@xvisionmediaus.com");
     bool phone_failed = false;
@@ -249,7 +249,7 @@ TEST_F(LocalPosts, ADraftIsWrittenEditedAndApprovedThroughTheApi) {
     EXPECT_EQ(error_code(blocked), "checks_failed");
 
     // Fixed; then the approval carries the content the person read.
-    const auto fixed = put(target, kStandard);
+    const auto fixed = put_current(target, kStandard);
     ASSERT_EQ(fixed.status, 200u);
     const auto stale = post(target + "/approve", boost::json::serialize(with_phone));
     EXPECT_EQ(stale.status, 409u);
@@ -260,7 +260,7 @@ TEST_F(LocalPosts, ADraftIsWrittenEditedAndApprovedThroughTheApi) {
     EXPECT_EQ(json(approved).at("decided_by").as_string(), "staff@xvisionmediaus.com");
     EXPECT_EQ(count("jobs WHERE kind = 'local_posts.publish'"), 1);
 
-    EXPECT_EQ(error_code(put(target, kStandard)), "local_post_not_open");
+    EXPECT_EQ(error_code(put_current(target, kStandard)), "local_post_not_open");
     EXPECT_EQ(error_code(post(target + "/reject", "")), "local_post_not_open");
 
     // The post's page shows who did what, newest first.
@@ -270,6 +270,32 @@ TEST_F(LocalPosts, ADraftIsWrittenEditedAndApprovedThroughTheApi) {
     EXPECT_EQ(log[0].at("after").at("content").at("summary").as_string(), "Fall specials start Monday.") << "what was approved is kept";
     EXPECT_EQ(log[3].at("action").as_string(), "local_post.create");
     EXPECT_EQ(log[1].at("actor").as_string(), "staff@xvisionmediaus.com");
+}
+
+// D-108: a draft is saved and deleted only against the ETag of the content the person read.
+TEST_F(LocalPosts, ADraftIsSavedAndDeletedOnlyAgainstItsCurrentEtag) {
+    const auto id = json(post(std::format("/api/locations/{}/local-posts", spa_), kStandard)).at("id").as_int64();
+    const auto target = std::format("/api/local-posts/{}", id);
+    const auto read_tag = etag(target, browser_);
+    auto changed_content = boost::json::parse(kStandard).as_object();
+    changed_content["summary"] = "Fall specials start Tuesday.";
+
+    EXPECT_EQ(error_code(put(target, kStandard)), "precondition_required");
+    EXPECT_EQ(error_code(del(target)), "precondition_required");
+    EXPECT_EQ(put(target, kStandard, if_match(read_tag)).status, 200u) << "a save that changes nothing";
+    EXPECT_EQ(etag(target, browser_), read_tag);
+    const auto saved = put(target, boost::json::serialize(changed_content), if_match(read_tag));
+    ASSERT_EQ(saved.status, 200u) << saved.body;
+    EXPECT_NE(header(saved, "ETag"), read_tag);
+    EXPECT_EQ(header(saved, "ETag"), etag(target, browser_));
+
+    const auto stale = put(target, kStandard, if_match(read_tag));
+    EXPECT_EQ(stale.status, 412u);
+    EXPECT_EQ(error_code(stale), "precondition_failed");
+    EXPECT_EQ(error_code(del(target, if_match(read_tag))), "precondition_failed") << "a delete by someone who has not seen the save";
+    EXPECT_EQ(read(target).at("summary").as_string(), "Fall specials start Tuesday.");
+    EXPECT_EQ(count("audit_log WHERE action IN ('local_post.edit', 'local_post.delete')"), 1);
+    EXPECT_EQ(del(target, if_match(header(saved, "ETag"))).status, 204u);
 }
 
 TEST_F(LocalPosts, ADraftIsRejectedWithOrWithoutAReason) {
@@ -700,10 +726,10 @@ TEST_F(LocalPosts, ALocationSaysWhoItsCustomersAre) {
     const auto target = "/api/locations/" + std::to_string(spa_);
     EXPECT_EQ(read(target).at("audience").as_string(), "") << "nobody has written one";
 
-    const auto changed = patch(target, R"({"audience": "  Office workers nearby, many of them Mandarin speakers.  "})");
+    const auto changed = patch_current(target, R"({"audience": "  Office workers nearby, many of them Mandarin speakers.  "})");
     ASSERT_EQ(changed.status, 200u) << changed.body;
     EXPECT_EQ(json(changed).at("audience").as_string(), "Office workers nearby, many of them Mandarin speakers.");
-    EXPECT_EQ(json(patch(target, R"({"analyze_from": "2026-01-01"})")).at("audience").as_string(),
+    EXPECT_EQ(json(patch_current(target, R"({"analyze_from": "2026-01-01"})")).at("audience").as_string(),
               "Office workers nearby, many of them Mandarin speakers.")
         << "a field that isn't sent stays";
 
@@ -714,8 +740,8 @@ TEST_F(LocalPosts, ALocationSaysWhoItsCustomersAre) {
     // 500 characters, counted as characters: Chinese is not cut short.
     std::string limit;
     for (int i = 0; i < 500; ++i) limit += "客";
-    EXPECT_EQ(patch(target, boost::json::serialize(boost::json::object{{"audience", limit}})).status, 200u);
-    EXPECT_EQ(patch(target, boost::json::serialize(boost::json::object{{"audience", limit + "客"}})).status, 400u);
+    EXPECT_EQ(patch_current(target, boost::json::serialize(boost::json::object{{"audience", limit}})).status, 200u);
+    EXPECT_EQ(patch_current(target, boost::json::serialize(boost::json::object{{"audience", limit + "客"}})).status, 400u);
     EXPECT_EQ(patch(target, R"({"audience": 5})").status, 400u);
 }
 
@@ -800,7 +826,7 @@ TEST_F(LocalPosts, WhatADraftCannotHoldIsLeftOutOfACopyAndNamed) {
     EXPECT_THAT(reason, testing::HasSubstr("the button \"get_offer\""));
     EXPECT_THAT(reason, testing::HasSubstr("the time to publish at, which has passed"));
     // The copy is a draft like any other: it can be edited, and its reason goes with the edit.
-    const auto saved = put(std::format("/api/local-posts/{}", copy.at("id").as_int64()), kStandard);
+    const auto saved = put_current(std::format("/api/local-posts/{}", copy.at("id").as_int64()), kStandard);
     ASSERT_EQ(saved.status, 200u) << saved.body;
     EXPECT_TRUE(json(saved).at("status_reason").is_null());
 }
@@ -869,7 +895,7 @@ TEST_F(LocalPosts, ADraftOrARejectedPostIsDeletedAndTheAuditLogKeepsWhatItSaid) 
     content.media_ids = {media};
     const auto a_draft = insert_local_post(spa_, "origin, status, content, created_by",
                                            std::format("'system', 'draft', {}, {}", test::content_sql(content), user_));
-    const auto deleted = del(std::format("/api/local-posts/{}", a_draft));
+    const auto deleted = del_current(std::format("/api/local-posts/{}", a_draft));
     ASSERT_EQ(deleted.status, 204u) << deleted.body;
     EXPECT_EQ(count(std::format("local_posts WHERE id = {}", a_draft)), 0);
     EXPECT_EQ(get(std::format("/api/local-posts/{}", a_draft), browser_).status, 404u);
@@ -889,7 +915,7 @@ TEST_F(LocalPosts, ADraftOrARejectedPostIsDeletedAndTheAuditLogKeepsWhatItSaid) 
 
     const auto rejected = in_status("rejected", "Decided against.");
     exec(std::format("UPDATE local_posts SET status_reason = 'Wrong week.' WHERE id = {}", rejected));
-    ASSERT_EQ(del(std::format("/api/local-posts/{}", rejected)).status, 204u);
+    ASSERT_EQ(del_current(std::format("/api/local-posts/{}", rejected)).status, 204u);
     const auto rejected_log = read(std::format("/api/audit-log?object_type=local_post&object_id={}", rejected)).at("items").as_array();
     ASSERT_EQ(rejected_log.size(), 1u);
     EXPECT_EQ(rejected_log[0].at("before").at("status").as_string(), "rejected");
@@ -900,7 +926,7 @@ TEST_F(LocalPosts, ADraftOrARejectedPostIsDeletedAndTheAuditLogKeepsWhatItSaid) 
 TEST_F(LocalPosts, NothingGoogleHasOrMayHaveIsDeleted) {
     for (const std::string status : {"approved", "sending", "sent", "unknown", "failed", "removed"}) {
         const auto id = in_status(status);
-        const auto refused = del(std::format("/api/local-posts/{}", id));
+        const auto refused = del_current(std::format("/api/local-posts/{}", id));
         EXPECT_EQ(refused.status, 409u) << status;
         EXPECT_EQ(error_code(refused), "local_post_not_open") << status;
         EXPECT_EQ(status_of(id), status) << "the row stays";
@@ -909,7 +935,7 @@ TEST_F(LocalPosts, NothingGoogleHasOrMayHaveIsDeleted) {
     const auto at_google = insert_local_post(buffet_, "origin, status, content, google_name, google_state",
                                              "'google', 'sent', " + test::content_sql(test::standard("Made at Google.")) +
                                                  ", 'accounts/111/locations/9002/localPosts/64', 'live'");
-    EXPECT_EQ(error_code(del(std::format("/api/local-posts/{}", at_google))), "local_post_not_open");
+    EXPECT_EQ(error_code(del_current(std::format("/api/local-posts/{}", at_google))), "local_post_not_open");
     EXPECT_EQ(count("audit_log WHERE action = 'local_post.delete'"), 0);
 
     const auto a_draft = draft(spa_, "Kept.");
@@ -1057,18 +1083,18 @@ TEST_F(LocalPosts, ACopyNamesItsSourceAndTheSourceListsItsCopiesNewestFirst) {
         << "a copy keeps its link whatever becomes of it";
 
     // A copy that is deleted leaves its source's list.
-    ASSERT_EQ(del(std::format("/api/local-posts/{}", second_id)).status, 204u);
+    ASSERT_EQ(del_current(std::format("/api/local-posts/{}", second_id)).status, 204u);
     EXPECT_EQ(copies(source), (Copies{{first_id, "rejected"}}));
     const auto deleted = read(std::format("/api/audit-log?object_type=local_post&object_id={}", second_id)).at("items").as_array();
     ASSERT_FALSE(deleted.empty());
     EXPECT_EQ(deleted[0].at("action").as_string(), "local_post.delete");
     EXPECT_EQ(deleted[0].at("before").at("copied_from_id").as_int64(), source) << "the log keeps what a deleted copy corrected";
-    ASSERT_EQ(del(std::format("/api/local-posts/{}", first_id)).status, 204u);
+    ASSERT_EQ(del_current(std::format("/api/local-posts/{}", first_id)).status, 204u);
     EXPECT_TRUE(copies(source).empty());
 
     // A post that was copied may be deleted while it is a draft; its copy keeps its content and loses the link.
     const auto copy = copy_of(source).at("id").as_int64();
-    ASSERT_EQ(del(std::format("/api/local-posts/{}", source)).status, 204u);
+    ASSERT_EQ(del_current(std::format("/api/local-posts/{}", source)).status, 204u);
     const auto orphan = read(std::format("/api/local-posts/{}", copy));
     EXPECT_TRUE(orphan.at("copied_from_id").is_null());
     EXPECT_EQ(orphan.at("summary").as_string(), "Fall specials start Monday.");
@@ -1196,7 +1222,7 @@ TEST_F(LocalPostEdits, AnEditIsWrittenReplacedAndApprovedThroughTheApi) {
     EXPECT_EQ(error_code(del(target(id))), "local_post_edit_not_open");
     EXPECT_EQ(error_code(post(target(id) + "/approve", boost::json::serialize(json(replaced).at("edit").at("content")))), "local_post_edit_not_open");
     // The draft's own route still does not take a post that is at Google.
-    EXPECT_EQ(error_code(put(std::format("/api/local-posts/{}", id), kStandard)), "local_post_not_open");
+    EXPECT_EQ(error_code(put_current(std::format("/api/local-posts/{}", id), kStandard)), "local_post_not_open");
 
     // The post's page shows who did what, newest first.
     const auto log = read(std::format("/api/audit-log?object_type=local_post&object_id={}", id)).at("items").as_array();
