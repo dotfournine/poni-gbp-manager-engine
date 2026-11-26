@@ -144,6 +144,18 @@ TEST(ReportSchedule, ATimeThatExistsTwiceRunsOnceAtTheFirst) {
     EXPECT_EQ(second.at, first.at);
 }
 
+TEST(ReportSchedule, AZoneWithoutDaylightSavingRunsAtTheSameUtcTimeAllYear) {
+    // Tokyo keeps UTC+9 all year: 09:00 is 00:00 UTC in January and in July, and on the days New York changes its clocks.
+    const auto schedule = daily(9 * 60, "Asia/Tokyo");
+    for (const auto day : {2027y / January / 15, 2027y / July / 15, 2026y / November / 1, 2027y / March / 14}) {
+        const auto run = latest(schedule, utc(day, 12h));
+        EXPECT_EQ(run.local_day, on(day));
+        EXPECT_EQ(run.at, utc(day, 0h));
+    }
+    // A minute before 00:00 UTC it is still the day before's run.
+    EXPECT_EQ(latest(schedule, utc(2027y / July / 15, -1min)).local_day, on(2027y / July / 14));
+}
+
 TEST(ReportSchedule, AScheduleThatMakesNoSenseIsRefused) {
     EXPECT_TRUE(schedule_problem({.frequency = "hourly", .minute_of_day = 0, .time_zone = std::string(kNewYork)}));
     EXPECT_TRUE(schedule_problem({.frequency = "weekly", .weekday = 0, .minute_of_day = 0, .time_zone = std::string(kNewYork)}));
@@ -189,6 +201,18 @@ TEST(ReportPeriod, ADayIsALocalDayEvenWhenItHas23Or25Hours) {
     // 03:30 UTC on November 10 is still November 9 in New York.
     EXPECT_EQ(local_day(utc(2026y / November / 10, 3h + 30min), kNewYork).value(), on(2026y / November / 9));
     EXPECT_FALSE(period_bounds({on(2026y / March / 8), on(2026y / March / 8)}, "Nowhere/Land"));
+}
+
+TEST(ReportPeriod, ADayInAZoneWithoutDaylightSavingIsAlways24Hours) {
+    // New York's change days, in Tokyo: each day runs from 15:00 UTC the day before, and lasts 24 hours.
+    for (const auto day : {2026y / March / 8, 2026y / November / 1, 2027y / March / 14}) {
+        const auto bounds = period_bounds({on(day), on(day)}, "Asia/Tokyo").value();
+        EXPECT_EQ(bounds.from, utc(day, -9h));
+        EXPECT_EQ(bounds.to - bounds.from, 24h);
+    }
+    // And a month is its days times 24 hours.
+    const auto march = period_bounds({on(2026y / March / 1), on(2026y / March / 31)}, "Asia/Tokyo").value();
+    EXPECT_EQ(march.to - march.from, 31 * 24h);
 }
 
 TEST(ReportPeriod, DaysAreWrittenAndReadAsIsoDates) {
