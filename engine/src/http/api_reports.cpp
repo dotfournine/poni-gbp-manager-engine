@@ -1,15 +1,17 @@
-// The reports part of the dashboard's API (FR-8, D-085, D-102, D-104): the
-// list of reports, generating a location's report by hand, reading one,
-// sending one by email, discarding one, and the schedules. Paths, parameters and bodies are defined in
+// The reports part of the dashboard's API (FR-8, D-085, D-102, D-104, D-111):
+// a location's report settings, the list of reports, generating a location's
+// report by hand, reading one, sending one by email, discarding one, and the schedules. Paths, parameters and bodies are defined in
 // api/openapi.yaml; change that file first.
 //
 // Every route here needs a signed-in person. The engine serves no report's
 // page, to anyone: the page is an object in the public bucket, put there by
 // the build (jobs::Reporter), and a report names its address.
 
+#include "core/etag.hpp"
 #include "db/audit.hpp"
 #include "db/database.hpp"
 #include "db/repo_reports.hpp"
+#include "db/repo_settings.hpp"
 #include "http/api.hpp"
 #include "http/api_support.hpp"
 #include "jobs/reports.hpp"
@@ -45,6 +47,30 @@ BOOST_DESCRIBE_STRUCT(ReportSendBody, (), (recipients))
 
 void add_report_routes(Router& router, const Api& api, jobs::Reporter& reporter) {
     const std::string link_base = reporter.link_base();
+    const auto settings_etag = [](const domain::ReportSettings& settings) { return core::etag(repo::editable(settings)); };
+
+    // A location's report settings (D-111): one complete bundle, replaced whole with If-Match (D-108).
+    router.add(verb::get, "/api/locations/{id}/report-settings", {Access::user, "locations.read"},
+               [api, settings_etag](const Request& request) -> asio::awaitable<Response> {
+                   const auto id = path_id(request);
+                   if (!id) co_return not_found("location");
+                   co_return respond_tagged(co_await api.query([id = *id](pqxx::work& tx) { return repo::report_settings(tx, id); }),
+                                            settings_etag);
+               });
+
+    router.add(verb::put, "/api/locations/{id}/report-settings", {Access::user, "report_settings.update"},
+               [api, settings_etag](const Request& request) -> asio::awaitable<Response> {
+                   const auto id = path_id(request);
+                   if (!id) co_return not_found("location");
+                   const auto body = body_as<domain::ReportSettings>(request);
+                   if (!body) co_return body.error();
+                   co_return respond_tagged(co_await api.change_if_match(
+                                                request, [id = *id](pqxx::work& tx) { return repo::current_report_settings_etag(tx, id); },
+                                                [id = *id, settings = *body](pqxx::work& tx, audit::Writer& audit) {
+                                                    return repo::replace_report_settings(tx, audit, id, settings);
+                                                }),
+                                            settings_etag);
+               });
 
     router.add(verb::get, "/api/reports", {Access::user, "reports.list"}, [api, link_base](const Request& request) -> asio::awaitable<Response> {
         const QueryParams query(request.query);

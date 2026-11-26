@@ -46,11 +46,14 @@ struct NewReport {
     std::string time_zone;
     std::optional<std::int64_t> schedule_id;
     bool auto_send = false;
+    // Nothing: the location's report settings' sections (D-111).
+    std::optional<std::vector<std::string>> sections;
 };
 
 // Writes the report as "building" and enqueues its job, requested by the
-// audit's actor (a person, or nobody: a schedule). Without a time zone it
-// takes the location's, else UTC. Refuses a location that is unknown or
+// audit's actor (a person, or nobody: a schedule), with the format of the
+// location's report settings and their sections, or the report's own
+// (D-111). Without a time zone it takes the location's, else UTC. Refuses a location that is unknown or
 // switched off, a time zone the system does not know, a period that is
 // upside down, longer than 400 days or not over yet, and any report while
 // there is no public bucket (`link_base` empty): its page would have nowhere to go.

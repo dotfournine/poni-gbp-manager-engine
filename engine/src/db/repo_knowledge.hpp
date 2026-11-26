@@ -26,7 +26,7 @@
 namespace poni::repo {
 
 // The shape of the knowledge files this engine reads (knowledge/manifest.json).
-inline constexpr int kKnowledgeFormat = 2;
+inline constexpr int kKnowledgeFormat = 3;
 
 struct KnowledgeMeta {
     std::string version;
@@ -61,11 +61,12 @@ std::optional<domain::CorpusCase> corpus_case(pqxx::transaction_base& tx, const 
 
 // ---- defaults and prices ---------------------------------------------------------------
 
-// What every location starts with when it is discovered (its content and reply settings, D-102, D-107),
+// What every location starts with when it is discovered (its content, reply and report settings, D-102, D-107, D-111),
 // and the default of every analysis setting, each as one JSON object. Empty objects when nothing is seeded.
 struct KnowledgeDefaults {
     boost::json::object content;
     boost::json::object reply;
+    boost::json::object report;
     boost::json::object analysis;
 };
 
