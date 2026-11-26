@@ -47,6 +47,7 @@ const std::map<std::string, std::string> kRoutesWithBody = {
     {"POST /api/reviews/{id}/ignore", "reason"},
     {"PUT /api/locations/{id}/content-settings", "business_facts"},
     {"PUT /api/locations/{id}/reply-settings", "reply_languages"},
+    {"PUT /api/locations/{id}/report-settings", "format"},
     {"PATCH /api/ai/settings", "enabled"},
     {"PATCH /api/drafts/{id}", "text"},
     {"POST /api/drafts/{id}/approve", "text"},
@@ -197,9 +198,11 @@ TEST_F(Bodies, AWholeNumberMayBeWrittenWithAFractionOfZero) {
 TEST_F(Bodies, SettingsTravelWholeAndTakeOnlyTheirOwnMembersAtEveryDepth) {
     const auto content_path = content_settings_path(spa_);
     const auto reply_path = reply_settings_path(spa_);
-    const auto stored = boost::json::serialize(read(content_path)) + boost::json::serialize(read(reply_path));
+    const auto report_path = std::format("/api/locations/{}/report-settings", spa_);
+    const auto stored =
+        boost::json::serialize(read(content_path)) + boost::json::serialize(read(reply_path)) + boost::json::serialize(read(report_path));
     // What the engine itself stores is a body it takes.
-    for (const auto& path : {content_path, reply_path}) {
+    for (const auto& path : {content_path, reply_path, report_path}) {
         const auto same = put_current(path, boost::json::serialize(read(path)));
         ASSERT_EQ(same.status, 200u) << path << ": " << same.body;
     }
@@ -220,6 +223,9 @@ TEST_F(Bodies, SettingsTravelWholeAndTakeOnlyTheirOwnMembersAtEveryDepth) {
     expect_refused(without(content_path, "english_variant"), "english_variant", "a variant left out");
     expect_refused(without(reply_path, "signature"), "signature", "a member left out");
     expect_refused(without(reply_path, "auto_reply_min_stars"), "auto_reply_min_stars", "a rule left out");
+    expect_refused(without(report_path, "sections"), "sections", "the report's sections left out");
+    expect_refused(with(report_path, "sections", R"(["summary", null])"), "sections", "a null section");
+    expect_refused(with(report_path, "pages", "2"), "pages", "a member the report settings do not have");
     expect_refused(with(reply_path, "length", R"({"en": {"positive": {"min": 1, "max": 9}}})"), "length.en.rating_only",
                    "a kind of reply left out");
     // No member the schema does not have, at any depth, and no null.
@@ -235,7 +241,8 @@ TEST_F(Bodies, SettingsTravelWholeAndTakeOnlyTheirOwnMembersAtEveryDepth) {
     expect_refused(with(reply_path, "auto_reply_min_stars", "null"), "auto_reply_min_stars", "a null rule");
     expect_refused(with(content_path, "location_title", R"("Willow")"), "location_title", "what the old answer held");
     expect_refused(with(content_path, "client_id", std::to_string(spa_client_)), "client_id", "what the location holds");
-    EXPECT_EQ(boost::json::serialize(read(content_path)) + boost::json::serialize(read(reply_path)), stored);
+    EXPECT_EQ(boost::json::serialize(read(content_path)) + boost::json::serialize(read(reply_path)) + boost::json::serialize(read(report_path)),
+              stored);
 }
 
 TEST_F(Bodies, APostsContentTravelsWhole) {

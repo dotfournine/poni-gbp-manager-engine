@@ -11,6 +11,9 @@
     "reply": {
       "$ref": "settings.schema.json#/$defs/reply"
     },
+    "report": {
+      "$ref": "settings.schema.json#/$defs/report"
+    },
     "analysis": {
       "type": "object",
       "additionalProperties": false,
@@ -125,6 +128,7 @@
   "required": [
     "analysis",
     "content",
-    "reply"
+    "reply",
+    "report"
   ]
 }

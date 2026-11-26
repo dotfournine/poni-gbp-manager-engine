@@ -142,6 +142,9 @@ protected:
     http::Response save_reply_settings(std::int64_t location, std::string_view members) {
         return save_bundle(reply_settings_path(location), members);
     }
+    http::Response save_report_settings(std::int64_t location, std::string_view members) {
+        return save_bundle(std::format("/api/locations/{}/report-settings", location), members);
+    }
 
     http::Response save_bundle(const std::string& path, std::string_view members) {
         const auto response = get(path, browser_);

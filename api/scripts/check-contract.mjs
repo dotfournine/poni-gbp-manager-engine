@@ -515,7 +515,7 @@ try {
   expectStatus("GET /api/knowledge/industries/no_such_industry/corpus", await call("GET", "/api/knowledge/industries/no_such_industry/corpus"), 404, "not_found");
   expectStatus("PATCH /api/knowledge", await call("PATCH", "/api/knowledge", { body: {} }), 405, "method_not_allowed");
 
-  // A location's content and reply settings (D-107): two complete bundles, each sent whole with If-Match (D-108).
+  // A location's content, reply and report settings (D-107, D-111): three complete bundles, each sent whole with If-Match (D-108).
   // Here each is read, saved back as it is, saved with a change, and put back. Every location has both from its
   // discovery (D-102), and only the seeded location's are saved: between the change and the putting back, a real
   // location's replies would be drafted under the check's words, and a go-live test running there would be
@@ -536,6 +536,16 @@ try {
       // Auto reply's minimum is 4 or 5 (D-110); three stars or fewer never auto reply.
       alsoOutside: (b) => ({ ...b, auto_reply_min_stars: 3 }),
       leftOut: "signature",
+    },
+    {
+      // Only html until PDF reports exist; the 400s carry a current If-Match, since the header and the tag are
+      // checked before the change's own limits (D-108 point 3).
+      name: "report-settings",
+      change: (b) => ({ ...b, sections: ["summary", "reviews"] }),
+      changed: (json) => json?.sections?.join(",") === "summary,reviews",
+      outside: (b) => ({ ...b, format: "pdf" }),
+      alsoOutside: (b) => ({ ...b, sections: [] }),
+      leftOut: "sections",
     },
   ];
   for (const bundle of bundles) {
@@ -569,9 +579,9 @@ try {
     if (bundle.alsoOutside) await save("another value outside its limits", bundle.alsoOutside(original), 400);
     await save("a member left out", { ...original, [bundle.leftOut]: undefined }, 400);
     await save("put back", original, 200);
-    if (bundle.name === "content-settings") await expectGuarded(settingsSpec, "PUT", path, original);
+    if (bundle.name !== "reply-settings") await expectGuarded(settingsSpec, "PUT", path, original);
   }
-  for (const name of ["content-settings", "reply-settings"]) {
+  for (const name of ["content-settings", "reply-settings", "report-settings"]) {
     expectStatus(`GET /api/locations/999999999/${name}`, await call("GET", `/api/locations/999999999/${name}`), 404, "not_found");
   }
   const aiTag = await etagOf("/api/ai/settings");

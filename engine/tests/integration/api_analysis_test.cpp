@@ -98,7 +98,10 @@ TEST_F(AnalysisApi, EveryNewEndpointNeedsASession) {
 TEST_F(AnalysisApi, TheKnowledgeBaseIsShownAsItWasSeeded) {
     const auto knowledge = read("/api/knowledge");
     EXPECT_EQ(knowledge.at("version").as_string(), value<std::string>("SELECT version FROM kb_meta"));
-    EXPECT_EQ(knowledge.at("format").as_int64(), 2);
+    EXPECT_EQ(knowledge.at("format").as_int64(), 3);
+    // The report defaults beside the other two bundles (D-111).
+    EXPECT_EQ(knowledge.at("defaults").at("report").at("format").as_string(), "html");
+    EXPECT_EQ(knowledge.at("defaults").at("report").at("sections").as_array().size(), 7u);
     EXPECT_FALSE(knowledge.at("seeded_at").as_string().empty());
 
     // The supported industries: each has a complete pack.

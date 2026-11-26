@@ -2,6 +2,7 @@
 
 #include "db/database.hpp"
 #include "db/repo_knowledge.hpp"
+#include "db/repo_settings.hpp"
 #include "domain/dates.hpp"
 #include "domain/posting_schedule.hpp"
 #include "domain/report_html.hpp"
@@ -35,13 +36,17 @@ constexpr int kMaxPeriodDays = 400;
 
 core::TimePoint from_micros(std::int64_t micros) { return core::TimePoint(std::chrono::microseconds(micros)); }
 
+std::vector<std::string> typed_list(const pqxx::field_ref& field) {
+    return boost::json::value_to<std::vector<std::string>>(boost::json::parse(field.as<std::string>()));
+}
+
 std::string micros(std::string_view column) { return std::format("(extract(epoch FROM {}) * 1000000)::bigint", column); }
 
 // `base` is the placeholder of the public bucket's address ("$2"): a bound parameter, never part of the SQL.
 std::string report_select(std::string_view base) {
     return std::format(R"sql(
         SELECT p.id, p.location_id, l.title AS location_title, p.period_start::text AS period_start, p.period_end::text AS period_end,
-               p.time_zone, p.schedule_id, (SELECT u.email FROM users u WHERE u.id = p.requested_by) AS requested_by, p.status, p.error,
+               p.time_zone, p.format, p.sections, p.schedule_id, (SELECT u.email FROM users u WHERE u.id = p.requested_by) AS requested_by, p.status, p.error,
                CASE WHEN p.status = 'ready' AND {0}::text <> '' THEN {0} || p.page_object END AS url,
                CASE WHEN p.status IN ('discarded', 'expired') AND {0} <> '' AND p.archive_object IS NOT NULL
                     THEN {0} || p.archive_object END AS archive_url,
@@ -59,6 +64,8 @@ boost::json::value report_json(const model::Report& report) {
             {"period_start", report.period_start},
             {"period_end", report.period_end},
             {"time_zone", report.time_zone},
+            {"format", report.format},
+            {"sections", boost::json::value_from(report.sections)},
             {"status", report.status}};
 }
 
@@ -112,14 +119,20 @@ Result<model::Report> create_report(pqxx::transaction_base& tx, audit::Writer& a
     if (link_base.empty()) {
         return no_public_bucket("a report's page has nowhere to go");
     }
+    // What the report is built as is fixed now, and a later save of the settings changes nothing about it (D-085).
+    auto settings = report_settings(tx, report.location_id);
+    if (!settings) return std::unexpected(settings.error());
+    const auto& sections = report.sections ? *report.sections : settings->sections;
 
     const auto now = audit.now();
     const auto id = tx.query_value<std::int64_t>(
-        "INSERT INTO reports (location_id, period_start, period_end, time_zone, schedule_id, requested_by, auto_send_status, status, "
-        "created_at, updated_at) VALUES ($1, $2::date, $3::date, $4, $5, $6, $7, 'building', $8::timestamptz, $8::timestamptz) "
-        "RETURNING id",
+        std::format("INSERT INTO reports (location_id, period_start, period_end, time_zone, schedule_id, requested_by, auto_send_status, "
+                    "status, format, sections, created_at, updated_at) VALUES ($1, $2::date, $3::date, $4, $5, $6, $7, 'building', $8, "
+                    "{}, $10::timestamptz, $10::timestamptz) RETURNING id",
+                    db::text_array("$9")),
         pqxx::params{report.location_id, domain::format_day(report.period.start), domain::format_day(report.period.end), time_zone,
-                     report.schedule_id, audit.person_id(), report.auto_send ? "pending" : "off", to_timestamptz(now)});
+                     report.schedule_id, audit.person_id(), report.auto_send ? "pending" : "off", settings->format,
+                     db::json_list(sections), to_timestamptz(now)});
     jobs::sql::enqueue(tx,
                        {.kind = std::string(kBuildReportKind),
                         .payload = boost::json::object{{"report_id", id}},
@@ -136,7 +149,7 @@ Result<model::Report> create_report(pqxx::transaction_base& tx, audit::Writer& a
 
 std::optional<ReportWork> load_report_work(pqxx::transaction_base& tx, std::int64_t report_id, core::TimePoint now) {
     const auto rows = tx.exec("SELECT p.location_id, l.title, l.industry_key, p.period_start::text, p.period_end::text, p.time_zone, "
-                              "l.enabled, l.gbp_location_id, l.access_status = 'active' "
+                              "l.enabled, l.gbp_location_id, l.access_status = 'active', array_to_json(p.sections)::text "
                               "FROM reports p JOIN locations l ON l.id = p.location_id WHERE p.id = $1 AND p.status = 'building'",
                               pqxx::params{report_id});
     if (rows.empty()) return std::nullopt;
@@ -153,6 +166,7 @@ std::optional<ReportWork> load_report_work(pqxx::transaction_base& tx, std::int6
     input.location_title = row[1].as<std::string>();
     input.period = {domain::parse_report_day(row[3].as<std::string>()).value(), domain::parse_report_day(row[4].as<std::string>()).value()};
     input.time_zone = row[5].as<std::string>();
+    input.sections = typed_list(row[9]);
     input.generated_at = std::format("{:%FT%T}Z", std::chrono::floor<std::chrono::seconds>(now));
 
     // create_report accepted the zone; if the system's database has lost it since, the job fails with that message.
@@ -206,13 +220,16 @@ std::optional<ReportWork> load_report_work(pqxx::transaction_base& tx, std::int6
         (r[10].as<bool>() ? input.reviews : input.previous_reviews).push_back(std::move(review));
     }
 
-    const auto cases = tx.exec(
-        "SELECT count(*) FILTER (WHERE k.opened_at >= $2::timestamptz AND k.opened_at < $3::timestamptz), "
-        "count(*) FILTER (WHERE k.closed_at >= $2::timestamptz AND k.closed_at < $3::timestamptz) "
-        "FROM cases k JOIN reviews r ON r.id = k.review_id WHERE r.location_id = $1",
-        pqxx::params{input.location_id, from, to}).one_row();
-    input.escalations_opened = cases[0].as<std::int64_t>();
-    input.escalations_closed = cases[1].as<std::int64_t>();
+    // The serious issues are a line of the reviews section: without it they are not counted, and both stay 0.
+    if (domain::has_section(input.sections, "reviews")) {
+        const auto cases = tx.exec(
+            "SELECT count(*) FILTER (WHERE k.opened_at >= $2::timestamptz AND k.opened_at < $3::timestamptz), "
+            "count(*) FILTER (WHERE k.closed_at >= $2::timestamptz AND k.closed_at < $3::timestamptz) "
+            "FROM cases k JOIN reviews r ON r.id = k.review_id WHERE r.location_id = $1",
+            pqxx::params{input.location_id, from, to}).one_row();
+        input.escalations_opened = cases[0].as<std::int64_t>();
+        input.escalations_closed = cases[1].as<std::int64_t>();
+    }
     return work;
 }
 

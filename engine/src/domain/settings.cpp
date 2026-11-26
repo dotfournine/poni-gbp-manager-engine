@@ -3,6 +3,7 @@
 #include "core/text.hpp"
 #include "domain/dates.hpp"
 #include "domain/posting_schedule.hpp"
+#include "domain/report.hpp"
 
 #include <algorithm>
 #include <array>
@@ -110,6 +111,12 @@ std::optional<std::string> check_reply_settings(const ReplySettings& s) {
     if (auto problem = check_texts("example_replies", s.example_replies)) return problem;
     if (!(s.temperature >= 0 && s.temperature <= 2)) return "'temperature' must be between 0 and 2";
     return check_auto_reply(s);
+}
+
+std::optional<std::string> check_report_settings(const ReportSettings& s) {
+    if (s.format != "html" && s.format != "pdf") return "\"format\" must be html or pdf.";
+    if (s.format == "pdf") return "PDF reports are not supported yet; use html.";
+    return report_sections_problem(s.sections);
 }
 
 const LengthRange& length_range(const ReplySettings& settings, const std::string& language, const std::string& mode) {

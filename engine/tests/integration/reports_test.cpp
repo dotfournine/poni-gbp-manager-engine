@@ -1660,3 +1660,191 @@ TEST_F(Reports, ADeletedScheduleLeavesItsReports) {
     EXPECT_EQ(read("/api/reports?status=ready").at("total").as_int64(), 1);
     EXPECT_EQ(read("/api/reports?status=failed").at("total").as_int64(), 0);
 }
+
+// ---- the location's report settings (D-111) ------------------------------------------------
+
+namespace {
+
+// The same fixture, for the settings themselves.
+class ReportSettings : public Reports {};
+
+std::string settings_path(std::int64_t location) { return std::format("/api/locations/{}/report-settings", location); }
+
+const std::string kAllSections =
+    R"(["summary", "at_a_glance", "reviews", "topics", "employee_recognition", "highlights", "visibility"])";
+
+// The seven sections but these.
+std::string sections_without(std::initializer_list<std::string_view> left_out) {
+    boost::json::array out;
+    for (const auto section : domain::kReportSections) {
+        if (std::ranges::find(left_out, section) == left_out.end()) out.emplace_back(section);
+    }
+    return boost::json::serialize(out);
+}
+
+}  // namespace
+
+TEST_F(ReportSettings, ANewLocationHasTheDefaults) {
+    gbp_.add_location("9004", "LU DREAM SPA - SoHo");
+    discover();
+    const auto soho = location_id("9004");
+    const auto response = get(settings_path(soho), browser_);
+    ASSERT_EQ(response.status, 200u) << response.body;
+    EXPECT_EQ(boost::json::serialize(json(response)), boost::json::serialize(boost::json::parse(
+                                                          std::format(R"({{"format": "html", "sections": {}}})", kAllSections))));
+    EXPECT_THAT(header(response, "ETag"), testing::MatchesRegex(R"("[0-9a-f]{64}")"));
+    EXPECT_EQ(get(settings_path(999999), browser_).status, 404u);
+}
+
+TEST_F(ReportSettings, APutReplacesThemWholeWithIfMatch) {
+    const auto path = settings_path(chelsea_);
+    const auto read_tag = etag(path, browser_);
+    const std::string body = R"({"format": "html", "sections": ["summary", "reviews"]})";
+    const auto entries = [&] { return count("audit_log WHERE action = 'report_settings.update'"); };
+
+    EXPECT_EQ(put(path, body).status, 428u);
+    EXPECT_EQ(put(path, body, if_match(R"(")" + std::string(64, '0') + R"(")")).status, 412u);
+    EXPECT_EQ(entries(), 0) << "neither changed anything";
+
+    const auto saved = put(path, body, if_match(read_tag));
+    ASSERT_EQ(saved.status, 200u) << saved.body;
+    EXPECT_EQ(boost::json::serialize(json(saved).at("sections")), R"(["summary","reviews"])");
+    const auto saved_tag = header(saved, "ETag");
+    EXPECT_NE(saved_tag, read_tag);
+    EXPECT_EQ(saved_tag, etag(path, browser_));
+    EXPECT_EQ(count(std::format("audit_log WHERE action = 'report_settings.update' AND object_type = 'location' AND object_id = '{}' "
+                                "AND location_id = {}",
+                                chelsea_, chelsea_)),
+              1);
+    // The tag read before the save is stale now, even for the same body.
+    EXPECT_EQ(put(path, body, if_match(read_tag)).status, 412u);
+
+    // An equal save with the current tag changes nothing: the same tag, and no entry.
+    const auto again = put(path, body, if_match(saved_tag));
+    ASSERT_EQ(again.status, 200u) << again.body;
+    EXPECT_EQ(header(again, "ETag"), saved_tag);
+    EXPECT_EQ(entries(), 1);
+    // Another location's settings are its own.
+    EXPECT_EQ(boost::json::serialize(read(settings_path(uptown_)).at("sections")), boost::json::serialize(boost::json::parse(kAllSections)));
+}
+
+// Each 400 carries a current If-Match: the header and the tag are checked before the change's own limits (D-108 point 3).
+TEST_F(ReportSettings, PdfIsRefusedUntilItExists) {
+    const auto path = settings_path(chelsea_);
+    const auto pdf = put_current(path, std::format(R"({{"format": "pdf", "sections": {}}})", kAllSections));
+    ASSERT_EQ(pdf.status, 400u) << pdf.body;
+    EXPECT_THAT(error_message(pdf), HasSubstr("PDF reports are not supported yet"));
+    const auto other = put_current(path, std::format(R"({{"format": "docx", "sections": {}}})", kAllSections));
+    ASSERT_EQ(other.status, 400u) << other.body;
+    EXPECT_THAT(error_message(other), HasSubstr("must be html or pdf"));
+    EXPECT_EQ(read(path).at("format").as_string(), "html");
+    EXPECT_EQ(count("audit_log WHERE action = 'report_settings.update'"), 0);
+}
+
+TEST_F(ReportSettings, SectionsAreRefusedWhenEmptyUnknownOrRepeated) {
+    const auto path = settings_path(chelsea_);
+    for (const auto* sections : {"[]", R"(["summary", "pictures"])", R"(["reviews", "summary", "reviews"])"}) {
+        const auto refused = put_current(path, std::format(R"({{"format": "html", "sections": {}}})", sections));
+        ASSERT_EQ(refused.status, 400u) << sections << ": " << refused.body;
+        EXPECT_THAT(error_message(refused), HasSubstr("\"sections\"")) << sections;
+    }
+    EXPECT_EQ(boost::json::serialize(read(path).at("sections")), boost::json::serialize(boost::json::parse(kAllSections)));
+    EXPECT_EQ(count("audit_log WHERE action = 'report_settings.update'"), 0);
+}
+
+TEST_F(ReportSettings, SectionsKeepTheirOrder) {
+    const std::string reversed = R"(["visibility","highlights","employee_recognition","topics","reviews","at_a_glance","summary"])";
+    ASSERT_EQ(save_report_settings(chelsea_, std::format(R"({{"sections": {}}})", reversed)).status, 200u);
+    EXPECT_EQ(boost::json::serialize(read(settings_path(chelsea_)).at("sections")), reversed);
+    EXPECT_EQ(value<std::string>(std::format("SELECT array_to_string(sections, ',') FROM report_settings WHERE location_id = {}", chelsea_)),
+              "visibility,highlights,employee_recognition,topics,reviews,at_a_glance,summary");
+}
+
+TEST_F(Reports, AReportRecordsTheFormatAndSectionsItWasCreatedWith) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    ASSERT_EQ(save_report_settings(chelsea_, R"({"sections": ["reviews", "summary", "at_a_glance"]})").status, 200u);
+    const auto id = generate(chelsea_);
+    ASSERT_EQ(status(id), "ready");
+    const auto recorded = [&] {
+        const auto r = report(id);
+        return std::format("{} {}", std::string(r.at("format").as_string()), boost::json::serialize(r.at("sections")));
+    };
+    EXPECT_EQ(recorded(), R"(html ["reviews","summary","at_a_glance"])");
+    EXPECT_EQ(boost::json::serialize(data(id).at("sections")), R"(["reviews","summary","at_a_glance"])");
+    EXPECT_EQ(boost::json::serialize(read(std::format("/api/reports?location_id={}", chelsea_)).at("items").at(0).at("sections")),
+              R"(["reviews","summary","at_a_glance"])");
+    EXPECT_THAT(value<std::string>(std::format("SELECT after::text FROM audit_log WHERE action = 'report.create' AND object_id = '{}'", id)),
+                HasSubstr(R"("sections": ["reviews", "summary", "at_a_glance"])"));
+
+    // A later save changes nothing about a report that exists (D-085).
+    ASSERT_EQ(save_report_settings(chelsea_, R"({"sections": ["visibility"]})").status, 200u);
+    EXPECT_EQ(recorded(), R"(html ["reviews","summary","at_a_glance"])");
+    EXPECT_EQ(boost::json::serialize(data(id).at("sections")), R"(["reviews","summary","at_a_glance"])");
+    // The next report is built with the new settings.
+    const auto next = generate(chelsea_, "2026-09-01", "2026-09-30");
+    EXPECT_EQ(boost::json::serialize(report(next).at("sections")), R"(["visibility"])");
+}
+
+TEST_F(Reports, AReportWithoutVisibilityAsksGoogleNothing) {
+    using namespace std::chrono;
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    performance_.set("9001", "CALL_CLICKS", 2026y / October / 12, 9);
+    performance_.keywords["9001"]["2026-10"] = {{"head spa nyc", 400, {}}};
+    ASSERT_EQ(save_report_settings(chelsea_, std::format(R"({{"sections": {}}})", sections_without({"visibility"}))).status, 200u);
+    const auto id = generate(chelsea_);
+    ASSERT_EQ(status(id), "ready");
+    EXPECT_EQ(performance_.daily_calls, 0);
+    EXPECT_EQ(performance_.keyword_calls, 0);
+    EXPECT_FALSE(data(id).at("visibility").at("available").as_bool());
+    EXPECT_THAT(html(id), Not(HasSubstr("Visibility on Google")));
+    EXPECT_THAT(html(id), Not(HasSubstr("head spa nyc")));
+    EXPECT_THAT(html(id), HasSubstr("<h2>At a glance</h2>"));
+}
+
+TEST_F(Reports, AReportWithoutTheSummaryAsksNoModel) {
+    const auto review = add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    analyze(review, "positive", R"([{"id": "treatment_quality", "polarity": "positive"}])");
+    ASSERT_EQ(save_report_settings(chelsea_, std::format(R"({{"sections": {}}})", sections_without({"summary"}))).status, 200u);
+    const auto id = generate(chelsea_);
+    ASSERT_EQ(status(id), "ready");
+    EXPECT_EQ(llm_.calls("summary"), 0u);
+    EXPECT_TRUE(report(id).at("summary").is_null());
+    EXPECT_TRUE(report(id).at("summary_note").is_null()) << "a section left out is not explained on the report";
+    EXPECT_THAT(html(id), Not(HasSubstr("class=\"summary\"")));
+}
+
+// The summary starts from the review figures or from visibility (order 14): with neither, there is nothing to summarize,
+// however the models are set up.
+TEST_F(Reports, AReportWithOnlyTopicsAndTheSummaryIsNotSummarized) {
+    exec("UPDATE ai_settings SET enabled = true");
+    ASSERT_EQ(read("/api/ai/settings").at("summary_provider").as_string(), "dashscope");
+    ASSERT_TRUE(llm_.configured("dashscope")) << "the summary's provider is configured";
+    const auto review = add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely head spa");
+    analyze(review, "positive", R"([{"id": "treatment_quality", "polarity": "positive"}])");
+    ASSERT_EQ(save_report_settings(chelsea_, R"({"sections": ["summary", "topics"]})").status, 200u);
+    const auto id = generate(chelsea_);
+    ASSERT_EQ(status(id), "ready");
+    EXPECT_EQ(data(id).at("reviews").at("new_reviews").as_int64(), 1) << "the period has a new review";
+    EXPECT_EQ(report(id).at("summary_note").as_string(), "There was nothing to summarize.");
+    EXPECT_TRUE(report(id).at("summary").is_null());
+    EXPECT_EQ(llm_.calls("summary"), 0u);
+    EXPECT_THAT(html(id), HasSubstr("What reviewers talk about"));
+}
+
+TEST_F(Reports, AReportWithoutTheReviewsSectionShowsNoSeriousIssues) {
+    const auto complaint = add_review(chelsea_, "b1", 1, "2026-10-07T15:00:00Z", "The room was cold");
+    exec(std::format("INSERT INTO cases (review_id, opened_by, opened_at, updated_at) "
+                     "VALUES ({}, 'severity_flag', '2026-10-07T16:00:00Z', '2026-10-07T16:00:00Z')",
+                     complaint));
+    const auto whole = generate(chelsea_);
+    EXPECT_THAT(html(whole), HasSubstr("Serious issues raised by reviewers: 1 opened"));
+    EXPECT_EQ(data(whole).at("escalations_opened").as_int64(), 1);
+
+    ASSERT_EQ(save_report_settings(chelsea_, std::format(R"({{"sections": {}}})", sections_without({"reviews"}))).status, 200u);
+    const auto id = generate(chelsea_);
+    EXPECT_THAT(html(id), Not(HasSubstr("Serious issues")));
+    EXPECT_EQ(data(id).at("escalations_opened").as_int64(), 0);
+    EXPECT_EQ(data(id).at("escalations_closed").as_int64(), 0);
+    // The review numbers are always computed: the headline figures are read from them.
+    EXPECT_EQ(report(id).at("new_reviews").as_int64(), 1);
+}

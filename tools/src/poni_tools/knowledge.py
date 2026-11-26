@@ -2,13 +2,13 @@
 
 Layout of the folder:
 
-    manifest.json                       {"format": 2}
+    manifest.json                       {"format": 3}
     common/profile.json                 the severity flags of every industry
     industries/<key>/profile.json       topics, item types, severity flags
     industries/<key>/corpus.json        the test corpus
     industries/<key>/test_client.json   a made-up business the suites run as
     voices/<key>.json                   voice templates
-    defaults.json                       content, reply and analysis settings
+    defaults.json                       content, reply, report and analysis settings
     models.json                         model prices
     schema/                             a JSON Schema per kind of file
 
@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 # The shape of the files this code, and the engine built with it, can read.
-FORMAT = 2
+FORMAT = 3
 
 PACK_FILES = ("profile.json", "corpus.json", "test_client.json")
 

@@ -112,7 +112,8 @@ TEST_F(Migrations, AKnowledgeBaseWithoutItsDefaultsRowsIsNotSeeded) {
         return repo::knowledge_problem(tx);
     };
     EXPECT_EQ(knowledge(), std::nullopt) << "the seeded database";
-    for (const std::string table : {"kb_reply_defaults", "kb_content_defaults"}) {
+    // Emptied one after the other, the last checked first, so each problem names the table just emptied.
+    for (const std::string table : {"kb_report_defaults", "kb_reply_defaults", "kb_content_defaults"}) {
         {
             pqxx::connection conn{url()};
             pqxx::work tx{conn};

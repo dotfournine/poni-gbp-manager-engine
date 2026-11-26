@@ -202,6 +202,16 @@ def test_no_file_switches_auto_reply_on(kb):
     only(problems(kb), "voices/warm_casual.json", "auto_reply_enabled must be false")
 
 
+def test_the_report_defaults_are_html_and_name_known_sections(kb):
+    # A save of pdf is refused until PDF reports exist (D-111), so a pdf default would be a form nobody can save.
+    kb.edit("defaults.json", lambda d: d["report"].update({"format": "pdf"}))
+    only(problems(kb), "defaults.json", "report.format must be html")
+    kb.edit("defaults.json", lambda d: d["report"].update({"format": "html", "sections": ["summary", "pictures"]}))
+    only(problems(kb), "defaults.json", "report.sections[1]", "pictures")
+    kb.edit("defaults.json", lambda d: d["report"].update({"sections": []}))
+    only(problems(kb), "defaults.json", "report.sections")
+
+
 def test_a_minimum_below_four_stars_is_refused(kb):
     kb.edit("defaults.json", lambda d: d["reply"].update({"auto_reply_min_stars": 3}))
     only(problems(kb), "defaults.json", "auto_reply_min_stars")
@@ -228,7 +238,7 @@ def test_the_report_summary_has_a_default_provider_and_a_priced_model(kb):
 
 def test_a_format_these_scripts_do_not_read(kb):
     kb.edit("manifest.json", lambda m: m.update(format=1))
-    only(problems(kb), "format 1 is not the format these scripts read (2)")
+    only(problems(kb), "format 1 is not the format these scripts read (3)")
 
 
 def test_check_says_what_it_found(kb, capsys):

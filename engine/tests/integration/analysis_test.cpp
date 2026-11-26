@@ -160,6 +160,11 @@ TEST_F(Analysis, ADiscoveredLocationDoesNothingUntilAPersonSwitchesItOnAndNeedsN
         "FROM reply_settings r CROSS JOIN kb_reply_defaults d WHERE r.location_id = {}",
         soho)))
         << "its reply settings are the defaults from the start";
+    EXPECT_TRUE(value<bool>(std::format(
+        "SELECT (to_jsonb(p) - 'location_id' - 'created_at' - 'updated_at') = (to_jsonb(d) - 'id') "
+        "FROM report_settings p CROSS JOIN kb_report_defaults d WHERE p.location_id = {}",
+        soho)))
+        << "and its report settings (D-111)";
 
     const auto full_syncs = std::format("jobs WHERE kind = 'reviews.full_sync' AND (payload->>'location_id')::bigint = {}", soho);
     jobs::Sync sync(db(), clock_, gbp_, places_, queue(), {});

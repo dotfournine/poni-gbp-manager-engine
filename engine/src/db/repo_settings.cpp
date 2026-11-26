@@ -36,6 +36,7 @@ constexpr std::string_view kReplyColumns =
     "reply_languages, fallback_language, signature, sign_off_name, length, example_replies, promos_allowed, contact_allowed, "
     "temperature, auto_reply_min_stars, auto_reply_delay_min_minutes, auto_reply_delay_max_minutes, auto_reply_window_start, "
     "auto_reply_window_end, auto_reply_enabled, auto_reply_daily_cap, auto_reply_pause_after_failures";
+constexpr std::string_view kReportColumns = "format, sections";
 
 struct Bundle {
     std::string_view table;
@@ -43,6 +44,7 @@ struct Bundle {
 };
 constexpr Bundle kContent{"content_settings", "content settings"};
 constexpr Bundle kReply{"reply_settings", "reply settings"};
+constexpr Bundle kReport{"report_settings", "report settings"};
 
 // One bundle of the location as it is stored, read by column name; nothing if it has no row, and what is wrong
 // if the row does not read as the bundle.
@@ -111,7 +113,7 @@ Result<T> replace_bundle(pqxx::transaction_base& tx, audit::Writer& audit, const
 
 }  // namespace
 
-// ---- content and reply settings ------------------------------------------------
+// ---- content, reply and report settings ----------------------------------------
 
 std::expected<domain::ResolvedSettings, std::string> stored_settings(pqxx::transaction_base& tx, std::int64_t location_id) {
     auto content = read_bundle<domain::ContentSettings>(tx, kContent, location_id);
@@ -133,9 +135,15 @@ Result<domain::ReplySettings> reply_settings(pqxx::transaction_base& tx, std::in
     return bundle_for_api<domain::ReplySettings>(tx, kReply, location_id);
 }
 
+Result<domain::ReportSettings> report_settings(pqxx::transaction_base& tx, std::int64_t location_id) {
+    return bundle_for_api<domain::ReportSettings>(tx, kReport, location_id);
+}
+
 boost::json::object editable(const domain::ContentSettings& settings) { return boost::json::value_from(settings).as_object(); }
 
 boost::json::object editable(const domain::ReplySettings& settings) { return boost::json::value_from(settings).as_object(); }
+
+boost::json::object editable(const domain::ReportSettings& settings) { return boost::json::value_from(settings).as_object(); }
 
 Result<std::string> current_content_settings_etag(pqxx::transaction_base& tx, std::int64_t location_id) {
     return current_etag<domain::ContentSettings>(tx, kContent, location_id);
@@ -143,6 +151,10 @@ Result<std::string> current_content_settings_etag(pqxx::transaction_base& tx, st
 
 Result<std::string> current_reply_settings_etag(pqxx::transaction_base& tx, std::int64_t location_id) {
     return current_etag<domain::ReplySettings>(tx, kReply, location_id);
+}
+
+Result<std::string> current_report_settings_etag(pqxx::transaction_base& tx, std::int64_t location_id) {
+    return current_etag<domain::ReportSettings>(tx, kReport, location_id);
 }
 
 Result<domain::ContentSettings> replace_content_settings(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
@@ -199,9 +211,18 @@ Result<domain::ReplySettings> replace_reply_settings(pqxx::transaction_base& tx,
     return saved;
 }
 
+Result<domain::ReportSettings> replace_report_settings(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
+                                                       const domain::ReportSettings& settings) {
+    if (!lock_location(tx, location_id)) return not_found("location");
+    if (auto problem = domain::check_report_settings(settings)) return invalid(std::move(*problem));
+    return replace_bundle(tx, audit, kReport, kReportColumns, std::format("$2, {}", text_array("$3")), location_id, settings,
+                          pqxx::params{location_id, settings.format, db::json_list(settings.sections)});
+}
+
 void write_default_settings(pqxx::transaction_base& tx, std::int64_t location_id, core::TimePoint now) {
     for (const auto& [bundle, columns, defaults] : {std::tuple{kContent, kContentColumns, std::string_view("kb_content_defaults")},
-                                                    std::tuple{kReply, kReplyColumns, std::string_view("kb_reply_defaults")}}) {
+                                                    std::tuple{kReply, kReplyColumns, std::string_view("kb_reply_defaults")},
+                                                    std::tuple{kReport, kReportColumns, std::string_view("kb_report_defaults")}}) {
         const auto written = tx.exec(std::format("INSERT INTO {0} (location_id, {1}, created_at, updated_at) "
                                                  "SELECT $1, {1}, $2::timestamptz, $2::timestamptz FROM {2}",
                                                  bundle.table, columns, defaults),

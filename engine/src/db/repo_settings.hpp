@@ -1,5 +1,5 @@
 // What the analysis pipeline is configured with, as the dashboard reads and
-// edits it: a location's content settings and reply settings (D-107) and the
+// edits it: a location's content, reply and report settings (D-107, D-111) and the
 // pipeline's own settings. What these start from (industry
 // profiles, voice templates, the defaults, model prices) is the knowledge
 // base, which nobody edits (db/repo_knowledge.hpp, D-078). Blocking calls on
@@ -24,10 +24,10 @@
 
 namespace poni::repo {
 
-// ---- content and reply settings (D-107) ----------------------------------------
+// ---- content, reply and report settings (D-107, D-111) --------------------------
 //
-// Two rows per location, one per bundle, each complete: what the location's
-// replies and posts are written with is those rows and nothing else. Both
+// Three rows per location, one per bundle, each complete: what the location's
+// replies, posts and reports are made with is those rows and nothing else. All
 // are written from the knowledge base's defaults when the location is
 // discovered, enabled or not (D-102), and each is replaced whole by a
 // person's save. Nothing copies settings between locations, and a location's
@@ -44,21 +44,26 @@ std::string unreadable_settings(std::string_view why);
 // can't be read is `settings_incomplete`, with the reason.
 Result<domain::ContentSettings> content_settings(pqxx::transaction_base& tx, std::int64_t location_id);
 Result<domain::ReplySettings> reply_settings(pqxx::transaction_base& tx, std::int64_t location_id);
+Result<domain::ReportSettings> report_settings(pqxx::transaction_base& tx, std::int64_t location_id);
 
 // Replaces one bundle of the location with this, whole. A bundle equal to the stored one changes nothing.
 Result<domain::ContentSettings> replace_content_settings(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
                                                          const domain::ContentSettings& settings);
 Result<domain::ReplySettings> replace_reply_settings(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
                                                      const domain::ReplySettings& settings);
+Result<domain::ReportSettings> replace_report_settings(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
+                                                       const domain::ReportSettings& settings);
 
 // What a bundle's ETag covers (D-108): every member, in member order.
 boost::json::object editable(const domain::ContentSettings& settings);
 boost::json::object editable(const domain::ReplySettings& settings);
+boost::json::object editable(const domain::ReportSettings& settings);
 // Lock the location (FOR UPDATE, the lock the replace_* functions take) and give the ETag of the bundle it holds.
 Result<std::string> current_content_settings_etag(pqxx::transaction_base& tx, std::int64_t location_id);
 Result<std::string> current_reply_settings_etag(pqxx::transaction_base& tx, std::int64_t location_id);
+Result<std::string> current_report_settings_etag(pqxx::transaction_base& tx, std::int64_t location_id);
 
-// Part of discovering a location: it starts with the knowledge base's defaults of both bundles, which the
+// Part of discovering a location: it starts with the knowledge base's defaults of all three bundles, which the
 // engine does not start without.
 void write_default_settings(pqxx::transaction_base& tx, std::int64_t location_id, core::TimePoint now);
 

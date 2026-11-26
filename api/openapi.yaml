@@ -1962,6 +1962,85 @@ paths:
         "409":
           $ref: "#/components/responses/ReportConflict"
 
+  /api/locations/{id}/report-settings:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getReportSettings
+      summary: A location's report settings
+      description: |
+        The format of the location's reports and the sections they have
+        (D-111). They are the location's own and complete, like its content
+        and reply settings (D-107): a location gets them when it is
+        discovered, as a copy of the knowledge base's defaults, and keeps
+        them whatever client it is grouped under (D-102). Only the build of a
+        report reads them: no reply or post prompt does, and nothing in them
+        is in the go-live fingerprint. The `ETag` covers both members.
+      tags: [reports]
+      responses:
+        "200":
+          description: The settings, and their `ETag`.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportSettings"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/SettingsConflict"
+    put:
+      operationId: replaceReportSettings
+      summary: Replace a location's report settings
+      description: |
+        Both members are sent, and what is stored is replaced whole (D-111),
+        with the `ETag` of what was read in `If-Match` (D-108). A report
+        created afterwards is built with them; a report created before keeps
+        the format and sections it was created with (D-085). A change needs
+        no go-live test.
+      tags: [reports]
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReportSettings"
+      responses:
+        "200":
+          description: |
+            The settings after the change, and their new `ETag`. A save that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReportSettings"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/SettingsConflict"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+
   /api/reports/{id}:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -3800,8 +3879,8 @@ components:
             $ref: "#/components/schemas/Error"
     SettingsConflict:
       description: |
-        `settings_incomplete`: the stored content or reply settings can't be
-        read as they are; the message says which bundle and why. A `PUT`
+        `settings_incomplete`: the stored content, reply or report settings
+        can't be read as they are; the message says which bundle and why. A `PUT`
         answers the same, since a bundle that can't be read has no `ETag`.
         The engine writes only complete rows (the defaults at discovery and
         checked saves), so this is a fault to report, not a state to fix in
@@ -5903,15 +5982,17 @@ components:
     KnowledgeDefaults:
       type: object
       description: |
-        What every location starts from when it is discovered (D-102, D-107): its content and
-        reply settings, and the default of every analysis setting.
+        What every location starts from when it is discovered (D-102, D-107, D-111): its content,
+        reply and report settings, and the default of every analysis setting.
       additionalProperties: false
-      required: [content, reply, analysis]
+      required: [content, reply, report, analysis]
       properties:
         content:
           $ref: "#/components/schemas/ContentSettings"
         reply:
           $ref: "#/components/schemas/ReplySettings"
+        report:
+          $ref: "#/components/schemas/ReportSettings"
         analysis:
           type: object
           description: By the names of `AiSettings`' fields.
@@ -7451,6 +7532,8 @@ components:
         - period_start
         - period_end
         - time_zone
+        - format
+        - sections
         - schedule_id
         - requested_by
         - status
@@ -7487,6 +7570,20 @@ components:
         time_zone:
           type: string
           description: An IANA time zone name.
+        format:
+          type: string
+          enum: [html, pdf]
+          description: The format the report was built in, from the location's report settings when it was created (D-111).
+        sections:
+          type: array
+          items:
+            type: string
+            enum: [summary, at_a_glance, reviews, topics, employee_recognition, highlights, visibility]
+          description: |
+            The sections the report was created with (D-111), each once, in
+            the order they were given; a later change of the location's report
+            settings does not change them. A section that is not here was not
+            computed and is not on the page.
         schedule_id:
           type: [integer, "null"]
           format: int64
@@ -7575,6 +7672,47 @@ components:
         total:
           type: integer
           format: int64
+    ReportSettings:
+      type: object
+      description: |
+        A location's report settings (D-111): the format of its reports and
+        the sections they have. Complete: the answer of a read and the body
+        of a save, sent whole. Only the build of a report reads them: no
+        reply or post prompt reads these settings, and nothing in them is in
+        the go-live fingerprint. The summary's model is given only the
+        figures of the included sections.
+      additionalProperties: false
+      required: [format, sections]
+      properties:
+        format:
+          type: string
+          enum: [html, pdf]
+          description: Only `html` is accepted until PDF reports exist; `pdf` is a 400.
+        sections:
+          type: array
+          minItems: 1
+          uniqueItems: true
+          items:
+            type: string
+            enum: [summary, at_a_glance, reviews, topics, employee_recognition, highlights, visibility]
+          description: |
+            The sections a report has, each once, at least one. `summary`:
+            the model's summary of the figures. `at_a_glance`: the headline
+            tiles (new reviews, the period's and the overall rating, reviews
+            answered, the time to answer, profile views). `reviews`: the
+            reviews by star rating, how reviewers felt, the trend and the
+            serious issues reviewers raised. `topics`: what reviewers praised
+            and complained about, by topic and by item. `employee_recognition`:
+            the staff members reviewers named. `highlights`: the reviews worth
+            reading, the best and the worst of the period. `visibility`:
+            Google's visibility numbers and what people searched for.
+
+            The page keeps its fixed order whatever the order here. A
+            left-out section is not computed: no Performance API read without
+            `visibility`, no model call without `summary`, no staff counts
+            without `employee_recognition`. The review numbers are always
+            computed, because the report's headline figures and its email are
+            read from them.
     ReportCreate:
       type: object
       additionalProperties: false

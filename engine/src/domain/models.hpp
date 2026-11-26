@@ -515,14 +515,15 @@ struct KnowledgeVoiceTemplate {
 };
 BOOST_DESCRIBE_STRUCT(KnowledgeVoiceTemplate, (), (key, label, description, content, reply))
 
-// What every location starts with when it is discovered (its content and reply settings), and the default of
+// What every location starts with when it is discovered (its content, reply and report settings), and the default of
 // every analysis setting.
 struct KnowledgeDefaults {
     boost::json::value content;
     boost::json::value reply;
+    boost::json::value report;
     boost::json::value analysis;
 };
-BOOST_DESCRIBE_STRUCT(KnowledgeDefaults, (), (content, reply, analysis))
+BOOST_DESCRIBE_STRUCT(KnowledgeDefaults, (), (content, reply, report, analysis))
 
 struct Knowledge {
     // A hash of the files' content, and when it was seeded.
@@ -961,6 +962,9 @@ struct Report {
     std::string period_start;
     std::string period_end;
     std::string time_zone;
+    // What it was created with, from the location's report settings or its schedule (D-111); a later save changes neither.
+    std::string format;
+    std::vector<std::string> sections;
     std::optional<std::int64_t> schedule_id;
     std::optional<std::string> requested_by;  // nothing: a schedule
     // "building", "failed", "ready", "discarding", "discarded" or "expired" (D-104).
@@ -986,9 +990,9 @@ struct Report {
     std::vector<NotificationDelivery> deliveries;
 };
 BOOST_DESCRIBE_STRUCT(Report, (),
-                      (id, location_id, location_title, period_start, period_end, time_zone, schedule_id, requested_by, status, error,
-                       url, archive_url, auto_send_status, new_reviews, average_rating, response_rate, summary, summary_note,
-                       created_at, recipients, deliveries))
+                      (id, location_id, location_title, period_start, period_end, time_zone, format, sections, schedule_id, requested_by,
+                       status, error, url, archive_url, auto_send_status, new_reviews, average_rating, response_rate, summary,
+                       summary_note, created_at, recipients, deliveries))
 
 using ReportList = Paged<Report>;
 
