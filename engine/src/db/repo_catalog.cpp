@@ -1,5 +1,6 @@
 #include "db/repo_catalog.hpp"
 
+#include "core/etag.hpp"
 #include "core/text.hpp"
 #include "db/database.hpp"
 #include "db/repo_analysis.hpp"
@@ -152,6 +153,15 @@ Result<model::Client> update_client(pqxx::transaction_base& tx, audit::Writer& a
     audit.record(archived != old_archived ? (archived ? "client.archive" : "client.restore") : "client.update", "client", id,
                  {.before = client_json(old_name, old_notes, old_archived), .after = client_json(name, notes, archived)});
     return *get_client(tx, id);
+}
+
+boost::json::object editable(const model::Client& client) {
+    return {{"name", client.name}, {"notes", client.notes}, {"archived", client.archived}};
+}
+
+Result<std::string> current_client_etag(pqxx::transaction_base& tx, std::int64_t id) {
+    if (tx.exec("SELECT 1 FROM clients WHERE id = $1 FOR UPDATE", pqxx::params{id}).empty()) return not_found("client");
+    return core::etag(editable(*get_client(tx, id)));
 }
 
 Result<void> delete_client(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id) {

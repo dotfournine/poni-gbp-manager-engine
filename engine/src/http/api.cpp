@@ -1,6 +1,7 @@
 #include "http/api.hpp"
 
 #include "http/api_support.hpp"
+#include "core/etag.hpp"
 #include "core/version.hpp"
 #include "db/audit.hpp"
 #include "db/repo_catalog.hpp"
@@ -43,26 +44,33 @@ void add_api_routes(Router& router, db::Database& db, const core::Clock& clock, 
                    }), 201);
                });
 
-    add_get_by_id(router, api, "/api/clients/{id}", "clients.read", "client", repo::get_client);
+    // A client's ETag covers what its PATCH can set (D-108).
+    const auto client_etag = [](const model::Client& client) { return core::etag(repo::editable(client)); };
+
+    add_get_by_id(router, api, "/api/clients/{id}", "clients.read", "client", repo::get_client, client_etag);
 
     router.add(verb::patch, "/api/clients/{id}", {Access::user, "clients.update"},
-               [api](const Request& request) -> asio::awaitable<Response> {
+               [api, client_etag](const Request& request) -> asio::awaitable<Response> {
                    const auto id = path_id(request);
                    if (!id) co_return not_found("client");
                    const auto patch = body_as<repo::ClientPatch>(request);
                    if (!patch) co_return patch.error();
-                   co_return respond(co_await api.change(request, [id = *id, patch = *patch](pqxx::work& tx, audit::Writer& audit) {
-                       return repo::update_client(tx, audit, id, patch);
-                   }));
+                   co_return respond_tagged(co_await api.change_if_match(
+                                                request, [id = *id](pqxx::work& tx) { return repo::current_client_etag(tx, id); },
+                                                [id = *id, patch = *patch](pqxx::work& tx, audit::Writer& audit) {
+                                                    return repo::update_client(tx, audit, id, patch);
+                                                }),
+                                            client_etag);
                });
 
     router.add(verb::delete_, "/api/clients/{id}", {Access::user, "clients.delete"},
                [api](const Request& request) -> asio::awaitable<Response> {
                    const auto id = path_id(request);
                    if (!id) co_return not_found("client");
-                   co_return respond(co_await api.change(request, [id = *id](pqxx::work& tx, audit::Writer& audit) {
-                       return repo::delete_client(tx, audit, id);
-                   }), Response::no_content());
+                   co_return respond(co_await api.change_if_match(
+                                         request, [id = *id](pqxx::work& tx) { return repo::current_client_etag(tx, id); },
+                                         [id = *id](pqxx::work& tx, audit::Writer& audit) { return repo::delete_client(tx, audit, id); }),
+                                     Response::no_content());
                });
 
     // ---- locations ---------------------------------------------------------------

@@ -59,6 +59,11 @@ info:
 
     **Errors** the engine produces have the `Error` shape. An unknown path is
     a 404 and a wrong method a 405, on every endpoint.
+
+    **Changing what you read** (D-108). The single `GET` of a thing that
+    can be changed answers with an `ETag`, and its `PATCH`, `PUT` or
+    `DELETE` must send it back as `If-Match`: the rule is under the
+    `If-Match` parameter.
   license:
     name: Proprietary
     identifier: LicenseRef-Proprietary
@@ -593,6 +598,9 @@ paths:
       responses:
         "200":
           description: The client.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -610,6 +618,7 @@ paths:
       tags: [clients]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
@@ -618,7 +627,12 @@ paths:
               $ref: "#/components/schemas/ClientUpdate"
       responses:
         "200":
-          description: The client after the change.
+          description: |
+            The client after the change, and its new `ETag`. A change that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -637,6 +651,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
     delete:
       operationId: deleteClient
       summary: Delete a client
@@ -650,6 +668,7 @@ paths:
       tags: [clients]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       responses:
         "204":
           description: The client is gone.
@@ -659,6 +678,10 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
 
   /api/locations:
     get:
@@ -3521,6 +3544,46 @@ components:
         with a bearer token needs none and leaves it out.
       schema:
         type: string
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: |
+        The `ETag` of the thing as you read it, from its single `GET` or
+        from the answer to your last change of it (D-108). A change of an
+        existing thing is made only against what its author read, so that
+        a view that has gone stale never overwrites a newer decision.
+
+        The `ETag` covers the members this request's body can set, with
+        the values the thing holds; nothing the engine writes by itself
+        (times, counts, what a sync reads) is in it, so only a change by a
+        person makes it stale. Send it back exactly as it came, one strong
+        tag in quotes. Without this header the answer is a 428
+        (`precondition_required`). With a tag that is not the one of what
+        is stored now the answer is a 412 (`precondition_failed`) and
+        nothing is changed, even if the body would change nothing: read
+        the thing again and redo the change. `*`, a list of tags and a
+        weak tag (`W/"…"`) are a 412 too. The site's compression may
+        answer the tag with `-gzip` or `-zstd` before its closing quote;
+        that form is the same tag and may be sent back as it came.
+
+        A thing that does not exist is a 404 whatever this header says,
+        and a body the engine cannot read (a member the schema does not
+        list, a wrong type, a `null` where none is allowed) is a 400 before
+        the header is looked at. The body's limits (a length, a range) are
+        checked with the change, after the header. A list carries no `ETag`: a client changes a thing from its
+        single `GET`. An endpoint that does not list this parameter
+        ignores the header.
+      schema:
+        type: string
+
+  headers:
+    ETag:
+      description: |
+        The strong validator of the thing as it is now (D-108), to send
+        back as `If-Match` with a change of it.
+      schema:
+        type: string
 
   responses:
     Unauthenticated:
@@ -3673,6 +3736,21 @@ components:
         this event type, channel and location already exists (`rule_exists`),
         or a push rule was asked of an engine without the APNs settings
         (`push_not_configured`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PreconditionFailed:
+      description: |
+        The `If-Match` sent is not the `ETag` of what is stored now
+        (`precondition_failed`): someone changed it since you read it, or
+        the header is `*`, a list or a weak tag. Nothing was changed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PreconditionRequired:
+      description: The change came without `If-Match` (`precondition_required`). Nothing was changed.
       content:
         application/json:
           schema:

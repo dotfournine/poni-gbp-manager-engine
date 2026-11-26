@@ -13,6 +13,7 @@
 
 #include <array>
 #include <boost/describe/class.hpp>
+#include <boost/json/object.hpp>
 #include <pqxx/pqxx>
 
 #include <optional>
@@ -47,6 +48,10 @@ model::ClientList list_clients(pqxx::transaction_base& tx, const ClientFilter& f
 std::optional<model::Client> get_client(pqxx::transaction_base& tx, std::int64_t id);
 Result<model::Client> create_client(pqxx::transaction_base& tx, audit::Writer& audit, const NewClient& client);
 Result<model::Client> update_client(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const ClientPatch& patch);
+// What PATCH /api/clients/{id} can set, in ClientPatch's order, with the client's values: what its ETag covers (D-108).
+boost::json::object editable(const model::Client& client);
+// Locks the client's row (FOR UPDATE) and gives the ETag of what it holds, for Api::change_if_match.
+Result<std::string> current_client_etag(pqxx::transaction_base& tx, std::int64_t id);
 // Removes a client, archived or not. Its locations are unlinked through
 // update_location and nothing else about them changes (D-102); the entry
 // keeps what the client was.

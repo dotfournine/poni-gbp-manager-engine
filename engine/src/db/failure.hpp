@@ -25,6 +25,8 @@ struct Failure {
         invalid,      // 400: the request itself is wrong
         conflict,     // 409: the request is fine, what it meets is not
         unavailable,  // 502: something outside the engine (a model, a bucket) gave no usable answer
+        precondition_required,  // 428: a change of an existing thing came without If-Match (D-108)
+        precondition_failed,    // 412: the If-Match is not the ETag of what is stored now (D-108)
     };
     Kind kind;
     std::string code;     // the API's error code
@@ -47,6 +49,15 @@ inline std::unexpected<Failure> conflict(std::string code, std::string message) 
 }
 inline std::unexpected<Failure> unavailable(std::string code, std::string message) {
     return std::unexpected(Failure{Failure::Kind::unavailable, std::move(code), std::move(message)});
+}
+// The two refusals of a change guarded by If-Match (D-108, http::Api::change_if_match).
+inline std::unexpected<Failure> precondition_required() {
+    return std::unexpected(Failure{Failure::Kind::precondition_required, "precondition_required",
+                                   "This change needs the If-Match header with the ETag of what you read."});
+}
+inline std::unexpected<Failure> precondition_failed() {
+    return std::unexpected(Failure{Failure::Kind::precondition_failed, "precondition_failed",
+                                   "What you changed was changed by someone else since you read it. Read it again and redo your change."});
 }
 
 }  // namespace poni::repo
