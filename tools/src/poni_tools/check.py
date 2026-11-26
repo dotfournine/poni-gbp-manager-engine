@@ -92,6 +92,18 @@ def _reply_problems(file: str, reply: dict, complete: bool) -> list[str]:
     return problems
 
 
+def _defaults_problems(defaults: dict) -> list[str]:
+    """What every new location would start from and the schema cannot say is wrong (D-107, D-111)."""
+    problems = _reply_problems("defaults.json", defaults["reply"], complete=True)
+    if defaults["reply"]["fallback_language"] not in defaults["reply"]["reply_languages"]:
+        problems.append("defaults.json: reply.fallback_language is not one of reply_languages")
+    # A save of `pdf` is refused until PDF reports exist (D-111): a `pdf` default would leave every new
+    # location with report settings it cannot save as they are.
+    if defaults["report"]["format"] != "html":
+        problems.append("defaults.json: report.format must be html; PDF reports are not supported yet")
+    return problems
+
+
 def _case_problems(file: str, case: dict, flags: list[str]) -> list[str]:
     problems = []
     where = f"{file}: case {case['id']}"
@@ -241,13 +253,7 @@ def check(kb: Knowledge) -> list[str]:
             problems.append(f"{file}: key is '{template['key']}' but the file is '{key}.json'")
         problems += _reply_problems(file, template["reply"], complete=False)
 
-    problems += _reply_problems("defaults.json", kb.defaults["reply"], complete=True)
-    if kb.defaults["reply"]["fallback_language"] not in kb.defaults["reply"]["reply_languages"]:
-        problems.append("defaults.json: reply.fallback_language is not one of reply_languages")
-    # Every new location gets these, and a save of `pdf` is refused until PDF reports exist (D-111): a `pdf`
-    # default would leave every new location with report settings it cannot save as they are.
-    if kb.defaults["report"]["format"] != "html":
-        problems.append("defaults.json: report.format must be html; PDF reports are not supported yet")
+    problems += _defaults_problems(kb.defaults)
     for task in ("analyzer", "generator", "judge", "summary", "posts"):
         model = kb.defaults["analysis"][f"{task}_model"]
         if model not in kb.models["prices"]:
