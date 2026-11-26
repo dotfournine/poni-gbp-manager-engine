@@ -157,7 +157,6 @@ GeneratorInput generator_input(std::string business_name, const ResolvedSettings
             .review_text = std::move(review_text),
             .mode = plan.mode,
             .target_language = plan.target.language,
-            .target_script = plan.target.script,
             .severity_labels = plan.severity_labels,
             .items = plan.items,
             .recent_replies = {},

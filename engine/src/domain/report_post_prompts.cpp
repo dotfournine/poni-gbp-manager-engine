@@ -259,7 +259,7 @@ std::vector<ChatMessage> post_draft_messages(const PostHelpInput& input, const P
                         {"language_code", request.language_code},
                         {"title_text", titled ? std::format("a title of at most {} characters, in the same language.", kLocalPostTitleMax)
                                               : std::string("null. An update has no title.")},
-                        {"voice_text", voice_text(input.settings, false)}});
+                        {"voice_text", voice_text(input.settings.content, std::nullopt)}});
     const boost::json::object asked{{"brief", request.brief}, {"current_text", request.summary}, {"current_title", request.title.value_or("")}};
     auto user = "Write the post that is asked for below, for this location.\n\n" + data_block("location_data", location_json(input), nonce) +
                 "\n\n" + data_block("post_request", asked, nonce);
