@@ -4019,8 +4019,9 @@ components:
         has no address, and a report with a page cannot be discarded,
         because the page cannot be moved. `no_recipients`: no report
         schedule of the location names an address (D-111), or, for a
-        schedule's own send, the schedule that made the report names none
-        or is gone.
+        schedule's own send, the schedule that made the report names none,
+        is gone, or was switched off or had its `auto_send` switched off
+        while the report was built.
       content:
         application/json:
           schema:
@@ -7878,9 +7879,12 @@ components:
             nothing is sent (`auto_send_status` `off`). On: it sends the
             reports this schedule builds to this schedule's `recipients`,
             once, by itself, when each is built, if the checks of a send pass
-            then (`auto_send_status` `done`); otherwise the report stays
-            `pending` for a person to send, as it does when this schedule is
-            deleted before its report is built. No reason is stored: a person's send says why it
+            then (`auto_send_status` `done`). This switch and `enabled` are
+            read again when a report becomes ready: a schedule switched off,
+            or whose `auto_send` was switched off, while its report builds
+            sends nothing, and neither does a schedule deleted meanwhile.
+            Whenever a report is not sent by itself, it stays `pending` for a
+            person to send. No reason is stored: a person's send says why it
             is refused.
         recipients:
           type: array
