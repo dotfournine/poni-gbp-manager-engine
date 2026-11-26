@@ -75,7 +75,7 @@ A job is a row in `jobs` (`run_at`, backoff, idempotency keys, `FOR UPDATE SKIP 
 1. **Analysis.** Every minute `reviews.analyze_pending` finds reviews whose current version has no analysis, or with no reply and no live draft; `reviews.analyze` asks the model, with the industry profile, for FR-3's analysis. Never from Google's translation.
 2. **Policy** (`domain/reply_policy`): auto reply, approval or escalate. A flag on an unreplied review opens an escalation and its alert in the same transaction.
 3. **Draft** in the location's voice and localization; the checks and the policy gate (section 10) decide whether it may auto reply.
-4. **Posting.** Only `repo::approve_draft` and `repo::schedule_auto_reply` enqueue `replies.post`; an auto reply waits a random delay inside the window (D-071). The job reads the review from Google again; `repo::claim_post` checks it, both switches, `auto_verdict` and the open-post rule in one transaction (D-061, D-069 to D-072); then the PUT.
+4. **Posting.** Only `repo::approve_draft` and `repo::schedule_auto_reply` enqueue `replies.post`; an auto reply waits a random delay inside the window (D-110). The job reads the review from Google again; `repo::claim_post` checks it, both switches, `auto_verdict` and the open-post rule in one transaction (D-061, D-069, D-072, D-110); then the PUT.
 
 ```
 draft ─approve─▶ approved ─claim─▶ posting ─200─▶ posted ─seen on Google─▶ published
@@ -185,7 +185,7 @@ Strangers write the reviews, so every review is hostile input (D-021). Layered d
 2. **Structured output:** JSON (reply, language, script, suspected manipulation).
 3. **Mechanical checks** in C++ (D-058): no links, email addresses or phone numbers; length and emoji; the language of the review or the fallback. Offers, promises and Chinese script are the model's instructions, not code's.
 4. **The policy gate** (`domain/review_pipeline.hpp`): a flag, suspected manipulation or a failed check goes to the approval queue; auto reply only when everything passes.
-5. **Limits** (D-070, D-072): auto reply off per location and star rating until a person switches it on; a daily cap; the engine pauses a location when checks keep failing or an automatic reply is refused or does not appear, and a person resumes it.
+5. **Limits** (D-072, D-110): auto reply off per location until a person switches it on in the reply settings, for reviews with text of at least four or five stars; a daily cap; the engine pauses a location when checks keep failing or an automatic reply is refused or does not appear, and a person resumes it.
 
 | Suite (`engine/tests/ai/`) | Covers | Runs |
 | ----- | ------ | ---- |

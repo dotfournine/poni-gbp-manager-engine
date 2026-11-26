@@ -52,7 +52,6 @@ const std::map<std::string, std::string> kRoutesWithBody = {
     {"POST /api/drafts/{id}/approve", "text"},
     {"POST /api/drafts/{id}/reject", "reason"},
     {"POST /api/drafts/{id}/regenerate", "instructions"},
-    {"PATCH /api/locations/{id}/auto-posting", "enabled"},
     {"POST /api/locations/{id}/reports", "period_start"},
     {"POST /api/reports/{id}/send", "recipients"},
     {"POST /api/report-schedules", "location_id"},
@@ -81,8 +80,8 @@ const std::vector<std::string> kRoutesWithoutBody = {
     "POST /api/reviews/{id}/unignore",
     "POST /api/reviews/{id}/analyze",
     "POST /api/drafts/{id}/unschedule",
-    "POST /api/auto-posting/resume",
-    "POST /api/locations/{id}/auto-posting/resume",
+    "POST /api/system/auto-reply/resume",
+    "POST /api/locations/{id}/auto-reply/resume",
     "POST /api/locations/{id}/go-live-test",
     "POST /api/go-live-runs/{id}/cancel",
     "POST /api/local-posts/{id}/remove",
@@ -132,32 +131,33 @@ TEST_F(Bodies, EveryRouteWithABodyRefusesWhatItsSchemaDoesNotAllow) {
 }
 
 TEST_F(Bodies, ARefusedAutoReplyBodySwitchesNothingOn) {
-    const auto target = spa_path("/auto-posting");
-    const auto on = [&] { return count(std::format("locations WHERE id = {} AND (auto_reply_enabled OR auto_reply_five_star)", spa_)); };
+    const auto target = reply_settings_path(spa_);
+    const auto on = [&] { return count(std::format("reply_settings WHERE location_id = {} AND auto_reply_enabled", spa_)); };
     const auto audited = count("audit_log");
+    // The stored reply settings, switched on, with `member` set to a JSON value.
+    const auto switched_on_with = [&](std::string_view member, std::string_view value) {
+        auto body = read(target).as_object();
+        body["auto_reply_enabled"] = true;
+        body[member] = boost::json::parse(value);
+        return put_current(target, boost::json::serialize(body));
+    };
 
-    // Each of these was taken until D-092, with the member it does not know or the null left out.
-    expect_refused(patch(target, R"({"enabled": true, "five_star": true, "not_in_the_spec": 1})"), "not_in_the_spec", "an unknown member");
-    expect_refused(patch(target, R"({"five_star": true, "four_star": null})"), "four_star", "null for a switch");
-    expect_refused(patch(target, R"({"five_star": true, "daily_cap": null})"), "daily_cap", "null for a number");
-    expect_refused(patch(target, R"({"five_star": true, "enabled": 1})"), "enabled", "a number for a switch");
-    expect_refused(patch(target, R"({"five_star": true, "enabled": "true"})"), "enabled", "a string for a switch");
+    expect_refused(switched_on_with("not_in_the_spec", "1"), "not_in_the_spec", "an unknown member");
+    expect_refused(switched_on_with("auto_reply_daily_cap", "null"), "auto_reply_daily_cap", "null for a number");
+    expect_refused(switched_on_with("auto_reply_enabled", "1"), "auto_reply_enabled", "a number for a switch");
+    expect_refused(switched_on_with("auto_reply_enabled", R"("true")"), "auto_reply_enabled", "a string for a switch");
+    expect_refused(switched_on_with("five_star", "true"), "five_star", "the per-star switch of before (D-110)");
+    expect_refused(switched_on_with("auto_reply_min_stars", "3"), "auto_reply_min_stars", "three stars");
     EXPECT_EQ(on(), 0);
     EXPECT_EQ(count("audit_log"), audited);
 
-    // The same switches without what the spec refuses are what a person sends.
-    const auto taken = patch(target, R"({"enabled": true, "five_star": true, "time_zone": "America/New_York"})");
+    // The same switch without what the spec refuses is what a person sends.
+    const auto taken = switched_on_with("auto_reply_min_stars", "4");
     ASSERT_EQ(taken.status, 200u) << taken.body;
     EXPECT_EQ(on(), 1);
 }
 
 TEST_F(Bodies, NullClearsWhatCanBeEmptyAndAMemberLeftOutStays) {
-    // A location's time zone.
-    const auto target = spa_path("/auto-posting");
-    ASSERT_EQ(patch(target, R"({"time_zone": "America/New_York"})").status, 200u);
-    EXPECT_EQ(json(patch(target, R"({"daily_cap": 7})")).at("time_zone").as_string(), "America/New_York");
-    EXPECT_TRUE(json(patch(target, R"({"time_zone": null})")).at("time_zone").is_null());
-
     // A location's industry and the day its analysis starts from.
     ASSERT_EQ(patch_current(spa_path(), R"({"industry_key": "wellness", "analyze_from": "2026-06-01"})").status, 200u);
     const auto kept = json(patch_current(spa_path(), R"({"posting_enabled": true})"));

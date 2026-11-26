@@ -253,9 +253,7 @@ namespace {
 // The reply settings that decide whether and when a draft auto replies, in this order: the snapshot's "policy",
 // which the claim compares with the one taken when the draft was scheduled.
 boost::json::object auto_reply_policy(const domain::ReplySettings& reply) {
-    return {{"auto_reply_positive", reply.auto_reply_positive},
-            {"auto_reply_rating_only", reply.auto_reply_rating_only},
-            {"auto_reply_min_stars", reply.auto_reply_min_stars},
+    return {{"auto_reply_min_stars", reply.auto_reply_min_stars},
             {"auto_reply_delay_min_minutes", reply.auto_reply_delay_min_minutes},
             {"auto_reply_delay_max_minutes", reply.auto_reply_delay_max_minutes},
             {"auto_reply_window_start", reply.auto_reply_window_start},
@@ -306,7 +304,8 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
                coalesce(r.rating, 0), r.id, r.location_id, r.ignored_at IS NOT NULL,
                EXISTS (SELECT 1 FROM review_events e WHERE e.review_id = r.id AND e.kind = 'review_edited'),
                EXISTS (SELECT 1 FROM cases k WHERE k.review_id = r.id AND k.status = 'open'),
-               l.auto_reply_enabled, l.auto_reply_five_star, l.auto_reply_four_star, l.auto_reply_daily_cap, l.time_zone,
+               coalesce(rs.auto_reply_enabled, false), coalesce(rs.auto_reply_min_stars, 5),
+               btrim(coalesce(r.original_text, '')) <> '', coalesce(rs.auto_reply_daily_cap, 0), l.time_zone,
                l.auto_reply_paused_at IS NOT NULL, s.auto_reply_paused_at IS NOT NULL, s.posting_enabled, l.posting_enabled,
                l.enabled AND l.access_status = 'active',
                {},
@@ -316,6 +315,7 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
                -- This draft's own attempt that Google refused outright posted nothing and may be retried.
                OR EXISTS (SELECT 1 FROM reply_posts q WHERE q.review_id = r.id AND NOT (q.draft_id = d.id AND q.status = 'failed'))
           FROM reply_drafts d JOIN reviews r ON r.id = d.review_id JOIN locations l ON l.id = r.location_id
+          LEFT JOIN reply_settings rs ON rs.location_id = l.id
           CROSS JOIN system_settings s
          WHERE d.id = $1)sql",
                                           auto_replies_since("l.id", "$2")),
@@ -327,8 +327,8 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
     const int stars = row[8].as<int>();
     verdict.review_id = row[9].as<std::int64_t>();
     verdict.location_id = row[10].as<std::int64_t>();
-    const bool five_star = row[15].as<bool>();
-    const bool four_star = row[16].as<bool>();
+    const auto min_stars = row[15].as<std::int64_t>();
+    const bool review_has_text = row[16].as<bool>();
     const auto cap = row[17].as<std::int64_t>();
     const auto zone = row[18].as<OptString>();
     verdict.zone = zone.value_or("");
@@ -338,11 +338,13 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
     if (!row[22].as<bool>()) return no(std::move(verdict), "Posting is switched off for this location.", true);
     if (!row[23].as<bool>()) return no(std::move(verdict), "The review's location is no longer synced.", true);
     if (!row[14].as<bool>()) return no(std::move(verdict), "Auto reply is switched off for this location.", true);
-    // Three stars and fewer always wait for a person (FR-5), whatever the policy says.
-    if (!((stars == 5 && five_star) || (stars == 4 && four_star))) {
-        return no(std::move(verdict), std::format("Auto reply is not switched on for {}-star reviews at this location.", stars), true);
+    // Three stars and fewer always wait for a person (FR-5), whatever the minimum says.
+    if (!domain::stars_may_auto_reply(stars, min_stars)) {
+        return no(std::move(verdict), std::format("Auto reply is not on for {}-star reviews at this location.", stars), true);
     }
     if (row[0].as<std::string>() != domain::kRouteAutoReply) return no(std::move(verdict), "The policy did not route this draft to auto reply.", true);
+    // Only reviews with text (D-110): the gate routes none without, and this holds it at the claim too.
+    if (!review_has_text) return no(std::move(verdict), "Auto reply is for reviews with text.", true);
 
     // 2. Pauses the engine put on itself.
     if (row[20].as<bool>()) return no(std::move(verdict), "Auto reply is paused for every location.");
@@ -402,10 +404,8 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
                         {"fingerprint", go_live.fingerprint},
                         {"prompt_version", row[6].as<std::string>()},
                         {"policy", auto_reply_policy(settings->reply)},
-                        {"auto_posting", boost::json::object{{"five_star", five_star},
-                                                             {"four_star", four_star},
-                                                             {"daily_cap", cap},
-                                                             {"time_zone", zone ? boost::json::value(*zone) : boost::json::value(nullptr)}}}};
+                        {"auto_reply", boost::json::object{{"daily_cap", cap},
+                                                           {"time_zone", zone ? boost::json::value(*zone) : boost::json::value(nullptr)}}}};
     verdict.policy_version = core::sha256_hex(boost::json::serialize(verdict.snapshot)).substr(0, 12);
     verdict.ok = true;
     return verdict;

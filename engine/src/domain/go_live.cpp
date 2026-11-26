@@ -106,9 +106,7 @@ Fingerprint fingerprint(const FingerprintInput& input) {
 }
 
 AutoReplyScope scope_of(const ReplySettings& reply) {
-    return {.positive = reply.auto_reply_positive,
-            .rating_only = reply.auto_reply_rating_only,
-            .min_stars = static_cast<int>(std::clamp<std::int64_t>(reply.auto_reply_min_stars, 4, 5))};
+    return {.min_stars = static_cast<int>(std::clamp<std::int64_t>(reply.auto_reply_min_stars, 4, 5))};
 }
 
 bool may_auto_reply(std::string_view category) { return category == kCaseControl || category == kCaseReal; }

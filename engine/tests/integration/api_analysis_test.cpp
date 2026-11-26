@@ -131,7 +131,8 @@ TEST_F(AnalysisApi, TheKnowledgeBaseIsShownAsItWasSeeded) {
     EXPECT_TRUE(templates[2].at("reply").as_object().empty()) << "the template sets nothing of the reply settings";
     const auto& defaults = knowledge.at("defaults");
     EXPECT_TRUE(defaults.at("content").at("chinese_variant").is_null());
-    EXPECT_EQ(defaults.at("reply").at("auto_reply_min_stars").as_int64(), 4);
+    EXPECT_EQ(defaults.at("reply").at("auto_reply_min_stars").as_int64(), 5);
+    EXPECT_FALSE(defaults.at("reply").at("auto_reply_enabled").as_bool());
     EXPECT_EQ(defaults.at("content").at("base_style").as_string(), "");
     EXPECT_EQ(defaults.at("analysis").at("analyzer_model").as_string(), "qwen3.7-plus");
     EXPECT_DOUBLE_EQ(knowledge.at("model_prices").at("qwen3.7-plus").at("output_per_mtok").as_double(), 1.6);
@@ -282,10 +283,10 @@ TEST_F(AnalysisApi, EveryLocationStartsWithACopyOfTheDefaultsAndAClientHasNoSett
     EXPECT_EQ(count("reply_settings"), 2);
 
     // A later version of the knowledge base with other defaults does not reach a location that has its settings.
-    reseed("UPDATE kb_reply_defaults SET signature = 'The team', auto_reply_min_stars = 5; "
+    reseed("UPDATE kb_reply_defaults SET signature = 'The team', auto_reply_min_stars = 4; "
            "UPDATE kb_content_defaults SET audience = 'Families'");
     EXPECT_EQ(read(reply_settings_path(spa_)).at("signature").as_string(), "");
-    EXPECT_EQ(read(reply_settings_path(spa_)).at("auto_reply_min_stars").as_int64(), 4);
+    EXPECT_EQ(read(reply_settings_path(spa_)).at("auto_reply_min_stars").as_int64(), 5);
     EXPECT_EQ(read(content_settings_path(spa_)).at("audience").as_string(), "");
     // A location discovered after it starts from the new ones: both bundles equal to the defaults' rows.
     const auto midtown = another_location("9003", "LU DREAM SPA - Midtown");

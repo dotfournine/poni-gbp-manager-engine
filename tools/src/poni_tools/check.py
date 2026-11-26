@@ -65,7 +65,7 @@ def _applicable_flags(profile: dict, common: dict) -> list[str]:
 
 
 def _reply_problems(file: str, reply: dict, complete: bool) -> list[str]:
-    """The reply settings' pairs the schema cannot say: length ranges, the delay, the window."""
+    """The reply settings' rules the schema cannot say: length ranges, the delay, the window, auto reply off."""
     problems = []
     length = reply.get("length", {})
     for language, limits in length.items():
@@ -86,6 +86,9 @@ def _reply_problems(file: str, reply: dict, complete: bool) -> list[str]:
             problems.append(f"{file}: reply: set both ends of the posting window, or leave both empty")
         elif start and start == end:
             problems.append(f"{file}: reply: the posting window's start and end must differ")
+    # Only a person switches auto reply on (D-110): defaults or a template that did would do it for them.
+    if reply.get("auto_reply_enabled") is True:
+        problems.append(f"{file}: reply: auto_reply_enabled must be false; only a person switches auto reply on")
     return problems
 
 

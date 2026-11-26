@@ -69,8 +69,8 @@ void add_analysis_routes(Router& router, const Api& api);
 // the approval queue, escalations, notification rules and the delivery log,
 // and the posting and sending switches (http/api_replies.cpp);
 void add_reply_routes(Router& router, const Api& api, jobs::ReviewPipeline& pipeline);
-// auto reply per location, its pauses, the list of what was posted without
-// a person, and taking a scheduled reply back (http/api_auto_reply.cpp);
+// auto reply's state and pauses, the list of what was posted without a
+// person, and taking a scheduled reply back (http/api_auto_reply.cpp);
 void add_auto_reply_routes(Router& router, const Api& api);
 // the go-live test (http/api_go_live.cpp);
 void add_go_live_routes(Router& router, const Api& api);

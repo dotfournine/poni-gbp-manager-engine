@@ -5,6 +5,7 @@
 // was migrated by it.
 
 #include "db/migrations.hpp"
+#include "db/repo_knowledge.hpp"
 
 #include "db_fixture.hpp"
 
@@ -101,4 +102,23 @@ TEST_F(Migrations, FilesAreNamedNnnnName) {
 
 TEST_F(Migrations, AMissingDirectoryIsAProblem) {
     EXPECT_THAT(problem_in(files_ / "nope"), Optional(HasSubstr("migrations directory")));
+}
+
+// The start check refuses a knowledge base whose defaults a migration rebuilt and no seed has filled yet (D-110).
+TEST_F(Migrations, AKnowledgeBaseWithoutItsDefaultsRowsIsNotSeeded) {
+    const auto knowledge = [&] {
+        pqxx::connection conn{url()};
+        pqxx::work tx{conn};
+        return repo::knowledge_problem(tx);
+    };
+    EXPECT_EQ(knowledge(), std::nullopt) << "the seeded database";
+    for (const std::string table : {"kb_reply_defaults", "kb_content_defaults"}) {
+        {
+            pqxx::connection conn{url()};
+            pqxx::work tx{conn};
+            tx.exec("DELETE FROM " + table).no_rows();
+            tx.commit();
+        }
+        EXPECT_THAT(knowledge(), Optional(HasSubstr(table + "; run `poni-tools seed`"))) << table;
+    }
 }

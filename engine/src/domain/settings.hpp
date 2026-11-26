@@ -77,12 +77,9 @@ struct ReplySettings {
     // the prompt; sent with the request unless the analysis settings say
     // that the writer's model takes none.
     double temperature = 0.7;
-    // 4-5 stars with text and no complaint: would auto reply when every check passes.
-    bool auto_reply_positive = true;
-    // 4-5 stars without text.
-    bool auto_reply_rating_only = true;
-    // Reviews below this many stars always wait for a person.
-    std::int64_t auto_reply_min_stars = 4;
+    // Reviews below this many stars always wait for a person: 4 or 5 (D-110).
+    // Only reviews with text ever auto reply; there is no setting for that.
+    std::int64_t auto_reply_min_stars = 5;
     // Timing of an auto reply (FR-5): a random wait of min to max minutes, so
     // replies don't all arrive at once; 0 and 0 for none.
     std::int64_t auto_reply_delay_min_minutes = 0;
@@ -91,11 +88,19 @@ struct ReplySettings {
     // empty for none. A start later than the end crosses midnight.
     std::string auto_reply_window_start;
     std::string auto_reply_window_end;
+    // A person's switch (D-110). Off until a person switches it on; the
+    // engine writes it only to switch it off with the location (repo::update_location).
+    bool auto_reply_enabled = false;
+    // At most this many automatic replies in 24 hours, 1 to 1000.
+    std::int64_t auto_reply_daily_cap = 100;
+    // This many drafts in a row with a failed reply check pause auto reply, 1 to 20 (D-076).
+    std::int64_t auto_reply_pause_after_failures = 3;
 };
 BOOST_DESCRIBE_STRUCT(ReplySettings, (),
                       (reply_languages, fallback_language, signature, sign_off_name, length, example_replies, promos_allowed,
-                       contact_allowed, temperature, auto_reply_positive, auto_reply_rating_only, auto_reply_min_stars,
-                       auto_reply_delay_min_minutes, auto_reply_delay_max_minutes, auto_reply_window_start, auto_reply_window_end))
+                       contact_allowed, temperature, auto_reply_min_stars, auto_reply_delay_min_minutes, auto_reply_delay_max_minutes,
+                       auto_reply_window_start, auto_reply_window_end, auto_reply_enabled, auto_reply_daily_cap,
+                       auto_reply_pause_after_failures))
 
 // What prompts, checks, the fingerprint and the goldens read: the two stored bundles together.
 struct ResolvedSettings {

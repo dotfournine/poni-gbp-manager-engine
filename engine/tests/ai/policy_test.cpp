@@ -83,8 +83,23 @@ TEST(Gate, PraiseWithCleanChecksWouldAutoReply) {
     const auto five = gate({.stars = 5, .has_text = true}, kDefault);
     EXPECT_EQ(five.route, "auto_reply");
     EXPECT_THAT(five.reasons, IsEmpty());
-    EXPECT_EQ(gate({.stars = 4, .has_text = true}, kDefault).route, "auto_reply");
-    EXPECT_EQ(gate({.stars = 5, .has_text = false}, kDefault).route, "auto_reply");
+    // Five stars only, unless a person chooses four (D-110).
+    EXPECT_THAT(gate({.stars = 4, .has_text = true}, kDefault).reasons, ElementsAre("4 stars"));
+    EXPECT_EQ(gate({.stars = 4, .has_text = true}, {.auto_reply_min_stars = 4}).route, "auto_reply");
+}
+
+// Auto reply is for reviews with text (D-110): a rating alone waits for a
+// person, with a plain reason, at any number of stars and any minimum.
+TEST(Gate, AReviewWithoutTextWaitsForAPerson) {
+    for (const std::int64_t min_stars : {4, 5}) {
+        const auto five = gate({.stars = 5, .has_text = false}, {.auto_reply_min_stars = min_stars});
+        EXPECT_EQ(five.route, "approval_queue") << min_stars;
+        EXPECT_THAT(five.reasons, ElementsAre("auto reply is for reviews with text")) << min_stars;
+    }
+    const auto four = gate({.stars = 4, .has_text = false}, {.auto_reply_min_stars = 4});
+    EXPECT_EQ(four.route, "approval_queue");
+    EXPECT_THAT(four.reasons, ElementsAre("auto reply is for reviews with text"));
+    EXPECT_THAT(gate({.stars = 4, .has_text = false}, kDefault).reasons, ElementsAre("4 stars")) << "the first reason that applies";
 }
 
 TEST(Gate, LowStarsAndComplaintsWaitForAPerson) {
@@ -134,14 +149,20 @@ TEST(Gate, AnyDoubtKeepsAReviewFromAutoReply) {
 TEST(Gate, ThePolicyCanTightenOrLoosenAutoReply) {
     EXPECT_EQ(gate({.stars = 4, .has_text = true}, {.auto_reply_min_stars = 5}).route, "approval_queue");
     EXPECT_EQ(gate({.stars = 5, .has_text = true}, {.auto_reply_min_stars = 5}).route, "auto_reply");
-    EXPECT_EQ(gate({.stars = 3, .has_text = true}, {.auto_reply_min_stars = 3}).route, "auto_reply");
-    const auto no_positive = gate({.stars = 5, .has_text = true}, {.auto_reply_positive = false});
-    EXPECT_EQ(no_positive.route, "approval_queue");
-    EXPECT_THAT(no_positive.reasons, ElementsAre("auto reply is off for positive reviews"));
-    EXPECT_EQ(gate({.stars = 5, .has_text = false}, {.auto_reply_positive = false}).route, "auto_reply");
-    const auto no_rating_only = gate({.stars = 5, .has_text = false}, {.auto_reply_rating_only = false});
-    EXPECT_EQ(no_rating_only.route, "approval_queue");
-    EXPECT_THAT(no_rating_only.reasons, ElementsAre("auto reply is off for rating-only reviews"));
+    EXPECT_EQ(gate({.stars = 4, .has_text = true}, {.auto_reply_min_stars = 4}).route, "auto_reply");
+    EXPECT_EQ(gate({.stars = 5, .has_text = true}, {.auto_reply_min_stars = 4}).route, "auto_reply");
+}
+
+// The star check auto_verdict runs at scheduling and at the claim. Its own 4
+// holds even under a minimum no save and no column allows (D-110).
+TEST(Gate, ThreeStarsOrFewerNeverAutoReplyWhateverTheMinimum) {
+    for (const std::int64_t min_stars : {1, 2, 3, 4}) {
+        for (const std::int64_t stars : {0, 1, 2, 3}) EXPECT_FALSE(stars_may_auto_reply(stars, min_stars)) << stars << " of " << min_stars;
+        EXPECT_TRUE(stars_may_auto_reply(4, min_stars)) << min_stars;
+        EXPECT_TRUE(stars_may_auto_reply(5, min_stars)) << min_stars;
+    }
+    EXPECT_FALSE(stars_may_auto_reply(4, 5));
+    EXPECT_TRUE(stars_may_auto_reply(5, 5));
 }
 
 // ---- content and reply settings (D-107) -------------------------------------------
@@ -166,7 +187,8 @@ TEST(Settings, ATestClientIsTheDefaultsItsTemplateAndWhatItSets) {
     // Not set: a Chinese reply follows the review's script.
     EXPECT_EQ(spa.settings.content.chinese_variant, std::nullopt);
     EXPECT_EQ(spa.settings.content.english_variant, std::nullopt);
-    EXPECT_EQ(spa.settings.reply.auto_reply_min_stars, 4);
+    EXPECT_EQ(spa.settings.reply.auto_reply_min_stars, 5);
+    EXPECT_FALSE(spa.settings.reply.auto_reply_enabled) << "no file switches auto reply on";
     EXPECT_DOUBLE_EQ(spa.settings.reply.temperature, 0.7);
 
     const auto buffet = seed.client("food_beverage");
@@ -287,7 +309,16 @@ TEST(Settings, ASaveIsCheckedAgainstItsLimits) {
     EXPECT_EQ(reply([](auto& s) { s.fallback_language = "ko"; }), "'fallback_language' must be en, zh or es");
 
     EXPECT_EQ(reply([](auto& s) { s.auto_reply_min_stars = 5; }), "fine");
-    EXPECT_EQ(reply([](auto& s) { s.auto_reply_min_stars = 0; }), "'auto_reply_min_stars' must be between 1 and 5");
+    EXPECT_EQ(reply([](auto& s) { s.auto_reply_min_stars = 4; }), "fine");
+    for (const std::int64_t stars : {0, 1, 3, 6}) {
+        EXPECT_EQ(reply([&](auto& s) { s.auto_reply_min_stars = stars; }), "'auto_reply_min_stars' must be 4 or 5") << stars;
+    }
+    EXPECT_EQ(reply([](auto& s) { s.auto_reply_daily_cap = 0; }), "'auto_reply_daily_cap' must be between 1 and 1000");
+    EXPECT_EQ(reply([](auto& s) { s.auto_reply_daily_cap = 1001; }), "'auto_reply_daily_cap' must be between 1 and 1000");
+    EXPECT_EQ(reply([](auto& s) { s.auto_reply_daily_cap = 1000; }), "fine");
+    EXPECT_EQ(reply([](auto& s) { s.auto_reply_pause_after_failures = 0; }), "'auto_reply_pause_after_failures' must be between 1 and 20");
+    EXPECT_EQ(reply([](auto& s) { s.auto_reply_pause_after_failures = 21; }), "'auto_reply_pause_after_failures' must be between 1 and 20");
+    EXPECT_EQ(reply([](auto& s) { s.auto_reply_enabled = true; }), "fine") << "what the location must be is the save's to check";
     EXPECT_EQ(reply([](auto& s) { s.auto_reply_delay_max_minutes = 1441; }),
               "'auto_reply_delay_min_minutes' and 'auto_reply_delay_max_minutes' must be between 0 and 1440");
     EXPECT_EQ(reply([](auto& s) { s.auto_reply_window_start = "9am"; }),

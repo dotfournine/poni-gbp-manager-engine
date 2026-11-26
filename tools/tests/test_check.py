@@ -194,6 +194,19 @@ def test_a_layer_is_held_to_the_bundles_limits(kb):
     only(problems(kb), "reply: the posting window's start and end must differ")
 
 
+def test_no_file_switches_auto_reply_on(kb):
+    kb.edit("defaults.json", lambda d: d["reply"].update({"auto_reply_enabled": True}))
+    only(problems(kb), "defaults.json", "auto_reply_enabled must be false")
+    kb.edit("defaults.json", lambda d: d["reply"].update({"auto_reply_enabled": False}))
+    kb.edit("voices/warm_casual.json", lambda t: t["reply"].update({"auto_reply_enabled": True}))
+    only(problems(kb), "voices/warm_casual.json", "auto_reply_enabled must be false")
+
+
+def test_a_minimum_below_four_stars_is_refused(kb):
+    kb.edit("defaults.json", lambda d: d["reply"].update({"auto_reply_min_stars": 3}))
+    only(problems(kb), "defaults.json", "auto_reply_min_stars")
+
+
 def test_a_default_model_needs_a_price(kb):
     kb.edit("defaults.json", lambda d: d["analysis"].update({"judge_model": "unpriced"}))
     only(problems(kb), "analysis.judge_model 'unpriced' has no price")

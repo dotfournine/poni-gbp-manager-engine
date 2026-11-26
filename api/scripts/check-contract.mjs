@@ -530,6 +530,8 @@ try {
       change: (b) => ({ ...b, signature: "Contract Check" }),
       changed: (json) => json?.signature === "Contract Check",
       outside: (b) => ({ ...b, signature: "two\nlines" }),
+      // Auto reply's minimum is 4 or 5 (D-110); three stars or fewer never auto reply.
+      alsoOutside: (b) => ({ ...b, auto_reply_min_stars: 3 }),
       leftOut: "signature",
     },
   ];
@@ -561,6 +563,7 @@ try {
     const changed = await save("a change", bundle.change(original), 200);
     if (!bundle.changed(changed.json)) fail(`PUT ${path}`, "the answer does not hold what was saved");
     await save("a value outside its limits", bundle.outside(original), 400);
+    if (bundle.alsoOutside) await save("another value outside its limits", bundle.alsoOutside(original), 400);
     await save("a member left out", { ...original, [bundle.leftOut]: undefined }, 400);
     await save("put back", original, 200);
     if (bundle.name === "content-settings") await expectGuarded(settingsSpec, "PUT", path, original);
@@ -603,28 +606,22 @@ try {
     }
   }
   // Phase 4: auto reply. The check never switches it on and never lifts a
-  // pause the engine set: it reads, sends changes that change nothing or
-  // are refused, and resumes only what is not paused.
-  const autoPosting = await call("GET", "/api/auto-posting");
-  check("GET /api/auto-posting", "/api/auto-posting", "GET", autoPosting);
-  if (autoPosting.json?.paused === false) {
-    check("POST /api/auto-posting/resume (not paused)", "/api/auto-posting/resume", "POST", await call("POST", "/api/auto-posting/resume"));
+  // pause the engine set: it reads, and resumes only what is not paused.
+  // Auto reply's settings are the reply settings, checked above; here is the engine's own state (D-110).
+  const autoReply = await call("GET", "/api/system/auto-reply");
+  check("GET /api/system/auto-reply", "/api/system/auto-reply", "GET", autoReply);
+  if (autoReply.json?.paused === false) {
+    check("POST /api/system/auto-reply/resume (not paused)", "/api/system/auto-reply/resume", "POST", await call("POST", "/api/system/auto-reply/resume"));
   } else {
     console.log("skip  resume: auto reply is paused in this database, and the check never lifts a pause");
   }
-  check("GET /api/auto-posts", "/api/auto-posts", "GET", await call("GET", "/api/auto-posts?per_page=5"));
-  if (location) {
-    const path = `/api/locations/${location.id}/auto-posting`;
-    const settings = await call("PATCH", path, { body: {} });
-    check(`PATCH ${path} (no change)`, "/api/locations/{id}/auto-posting", "PATCH", settings);
-    check(`PATCH ${path} (bad value)`, "/api/locations/{id}/auto-posting", "PATCH", await call("PATCH", path, { body: { enabled: "yes" } }));
-    check(`PATCH ${path} (bad cap)`, "/api/locations/{id}/auto-posting", "PATCH", await call("PATCH", path, { body: { daily_cap: 0 } }));
-    check(`PATCH ${path} (unknown time zone)`, "/api/locations/{id}/auto-posting", "PATCH", await call("PATCH", path, { body: { time_zone: "Mars/Olympus" } }));
-    if (settings.json?.paused === false) {
-      check(`POST ${path}/resume (not paused)`, "/api/locations/{id}/auto-posting/resume", "POST", await call("POST", `${path}/resume`));
-    }
+  check("GET /api/auto-replies", "/api/auto-replies", "GET", await call("GET", "/api/auto-replies?per_page=5"));
+  const replying = autoReply.json?.locations?.[0];
+  if (replying && replying.paused === false) {
+    const path = `/api/locations/${replying.location_id}/auto-reply/resume`;
+    check(`POST ${path} (not paused)`, "/api/locations/{id}/auto-reply/resume", "POST", await call("POST", path));
   }
-  expectStatus("PATCH /api/locations/999999999/auto-posting", await call("PATCH", "/api/locations/999999999/auto-posting", { body: { daily_cap: 5 } }), 404, "not_found");
+  expectStatus("POST /api/locations/999999999/auto-reply/resume", await call("POST", "/api/locations/999999999/auto-reply/resume"), 404, "not_found");
   if (drafted?.draft) {
     const path = `/api/drafts/${drafted.draft.id}/unschedule`;
     check(`POST ${path} (not scheduled)`, "/api/drafts/{id}/unschedule", "POST", await call("POST", path));

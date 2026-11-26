@@ -8,8 +8,10 @@
 #include <boost/json/value_to.hpp>
 
 #include <algorithm>
+#include <cstdint>
 #include <format>
 #include <map>
+#include <string_view>
 
 namespace poni::repo {
 
@@ -49,6 +51,13 @@ std::optional<std::string> knowledge_problem(pqxx::transaction_base& tx) {
         return std::format("the seeded knowledge base has format {}, and this engine reads format {}; seed the knowledge base "
                            "that belongs to this release, or deploy the engine that reads this one",
                            meta->format, kKnowledgeFormat);
+    }
+    // A migration that rebuilds a defaults table leaves it empty for the next seed (a migration writes no kb_* row):
+    // without its row, no location could be discovered.
+    for (const auto table : {std::string_view("kb_content_defaults"), std::string_view("kb_reply_defaults")}) {
+        if (tx.query_value<std::int64_t>(std::format("SELECT count(*) FROM {}", table)) != 1) {
+            return std::format("the knowledge base has no row in {}; run `poni-tools seed` to fill it", table);
+        }
     }
     return std::nullopt;
 }

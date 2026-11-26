@@ -36,9 +36,8 @@ inline constexpr std::string_view kGoLiveCaseKind = "golive.case";
 // workers the engine runs (PONI_JOB_WORKERS), passed in as `parallel`. Other
 // jobs take their turn between cases: each next case is queued only when one
 // finishes, behind whatever is already waiting.
-// The location's own reviews among the cases (D-075): the newest with 4 or 5 stars.
+// The location's own reviews among the cases (D-075): the newest with 4 or 5 stars and text.
 inline constexpr int kGoLiveRealWithText = 20;
-inline constexpr int kGoLiveRealWithoutText = 2;
 
 // ---- the fingerprint and the gate ---------------------------------------------------
 

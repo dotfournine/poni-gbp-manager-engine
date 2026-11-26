@@ -31,12 +31,13 @@ SELECT l.id, d.business_facts, d.base_style, d.emoji_allowed, d.emoji_max, d.emo
 ON CONFLICT (location_id) DO NOTHING;
 
 INSERT INTO reply_settings (location_id, reply_languages, fallback_language, signature, sign_off_name, length, example_replies, promos_allowed, contact_allowed,
-                            temperature, auto_reply_positive, auto_reply_rating_only, auto_reply_min_stars, auto_reply_delay_min_minutes,
-                            auto_reply_delay_max_minutes, auto_reply_window_start, auto_reply_window_end, created_at, updated_at)
+                            temperature, auto_reply_min_stars, auto_reply_delay_min_minutes, auto_reply_delay_max_minutes,
+                            auto_reply_window_start, auto_reply_window_end, auto_reply_enabled, auto_reply_daily_cap,
+                            auto_reply_pause_after_failures, created_at, updated_at)
 SELECT l.id, d.reply_languages, d.fallback_language, d.signature, d.sign_off_name, d.length, d.example_replies,
-       d.promos_allowed, d.contact_allowed, d.temperature, d.auto_reply_positive, d.auto_reply_rating_only,
-       d.auto_reply_min_stars, d.auto_reply_delay_min_minutes, d.auto_reply_delay_max_minutes,
-       d.auto_reply_window_start, d.auto_reply_window_end, now(), now()
+       d.promos_allowed, d.contact_allowed, d.temperature, d.auto_reply_min_stars, d.auto_reply_delay_min_minutes,
+       d.auto_reply_delay_max_minutes, d.auto_reply_window_start, d.auto_reply_window_end, d.auto_reply_enabled,
+       d.auto_reply_daily_cap, d.auto_reply_pause_after_failures, now(), now()
   FROM locations l, kb_reply_defaults d
  WHERE l.gbp_location_id = 'contract-location-1'
 ON CONFLICT (location_id) DO NOTHING;
@@ -122,11 +123,11 @@ SELECT now(), v.task, 'seeded-model', l.id, r.id, v.attempt, v.status, v.error, 
 -- something to answer with. A made-up fingerprint: it gives nothing a pass,
 -- and no location on GET /api/go-live shows it, so it has a fixed id that
 -- check-contract.mjs reads it by. It was submitted for the seeded location.
-INSERT INTO go_live_runs (id, location_id, fingerprint, fingerprint_inputs, status, summary, auto_reply_positive,
-                          auto_reply_rating_only, auto_reply_min_stars, corpus_version, repeats, real_reviews, started_at, finished_at)
+INSERT INTO go_live_runs (id, location_id, fingerprint, fingerprint_inputs, status, summary, auto_reply_min_stars,
+                          corpus_version, repeats, real_reviews, started_at, finished_at)
 OVERRIDING SYSTEM VALUE
 SELECT 900000001, l.id, 'contract-seeded', '{}'::jsonb,
-       'failed', '1 of 2 cases failed: 1 reply that would have been posted the judge rated unacceptable.', true, true, 4,
+       'failed', '1 of 2 cases failed: 1 reply that would have been posted the judge rated unacceptable.', 4,
        'seeded', 3, 1, now() - interval '20 minutes', now() - interval '10 minutes'
   FROM locations l
  WHERE l.gbp_location_id = 'contract-location-1'
