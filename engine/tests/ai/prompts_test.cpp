@@ -25,15 +25,13 @@ std::size_t occurrences(std::string_view text, std::string_view part) {
 
 class Prompts : public ::testing::Test {
 protected:
-    GeneratorInput input(const test::ClientSetup& setup, std::string mode, std::string language = "en",
-                         std::optional<std::string> script = std::nullopt) {
+    GeneratorInput input(const test::ClientSetup& setup, std::string mode, std::string language = "en") {
         return {.business_name = setup.business_name,
                 .settings = setup.settings,
                 .stars = 5,
                 .review_text = "Lovely head spa with Eva!",
                 .mode = std::move(mode),
                 .target_language = std::move(language),
-                .target_script = std::move(script),
                 .severity_labels = {},
                 .items = {},
                 .recent_replies = {}};
@@ -155,46 +153,55 @@ TEST_F(Prompts, TheFixesFromTheSpikeAreInThePrompt) {
 }
 
 TEST_F(Prompts, TheLanguageIsAnInstructionNotTheModelsChoice) {
-    EXPECT_THAT(generator_messages(input(spa_, "positive"), "n")[0].content, HasSubstr("Write the reply in English with US spelling."));
-    EXPECT_THAT(generator_messages(input(spa_, "positive", "zh", "Hant"), "n")[0].content,
-                HasSubstr("using Traditional Chinese characters only, with natural Taiwan phrasing"));
-    EXPECT_THAT(generator_messages(input(buffet_, "positive", "zh", "Hans"), "n")[0].content,
-                HasSubstr("using Simplified Chinese characters only"));
-    EXPECT_THAT(generator_messages(input(buffet_, "positive", "es"), "n")[0].content, HasSubstr("Write the reply in Spanish."));
-    auto canadian = spa_;
-    canadian.settings.content.english_variant = "en-CA";
-    EXPECT_THAT(generator_messages(input(canadian, "positive"), "n")[0].content, HasSubstr("English with Canadian spelling"));
+    auto american = spa_;
+    american.settings.content.english_variant = "en-US";
+    EXPECT_THAT(generator_messages(input(american, "positive"), "n")[0].content, HasSubstr("Write the reply in English with US spelling."));
+    EXPECT_THAT(generator_messages(input(buffet_, "positive", "zh"), "n")[0].content, HasSubstr("using Simplified Chinese characters only"));
+    EXPECT_THAT(generator_messages(input(buffet_, "positive", "es"), "n")[0].content,
+                HasSubstr("Write the reply in Spanish. The language was chosen by the business's settings; follow it even if the review "
+                          "uses another language."));
 }
 
-// Until the wording of D-107 point 6 lands, each variant renders what the old
-// localization that said the same rendered; not set is the old "match" with Taiwan phrasing.
-TEST_F(Prompts, EachVariantNamesItsScriptAndRegion) {
-    const auto chinese = [&](std::optional<std::string> variant, std::string_view review_script) {
+// D-107 point 11: a set variant names the script and the phrasing, or the spelling, and says the business chose it;
+// a variant that is not set tells the writer to follow the review, and names no script.
+TEST_F(Prompts, EachVariantNamesItsScriptAndRegionAndNotSetFollowsTheReview) {
+    const auto chinese = [&](std::optional<std::string> variant) {
         auto setup = spa_;
         setup.settings.content.chinese_variant = std::move(variant);
-        const auto target = target_language("zh", review_script, setup.settings);
-        return generator_messages(input(setup, "positive", target.language, target.script), "n")[0].content;
+        return generator_messages(input(setup, "positive", "zh"), "n")[0].content;
     };
     constexpr std::string_view chosen = "The language was chosen by the business's settings; follow it even if the review uses another "
                                         "language or script.";
-    EXPECT_THAT(chinese("zh-CN", "Hant"),
+    EXPECT_THAT(chinese("zh-CN"),
                 HasSubstr(std::format("Write the reply in Chinese, using Simplified Chinese characters only, with natural Mainland China "
                                       "phrasing. {}",
                                       chosen)));
-    EXPECT_THAT(chinese("zh-TW", "Hans"), HasSubstr("using Traditional Chinese characters only, with natural Taiwan phrasing."));
-    EXPECT_THAT(chinese("zh-HK", "Hans"), HasSubstr("using Traditional Chinese characters only, with natural Hong Kong phrasing."));
-    // Not set: the review's own script, Taiwan's phrasing.
-    EXPECT_THAT(chinese(std::nullopt, "Hant"), HasSubstr("using Traditional Chinese characters only, with natural Taiwan phrasing."));
-    EXPECT_THAT(chinese(std::nullopt, "Hans"), HasSubstr("using Simplified Chinese characters only, with natural Taiwan phrasing."));
+    EXPECT_THAT(chinese("zh-TW"),
+                HasSubstr(std::format("Write the reply in Chinese, using Traditional Chinese characters only, with natural Taiwan phrasing. {}",
+                                      chosen)));
+    EXPECT_THAT(chinese("zh-HK"),
+                HasSubstr(std::format("Write the reply in Chinese, using Traditional Chinese characters only, with natural Hong Kong "
+                                      "phrasing. {}",
+                                      chosen)));
+    const auto not_set = chinese(std::nullopt);
+    EXPECT_THAT(not_set, HasSubstr("Write the reply in Chinese, matching the script (Simplified or Traditional) and the regional phrasing "
+                                   "the review uses. If the review is not written in Chinese, use Simplified Chinese characters.\n"));
+    EXPECT_THAT(not_set, Not(HasSubstr("The language was chosen")));
+    EXPECT_THAT(not_set, Not(HasSubstr("Chinese characters only")));
 
     const auto english = [&](std::optional<std::string> variant) {
         auto setup = spa_;
         setup.settings.content.english_variant = std::move(variant);
         return generator_messages(input(setup, "positive"), "n")[0].content;
     };
-    EXPECT_THAT(english("en-CA"), HasSubstr("Write the reply in English with Canadian spelling."));
-    EXPECT_THAT(english("en-US"), HasSubstr("Write the reply in English with US spelling."));
-    EXPECT_THAT(english(std::nullopt), HasSubstr("Write the reply in English with US spelling."));
+    constexpr std::string_view chosen_en = "The language was chosen by the business's settings; follow it even if the review uses another "
+                                           "language.\n";
+    EXPECT_THAT(english("en-CA"), HasSubstr(std::format("Write the reply in English with Canadian spelling. {}", chosen_en)));
+    EXPECT_THAT(english("en-US"), HasSubstr(std::format("Write the reply in English with US spelling. {}", chosen_en)));
+    const auto english_not_set = english(std::nullopt);
+    EXPECT_THAT(english_not_set, HasSubstr("Write the reply in English, matching the spelling and phrasing the review uses. Write in "
+                                           "English even if the review uses another language.\n"));
+    EXPECT_THAT(english_not_set, Not(HasSubstr("The language was chosen")));
 }
 
 TEST_F(Prompts, EachModeHasItsOwnInstruction) {
@@ -208,20 +215,41 @@ TEST_F(Prompts, EachModeHasItsOwnInstruction) {
     EXPECT_THROW(generator_messages(input(spa_, "no_such_mode"), "n"), std::logic_error);
 }
 
-// Until the sign-off wording of D-107 point 4 lands, only the signature is read.
-TEST_F(Prompts, TheSignatureIsTheSignOffLine) {
+// D-107 point 9: four branches by what is set, and no precedence in code when both are.
+TEST_F(Prompts, TheSignOffLineFollowsWhatIsSet) {
     const auto rendered = [&](std::string signature, std::string name) {
         auto family = spa_;
         family.settings.reply.signature = std::move(signature);
         family.settings.reply.sign_off_name = std::move(name);
         return generator_messages(input(family, "positive"), "n")[0].content;
     };
-    EXPECT_THAT(rendered("— Mei and family", ""), HasSubstr("Sign off with: \"— Mei and family\""));
-    EXPECT_THAT(rendered("", ""), HasSubstr("No sign-off line."));
-    // A name alone changes nothing yet.
-    EXPECT_THAT(rendered("", "Mei"), HasSubstr("No sign-off line."));
-    EXPECT_EQ(rendered("", "Mei"), rendered("", ""));
-    EXPECT_THAT(rendered("— the owner", "Mei"), HasSubstr("Sign off with: \"— the owner\""));
+    const auto signature = rendered("— Mei and family", "");
+    EXPECT_THAT(signature, HasSubstr("\nSign off with: \"— Mei and family\"\n"));
+    EXPECT_THAT(rendered("", "Mei"), HasSubstr("\nSign off with one short line that uses only this name: \"Mei\". Add no title, role or other "
+                                               "detail about the person.\n"));
+    const auto both = rendered("— the owner and family", "Mei");
+    EXPECT_THAT(both, HasSubstr("\nSign off with the preferred signature: \"— the owner and family\". The person writing is named \"Mei\"; "
+                                "if the signature refers to the writer in a generic way (for example \"the owner\"), use the name in its "
+                                "place, otherwise keep the signature as it is.\n"));
+    const auto neither = rendered("", "");
+    EXPECT_THAT(neither, HasSubstr("\nNo sign-off line.\n"));
+    // Exactly one sign-off line in each.
+    for (const auto& text : {signature, rendered("", "Mei"), both, neither}) {
+        EXPECT_EQ(occurrences(text, "Sign off with") + occurrences(text, "No sign-off line."), 1u) << text;
+    }
+}
+
+// D-107 point 10: the writer need not quote the business's name on Google; the analyzer is told nothing of it.
+TEST_F(Prompts, OnlyTheWriterIsToldItNeedNotQuoteTheName) {
+    constexpr std::string_view rule = "The business name you are given is its name on Google, which can read as official or stiff (a legal "
+                                      "form, a branch suffix, keywords). You do not have to quote it word for word anywhere in the reply, "
+                                      "the sign-off included: refer to the business the way its owner would say it in conversation.";
+    const auto writer = generator_messages(input(spa_, "positive"), "n")[0].content;
+    EXPECT_THAT(writer, HasSubstr(std::format("will post under one of its Google reviews. It is published under the business's name, so it "
+                                              "must be accurate, gracious and safe.\n\n{}\n",
+                                              rule)));
+    EXPECT_EQ(occurrences(writer, rule), 1u);
+    EXPECT_THAT(analyzer_messages("Willow Moon Head Spa", spa_.industry, 5, "text", "n")[0].content, Not(HasSubstr("name on Google")));
 }
 
 TEST_F(Prompts, FactsAreGivenAsTypedOrSaidToBeMissing) {

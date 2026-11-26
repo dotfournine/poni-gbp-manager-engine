@@ -1,6 +1,7 @@
 // fixtures/mainland_china_golden.json holds one made-up location whose
 // replies may be Chinese with Mainland China phrasing, its Chinese variant
-// zh-CN (D-107), and the fingerprint captured for it. Its fingerprint is
+// zh-CN (D-107), and the fingerprint captured for it, recaptured once for the
+// wording of D-107 points 9 to 11. Its fingerprint is
 // recaptured only by a change that alters a reply prompt on purpose, as
 // ReplySettingsGolden's are; like that file it holds its own industry and
 // model setups, so the knowledge base does not touch it.
@@ -59,10 +60,10 @@ TEST(MainlandChinaGolden, TheCapturedSettingsGiveTheCapturedFingerprint) {
                                           .analyzer = model_of(analyzer, analyzer.at("temperature").to_number<double>()),
                                           .writer = model_of(golden.at("writer"), settings->reply.temperature)});
 
-    // zh-CN asks for Simplified characters only, with the Mainland phrasing.
+    // One Chinese target, which zh-CN renders with Simplified characters and the Mainland phrasing.
     const auto& prompts = golden.at("fingerprint_inputs").at("prompts").as_object();
-    EXPECT_TRUE(prompts.contains("writer:positive:zh-Hans"));
-    EXPECT_FALSE(prompts.contains("writer:positive:zh-Hant"));
+    EXPECT_TRUE(prompts.contains("writer:positive:zh"));
+    EXPECT_FALSE(prompts.contains("writer:positive:zh-Hans"));
     EXPECT_EQ(now.inputs, golden.at("fingerprint_inputs").as_object()) << boost::json::serialize(now.inputs);
     EXPECT_EQ(now.hash, golden.at("fingerprint").as_string()) << now.hash;
 }

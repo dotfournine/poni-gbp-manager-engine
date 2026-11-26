@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <set>
+#include <string_view>
 
 using namespace poni;
 using namespace poni::domain;
@@ -58,6 +59,9 @@ TEST_F(GoLiveDomain, TheSameConfigurationHasTheSameFingerprint) {
     EXPECT_TRUE(prompts.contains("writer:positive:en"));
     EXPECT_TRUE(prompts.contains("writer:severity:en"));
     EXPECT_TRUE(prompts.contains("writer:rating_only:en"));
+    // One target per language: Chinese is not split by script (D-074 point 1).
+    EXPECT_TRUE(prompts.contains("writer:positive:zh"));
+    for (const auto& prompt : prompts) EXPECT_FALSE(std::string_view(prompt.key()).starts_with("writer:positive:zh-")) << prompt.key();
     // The prompts are in it as hashes: no business fact and no example reply is copied into a run's record.
     EXPECT_THAT(boost::json::serialize(first.inputs), Not(HasSubstr(spa_.business_name)));
 }
@@ -117,8 +121,6 @@ TEST_F(GoLiveDomain, WhatIsNotTestedIsNotInIt) {
     copy.settings.reply.auto_reply_enabled = true;
     copy.settings.reply.auto_reply_daily_cap = 7;
     copy.settings.reply.auto_reply_pause_after_failures = 1;
-    // Stored for the sign-off wording to come, and read by no prompt yet.
-    copy.settings.reply.sign_off_name = "Mina";
     copy.name = "Willow Moon Head Spa LLC";  // the client's name: the business is named by its title
     EXPECT_EQ(hash(copy), base);
 }
@@ -142,8 +144,9 @@ TEST_F(GoLiveDomain, TheWritersContentSettingsAreInItAndTheAudienceIsNot) {
     EXPECT_NE(changed([](ContentSettings& c) { c.emoji_allowed = false; }).hash, base.hash) << "emoji allowed";
     EXPECT_NE(changed([](ContentSettings& c) { c.emoji_preferred = {"🌸"}; }).hash, base.hash) << "the preferred emoji";
 
-    // The variants: a change that renders other text. (Not set and en-US render the same US spelling.)
+    // The variants: each renders text of its own.
     const auto us = changed([](ContentSettings& c) { c.english_variant = "en-US"; });
+    EXPECT_NE(us.hash, base.hash) << "not set to en-US";
     EXPECT_NE(changed([](ContentSettings& c) { c.english_variant = "en-CA"; }).hash, us.hash) << "en-US to en-CA";
     ASSERT_TRUE(std::ranges::contains(spa_.settings.reply.reply_languages, "zh"));
     ASSERT_EQ(spa_.settings.content.chinese_variant, std::nullopt);

@@ -9,6 +9,7 @@
 #include "db/repo_go_live.hpp"
 #include "db/repo_reviews.hpp"
 #include "db/repo_settings.hpp"
+#include "domain/prompts.hpp"
 #include "jobs/analysis.hpp"
 
 #include <boost/json/serialize.hpp>
@@ -559,7 +560,7 @@ TEST_F(AnalysisApi, TheModelPerTaskIsASetting) {
     EXPECT_EQ(boost::json::serialize(settings.at("providers")), R"(["dashscope","openai"])");
     EXPECT_FALSE(settings.as_object().contains("model_prices")) << "prices are knowledge (D-078)";
     EXPECT_FALSE(settings.as_object().contains("manipulation_patterns")) << "the keyword rules are gone (D-058)";
-    EXPECT_THAT(std::string(settings.at("prompt_version").as_string()), HasSubstr("p2."));
+    EXPECT_EQ(settings.at("prompt_version").as_string(), domain::prompt_version());
 
     const auto changed = patch_current("/api/ai/settings", R"({"analyzer_model": "qwen3.8-flash", "analyzer_temperature": 0.5, "batch_size": 3})");
     ASSERT_EQ(changed.status, 200u) << changed.body;

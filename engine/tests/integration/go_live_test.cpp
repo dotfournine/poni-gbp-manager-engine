@@ -276,6 +276,7 @@ TEST_F(GoLive, AChangeToAnythingThatIsTestedClosesTheGateAndTakingItBackOpensItA
         column_change("the English variant", "content_settings", "english_variant", "'en-CA'"),
         column_change("the Chinese variant", "content_settings", "chinese_variant", "'zh-TW'"),
         column_change("the signature", "reply_settings", "signature", "'— The Chelsea team'"),
+        column_change("the name the sign-off uses", "reply_settings", "sign_off_name", "'Mei'"),
         // What a new version of the knowledge base does when it changes the industry's profile (D-078 point 7).
         {"the analyzer's prompt (the knowledge base switched a severity flag off)",
          "UPDATE kb_industries SET severity_flags = jsonb_set(severity_flags, '{0,enabled}', 'false') WHERE key = 'wellness'",
@@ -329,8 +330,6 @@ TEST_F(GoLive, WhatIsNotTestedChangesNothing) {
                       spa_),
           // Who the customers are is read by the help with posts only (D-107 point 7).
           std::format("UPDATE content_settings SET audience = 'Office workers nearby' WHERE location_id = {}", spa_),
-          // The name the sign-off is to use is stored, and not read by a reply prompt yet.
-          std::format("UPDATE reply_settings SET sign_off_name = 'Mei' WHERE location_id = {}", spa_),
           // The judge measures; it is not what is tested.
           std::string("UPDATE ai_settings SET judge_model = 'claude-sonnet-5-5', batch_size = 3"),
           // What a new version of the knowledge base changes without touching a profile: none of it is in a prompt.

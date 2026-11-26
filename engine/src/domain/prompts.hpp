@@ -49,8 +49,9 @@ struct GeneratorInput {
     int stars = 0;
     std::string review_text;  // empty for a rating-only review
     std::string mode;
+    // The writer is told the script and phrasing of Chinese, and the spelling of
+    // English, by the content settings' variant alone (D-107 point 11).
     std::string target_language;
-    std::optional<std::string> target_script;
     // Labels of the severity flags raised, for a holding reply.
     std::vector<std::string> severity_labels;
     // Names of the items the analyzer found (dishes, treatments, staff the reviewer named).

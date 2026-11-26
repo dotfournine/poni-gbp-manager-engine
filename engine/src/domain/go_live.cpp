@@ -41,24 +41,12 @@ boost::json::object model_json(const ModelSetup& setup) {
             {"extras", setup.extras}};
 }
 
-// The languages and scripts a reply can be written in with these settings.
-std::vector<std::pair<std::string, std::optional<std::string>>> targets(const ResolvedSettings& settings) {
+// The languages a reply can be written in with these settings, one target each (D-074 point 1): the
+// writer's text for a language follows from the variant alone, its script with it.
+std::set<std::string> targets(const ResolvedSettings& settings) {
     std::set<std::string> languages(settings.reply.reply_languages.begin(), settings.reply.reply_languages.end());
     languages.insert(settings.reply.fallback_language);
-    // A set variant fixes the script; none follows the review, so both scripts can be asked for.
-    const auto& variant = settings.content.chinese_variant;
-    const bool simplified = !variant || *variant == "zh-CN";
-    const bool traditional = !variant || *variant != "zh-CN";
-    std::vector<std::pair<std::string, std::optional<std::string>>> out;
-    for (const auto& language : languages) {
-        if (language != "zh") {
-            out.emplace_back(language, std::nullopt);
-            continue;
-        }
-        if (simplified) out.emplace_back(language, "Hans");
-        if (traditional) out.emplace_back(language, "Hant");
-    }
-    return out;
+    return languages;
 }
 
 }  // namespace
@@ -67,7 +55,7 @@ Fingerprint fingerprint(const FingerprintInput& input) {
     boost::json::object prompts;
     prompts["analyzer"] =
         short_hash(analyzer_messages(input.business_name, input.industry, 5, kPlaceholderReview, "").front().content);
-    for (const auto& [language, script] : targets(input.settings)) {
+    for (const auto& language : targets(input.settings)) {
         for (const auto& sample : kModes) {
             const bool rating_only = sample.mode == kModeRatingOnly || sample.mode == kModeRatingOnlyLow;
             const GeneratorInput writer{.business_name = input.business_name,
@@ -76,12 +64,11 @@ Fingerprint fingerprint(const FingerprintInput& input) {
                                         .review_text = rating_only ? std::string{} : std::string(kPlaceholderReview),
                                         .mode = std::string(sample.mode),
                                         .target_language = language,
-                                        .target_script = script,
                                         .severity_labels = {},
                                         .items = {},
                                         .recent_replies = {},
                                         .staff_instructions = {}};
-            prompts[std::format("writer:{}:{}{}", sample.mode, language, script ? "-" + *script : std::string{})] =
+            prompts[std::format("writer:{}:{}", sample.mode, language)] =
                 short_hash(generator_messages(writer, "").front().content);
         }
     }

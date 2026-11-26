@@ -355,8 +355,9 @@ TEST_F(Analysis, AComplaintOrALowRatingGoesToTheApprovalQueue) {
 }
 
 TEST_F(Analysis, TheGeneratorIsAskedForTheReviewersChineseScriptAndItsReplyIsStoredAsWritten) {
-    // A Traditional review at the spa ("match the reviewer"): the analyzer says which script it is,
-    // and the generator is asked for it. The model slips into Simplified; nothing corrects that (D-056).
+    // A Traditional review at the spa, which sets no Chinese variant: the analyzer says which script it is, the
+    // generator is asked to match the review, and the draft records that script. The model slips into Simplified;
+    // nothing corrects that (D-056).
     const auto id = store(kSpa, "r1", "FIVE", "環境很舒服，技師手法很專業，頭皮清爽很多，推薦！");
     llm_.analyzer = FakeLlm::always(R"({"language": "zh", "script": "Hant", "sentiment": "positive", "contains_complaint": false,
         "topics": [], "items": [], "severity_flags": [], "manipulation_suspected": false})");
@@ -369,7 +370,10 @@ TEST_F(Analysis, TheGeneratorIsAskedForTheReviewersChineseScriptAndItsReplyIsSto
     EXPECT_EQ(stored.draft->script, "Hant");
     EXPECT_EQ(stored.draft->text, "谢谢您的五星好评！很开心您喜欢我们的环境和头疗体验，期待下次再为您服务。");
     EXPECT_EQ(stored.draft->route, "auto_reply");
-    EXPECT_THAT(llm_.requests[1].messages[0].content, HasSubstr("Traditional Chinese characters only, with natural Taiwan phrasing"));
+    // The spa sets no Chinese variant: the writer is told to follow the review, and the draft records the review's script.
+    EXPECT_THAT(llm_.requests[1].messages[0].content,
+                HasSubstr("Write the reply in Chinese, matching the script (Simplified or Traditional) and the regional phrasing the review "
+                          "uses. If the review is not written in Chinese, use Simplified Chinese characters.\n"));
 }
 
 TEST_F(Analysis, ALocationsSettingsAreItsContentAndReplySettings) {
