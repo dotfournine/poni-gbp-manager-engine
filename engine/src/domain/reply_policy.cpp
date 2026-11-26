@@ -28,22 +28,21 @@ std::string_view reply_mode(int stars, bool has_text, bool has_severity, bool co
     return kModePositive;
 }
 
-TargetLanguage target_language(std::string_view review_language, std::string_view review_script, const Localization& localization) {
-    const bool replies_in_it = std::ranges::contains(localization.reply_languages, review_language);
-    TargetLanguage target{.language = replies_in_it ? std::string(review_language) : localization.fallback_language,
-                          .script = std::nullopt};
+TargetLanguage target_language(std::string_view review_language, std::string_view review_script, const ResolvedSettings& settings) {
+    const auto& reply = settings.reply;
+    const bool replies_in_it = std::ranges::contains(reply.reply_languages, review_language);
+    TargetLanguage target{.language = replies_in_it ? std::string(review_language) : reply.fallback_language, .script = std::nullopt};
     if (target.language != "zh") return target;
-    if (localization.chinese_script == "simplified") {
-        target.script = "Hans";
-    } else if (localization.chinese_script == "traditional") {
-        target.script = "Hant";
-    } else {
+    const auto& variant = settings.content.chinese_variant;
+    if (!variant) {
         target.script = review_script == "Hant" ? "Hant" : "Hans";
+    } else {
+        target.script = *variant == "zh-CN" ? "Hans" : "Hant";
     }
     return target;
 }
 
-GateDecision gate(const GateInput& input, const PolicyRules& policy) {
+GateDecision gate(const GateInput& input, const ReplySettings& reply) {
     // A severity flag always escalates, whatever else is true (FR-5, FR-6).
     if (!input.severity_flags.empty()) {
         return {std::string(kRouteEscalate), {"severity: " + joined(input.severity_flags)}};
@@ -53,13 +52,13 @@ GateDecision gate(const GateInput& input, const PolicyRules& policy) {
     if (!input.generation_ok) reasons.emplace_back("generation failed");
     if (input.manipulation_suspected) reasons.emplace_back("manipulation suspected");
     if (!input.failed_checks.empty()) reasons.push_back("check failed: " + joined(input.failed_checks));
-    if (input.stars < policy.auto_post_min_stars) {
+    if (input.stars < reply.auto_reply_min_stars) {
         reasons.push_back(input.stars > 0 ? std::format("{} stars", input.stars) : std::string("no star rating"));
     } else if (input.contains_complaint) {
         reasons.emplace_back("contains a complaint");
-    } else if (!input.has_text && !policy.auto_post_rating_only) {
+    } else if (!input.has_text && !reply.auto_reply_rating_only) {
         reasons.emplace_back("auto reply is off for rating-only reviews");
-    } else if (input.has_text && !policy.auto_post_positive) {
+    } else if (input.has_text && !reply.auto_reply_positive) {
         reasons.emplace_back("auto reply is off for positive reviews");
     }
     if (!reasons.empty()) return {std::string(kRouteApproval), std::move(reasons)};

@@ -35,7 +35,7 @@ protected:
         switch_location(spa_, true);
         switched_off_ = location_id("9003");
         become_test_client(buffet_client_, "food_beverage");
-        exec(std::format("UPDATE locations SET audience = 'AUDIENCE-LINE: families from the neighbourhood' WHERE id = {}", buffet_));
+        set_content(buffet_, R"({"audience": "AUDIENCE-LINE: families from the neighbourhood"})");
         start();
     }
 

@@ -723,26 +723,30 @@ TEST_F(LocalPosts, OnePostAtGoogleIsOneRow) {
 // ---- the location's line about its customers ------------------------------------------------
 
 TEST_F(LocalPosts, ALocationSaysWhoItsCustomersAre) {
-    const auto target = "/api/locations/" + std::to_string(spa_);
+    // A content setting (D-107): written in the content settings, read by the help with posts.
+    const auto target = content_settings_path(spa_);
     EXPECT_EQ(read(target).at("audience").as_string(), "") << "nobody has written one";
 
-    const auto changed = patch_current(target, R"({"audience": "  Office workers nearby, many of them Mandarin speakers.  "})");
+    const auto changed = save_content_settings(spa_, R"({"audience": "  Office workers nearby, many of them Mandarin speakers.  "})");
     ASSERT_EQ(changed.status, 200u) << changed.body;
     EXPECT_EQ(json(changed).at("audience").as_string(), "Office workers nearby, many of them Mandarin speakers.");
-    EXPECT_EQ(json(patch_current(target, R"({"analyze_from": "2026-01-01"})")).at("audience").as_string(),
+    EXPECT_EQ(json(save_content_settings(spa_, R"({"base_style": "Plain"})")).at("audience").as_string(),
               "Office workers nearby, many of them Mandarin speakers.")
-        << "a field that isn't sent stays";
+        << "a field that isn't changed stays";
 
-    const auto log = read("/api/audit-log?action=location.update&object_id=" + std::to_string(spa_)).at("items").as_array();
+    const auto log = read("/api/audit-log?action=content_settings.update&object_id=" + std::to_string(spa_)).at("items").as_array();
+    ASSERT_EQ(log.size(), 2u);
     EXPECT_EQ(log[1].at("before").at("audience").as_string(), "");
     EXPECT_EQ(log[1].at("after").at("audience").as_string(), "Office workers nearby, many of them Mandarin speakers.");
 
     // 500 characters, counted as characters: Chinese is not cut short.
     std::string limit;
     for (int i = 0; i < 500; ++i) limit += "客";
-    EXPECT_EQ(patch_current(target, boost::json::serialize(boost::json::object{{"audience", limit}})).status, 200u);
-    EXPECT_EQ(patch_current(target, boost::json::serialize(boost::json::object{{"audience", limit + "客"}})).status, 400u);
-    EXPECT_EQ(patch(target, R"({"audience": 5})").status, 400u);
+    EXPECT_EQ(save_content_settings(spa_, boost::json::serialize(boost::json::object{{"audience", limit}})).status, 200u);
+    EXPECT_EQ(save_content_settings(spa_, boost::json::serialize(boost::json::object{{"audience", limit + "客"}})).status, 400u);
+    EXPECT_EQ(save_content_settings(spa_, R"({"audience": 5})").status, 400u);
+    // The location's own change does not take it.
+    EXPECT_EQ(patch_current("/api/locations/" + std::to_string(spa_), R"({"audience": "Families"})").status, 400u);
 }
 
 // ---- copying a post as a new draft (D-094) ----------------------------------------------------

@@ -129,27 +129,21 @@ std::string quoted_list(const std::vector<std::string>& ids) {
     return out;
 }
 
-std::string replace_owner(std::string sign_off, const std::string& owner_name) {
-    constexpr std::string_view placeholder = "{owner_name}";
-    for (auto at = sign_off.find(placeholder); at != std::string::npos; at = sign_off.find(placeholder, at + owner_name.size())) {
-        sign_off.replace(at, placeholder.size(), owner_name);
-    }
-    return sign_off;
-}
-
 std::string language_text(const GeneratorInput& input) {
-    const auto& l = input.settings.localization;
+    const auto& content = input.settings.content;
     constexpr std::string_view chosen = "The language was chosen by the business's settings; follow it even if the review uses another language";
     if (input.target_language == "zh") {
         const std::string_view script = input.target_script && *input.target_script == "Hant" ? "Traditional" : "Simplified";
-        const std::string_view region = l.chinese_region == "taiwan"      ? "Taiwan"
-                                        : l.chinese_region == "hong_kong" ? "Hong Kong"
-                                                                          : "Mainland China";
+        // Until the wording of D-107 point 6 lands, a variant names today's region; none is Taiwan's.
+        const auto& variant = content.chinese_variant;
+        const std::string_view region = !variant || *variant == "zh-TW" ? "Taiwan"
+                                        : *variant == "zh-HK"           ? "Hong Kong"
+                                                                        : "Mainland China";
         return std::format("Write the reply in Chinese, using {} Chinese characters only, with natural {} phrasing. {} or script.",
                            script, region, chosen);
     }
     if (input.target_language == "en") {
-        return std::format("Write the reply in English with {} spelling. {}.", l.english_variant == "ca" ? "Canadian" : "US", chosen);
+        return std::format("Write the reply in English with {} spelling. {}.", content.english_variant == "en-CA" ? "Canadian" : "US", chosen);
     }
     const std::string_view name = input.target_language == "es" ? "Spanish" : std::string_view(input.target_language);
     return std::format("Write the reply in {}. {}.", name, chosen);
@@ -230,34 +224,35 @@ std::string prompt_parts::fill(std::string_view text, const std::map<std::string
 }
 
 std::string prompt_parts::voice_text(const ResolvedSettings& settings, bool with_examples) {
-    const auto& voice = settings.voice;
+    const auto& content = settings.content;
     std::string out;
     const auto line = [&](std::string text) {
         if (!out.empty()) out += '\n';
         out += text;
     };
-    if (!voice.base_style.empty()) line(std::format("Base style: {}", voice.base_style));
-    if (voice.emoji.allowed && voice.emoji.max > 0) {
+    if (!content.base_style.empty()) line(std::format("Base style: {}", content.base_style));
+    if (content.emoji_allowed && content.emoji_max > 0) {
         std::string preferred;
-        for (const auto& emoji : voice.emoji.preferred) preferred += (preferred.empty() ? "" : " ") + emoji;
-        line(std::format("Emoji: at most {}, optional{}.", voice.emoji.max, preferred.empty() ? "" : "; preferred: " + preferred));
+        for (const auto& emoji : content.emoji_preferred) preferred += (preferred.empty() ? "" : " ") + emoji;
+        line(std::format("Emoji: at most {}, optional{}.", content.emoji_max, preferred.empty() ? "" : "; preferred: " + preferred));
     } else {
         line("Emoji: none.");
     }
-    if (!voice.sign_off.empty()) {
-        line(std::format("Sign off with: \"{}\"", replace_owner(voice.sign_off, voice.owner_name)));
+    // The signature only, until the sign-off wording of D-107 point 4 lands: sign_off_name is not read yet.
+    if (!settings.reply.signature.empty()) {
+        line(std::format("Sign off with: \"{}\"", settings.reply.signature));
     } else {
         line("No sign-off line.");
     }
-    if (!voice.words_to_avoid.empty()) {
+    if (!content.words_to_avoid.empty()) {
         std::string words;
-        for (const auto& word : voice.words_to_avoid) words += (words.empty() ? "" : "; ") + ('"' + word + '"');
+        for (const auto& word : content.words_to_avoid) words += (words.empty() ? "" : "; ") + ('"' + word + '"');
         line("Never use: " + words + ".");
     }
-    for (const auto& note : voice.style_notes) line("- " + note);
-    if (with_examples && !voice.example_replies.empty()) {
+    for (const auto& note : content.style_notes) line("- " + note);
+    if (with_examples && !settings.reply.example_replies.empty()) {
         line("Replies the business has written before (match the tone, never copy their wording):");
-        for (const auto& example : voice.example_replies) line("  > " + example);
+        for (const auto& example : settings.reply.example_replies) line("  > " + example);
     }
     return out;
 }
@@ -320,12 +315,11 @@ std::vector<ChatMessage> analyzer_messages(std::string_view business_name, const
 }
 
 std::vector<ChatMessage> generator_messages(const GeneratorInput& input, std::string_view nonce) {
-    const auto& voice = input.settings.voice;
-    std::string facts;
-    for (const auto& fact : voice.business_facts) facts += "- " + fact + "\n";
-    if (facts.empty()) facts = "(No facts are on file.)\n";
-    if (!facts.empty() && facts.back() == '\n') facts.pop_back();
-    const auto& range = length_range(voice, input.target_language, input.mode);
+    const auto& reply = input.settings.reply;
+    // As typed; an empty string is no facts, said as an empty list said it.
+    const auto& typed = input.settings.content.business_facts;
+    const std::string facts = typed.empty() ? std::string("(No facts are on file.)") : typed;
+    const auto& range = length_range(reply, input.target_language, input.mode);
     // The examples include a thank-you for a bare rating; a model shown it copies it (spike Step C).
     const bool rating_only = input.mode == "rating_only" || input.mode == "rating_only_low";
     auto system = fill(
@@ -335,7 +329,7 @@ std::vector<ChatMessage> generator_messages(const GeneratorInput& input, std::st
          {"voice_text", voice_text(input.settings, !rating_only)},
          {"language_text", language_text(input)},
          {"mode_text", mode_text(input)},
-         {"offer_rule", voice.promos_allowed
+         {"offer_rule", reply.promos_allowed
                             ? std::string("- Mention a promotion only if it is listed in the business facts.")
                             : std::string("- No money amounts, prices, discounts, coupons, refunds, free items, gifts or "
                                           "compensation, and no hint of any.")},

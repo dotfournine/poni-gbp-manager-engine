@@ -64,7 +64,7 @@ std::string review_lines(const repo::ReviewContext& context) {
 void raise_broken_settings(const repo::ReviewContext& context) {
     if (context.setup || !context.setup.error().settings_error) return;
     throw std::runtime_error(
-        std::format("review {}: the reply settings can't be read: {}", context.review_id, *context.setup.error().settings_error));
+        std::format("review {}: the settings can't be read: {}", context.review_id, *context.setup.error().settings_error));
 }
 
 }  // namespace
@@ -307,13 +307,13 @@ asio::awaitable<std::optional<repo::NewDraft>> ReviewPipeline::compose_draft(
     const auto& settings = setup.settings;
     const bool has_text = review_has_text(context);
 
-    const auto plan = domain::plan_draft(analysis, context.stars, has_text, settings.localization);
+    const auto plan = domain::plan_draft(analysis, context.stars, has_text, settings);
     auto input = domain::generator_input(setup.business_name, settings, context.stars, context.text, plan);
     if (plan.mode == domain::kModeRatingOnly) input.recent_replies = context.recent_rating_only_replies;
     if (regeneration) input.staff_instructions = regeneration->instructions;
 
     std::optional<domain::GeneratorAnswer> answer;
-    // The writer's temperature is the voice's (D-074), so a location may have its own: it is in the setup.
+    // The writer's temperature is a reply setting (D-074), so a location may have its own: it is in the setup.
     auto request = writer_request(setup, input, {.review_id = review_id, .go_live_run_id = {}});
     const auto result = co_await ask(std::move(request));
     if (!result) {
@@ -345,9 +345,8 @@ asio::awaitable<std::optional<repo::NewDraft>> ReviewPipeline::compose_draft(
         {"target_script", plan.target.script ? boost::json::value(*plan.target.script) : boost::json::value(nullptr)},
         {"severity_flags", boost::json::value_from(plan.severity_ids)},
         {"recent_replies", boost::json::value_from(input.recent_replies)},
-        {"voice", boost::json::value_from(settings.voice)},
-        {"localization", boost::json::value_from(settings.localization)},
-        {"policy", boost::json::value_from(settings.policy)},
+        {"content", boost::json::value_from(settings.content)},
+        {"reply", boost::json::value_from(settings.reply)},
         {"temperature", setup.writer.temperature ? boost::json::value(*setup.writer.temperature) : boost::json::value(nullptr)},
     };
     if (regeneration) inputs["staff_instructions"] = regeneration->instructions;

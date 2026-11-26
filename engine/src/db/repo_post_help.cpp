@@ -34,7 +34,7 @@ BOOST_DESCRIBE_STRUCT(PeriodReview, (), (usable, review))
 }  // namespace
 
 std::optional<PostHelp> load_post_help(pqxx::transaction_base& tx, std::int64_t location_id, core::TimePoint now) {
-    const auto rows = tx.exec("SELECT l.title, l.gbp_location_id, l.enabled, l.access_status = 'active', l.audience, l.industry_key "
+    const auto rows = tx.exec("SELECT l.title, l.gbp_location_id, l.enabled, l.access_status = 'active', l.industry_key "
                               "FROM locations l WHERE l.id = $1",
                               pqxx::params{location_id});
     if (rows.empty()) return std::nullopt;
@@ -45,9 +45,8 @@ std::optional<PostHelp> load_post_help(pqxx::transaction_base& tx, std::int64_t 
     help.gbp_location_id = row[1].as<std::string>();
     help.enabled = row[2].as<bool>();
     help.accessible = row[3].as<bool>();
-    help.audience = row[4].as<std::string>();
-    if (const auto industry = row[5].as<OptString>()) help.industry = industry_rules(tx, *industry);
-    help.reply_settings = stored_reply_settings(tx, location_id);
+    if (const auto industry = row[4].as<OptString>()) help.industry = industry_rules(tx, *industry);
+    help.location_settings = stored_settings(tx, location_id);
     help.settings = get_ai_settings(tx);
 
     help.period_end = std::chrono::floor<std::chrono::days>(now);

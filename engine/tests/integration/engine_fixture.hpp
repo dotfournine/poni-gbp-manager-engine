@@ -11,7 +11,7 @@
 #include "db/repo_knowledge.hpp"
 #include "db/repo_reviews.hpp"
 #include "db/repo_settings.hpp"
-#include "domain/reply_settings.hpp"
+#include "domain/settings.hpp"
 #include "ai/ai_fixture.hpp"
 #include "db_fixture.hpp"
 #include "fakes.hpp"
@@ -109,39 +109,44 @@ protected:
             std::optional<model::KnowledgeVoiceTemplate> taken;
             if (const auto* chosen = business.if_contains("template")) {
                 taken = db::row_as<model::KnowledgeVoiceTemplate>(
-                    tx, "SELECT key, label, description, voice FROM kb_voice_templates WHERE key = $1",
+                    tx, "SELECT key, label, description, content, reply FROM kb_voice_templates WHERE key = $1",
                     pqxx::params{std::string(chosen->as_string())});
             }
-            const auto settings =
-                business_settings({{"voice", defaults.voice}, {"localization", defaults.localization}, {"policy", defaults.policy}}, taken, business);
+            const auto settings = business_settings({{"content", defaults.content}, {"reply", defaults.reply}}, taken, business);
             for (const auto& row : tx.exec("SELECT id FROM locations WHERE client_id = $1 ORDER BY id", pqxx::params{client_id})) {
                 const auto location = row[0].as<std::int64_t>();
                 (void)repo::update_location(tx, audit, location, {.enabled = true, .industry_key = industry_key}).value();
-                (void)repo::replace_reply_settings(tx, audit, location, settings).value();
+                (void)repo::replace_content_settings(tx, audit, location, settings.content).value();
+                (void)repo::replace_reply_settings(tx, audit, location, settings.reply).value();
             }
             return 0;
         });
     }
 
-    // ---- a location's reply settings, changed without a person's save ----
+    // ---- a location's content and reply settings, changed without a person's save ----
 
-    // One part of the location's stored settings ("voice", "localization" or "policy"), as JSON text.
-    std::string settings_part(std::int64_t location, std::string_view part) {
-        return value<std::string>(std::format("SELECT {}::text FROM reply_settings WHERE location_id = {}", part, location));
+    // One bundle's stored row ("content_settings" or "reply_settings") as JSON, by column name.
+    boost::json::object settings_row(std::int64_t location, std::string_view table) {
+        return boost::json::parse(value<std::string>(std::format("SELECT to_jsonb(s)::text FROM {} s WHERE location_id = {}", table, location)))
+            .as_object();
     }
-    // Lays `members` on that part: objects merge member by member, everything else is replaced.
-    void set_part(std::int64_t location, std::string_view part, std::string_view members) {
-        const auto merged =
-            merge_layer(boost::json::parse(settings_part(location, part)).as_object(), boost::json::parse(members).as_object());
+    // Lays `members` on that row (objects merge member by member, everything else is replaced) and writes the
+    // members named, unchecked: what a test needs that no save would let through, or no save needs.
+    void set_bundle(std::int64_t location, std::string_view table, std::string_view members) {
+        const auto given = boost::json::parse(members).as_object();
+        const auto merged = boost::json::serialize(merge_layer(settings_row(location, table), given));
         tx([&](pqxx::work& tx) {
-            tx.exec(std::format("UPDATE reply_settings SET {} = $2::jsonb WHERE location_id = $1", part),
-                    pqxx::params{location, boost::json::serialize(merged)})
-                .no_rows();
+            for (const auto& member : given) {
+                const std::string_view name = member.key();
+                // A list or a variant reaches its column as the row type reads it from JSON.
+                tx.exec(std::format("UPDATE {0} SET {1} = (jsonb_populate_record(NULL::{0}, $2::jsonb)).{1} WHERE location_id = $1", table, name),
+                        pqxx::params{location, merged})
+                    .no_rows();
+            }
         });
     }
-    void set_voice(std::int64_t location, std::string_view members) { set_part(location, "voice", members); }
-    // The policy's rules (delay, window, what is routed to auto reply).
-    void set_policy(std::int64_t location, std::string_view rules) { set_part(location, "policy", rules); }
+    void set_content(std::int64_t location, std::string_view members) { set_bundle(location, "content_settings", members); }
+    void set_reply(std::int64_t location, std::string_view members) { set_bundle(location, "reply_settings", members); }
 
     // What a seed of a new knowledge base version does to the tables, in this
     // test's own copy of the database: the change, and a new version. The

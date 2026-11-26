@@ -141,9 +141,9 @@ OptString review_obstacle(const DraftState& state) {
     return std::nullopt;
 }
 
-// Why a draft's text can't be checked: its location has no readable reply settings.
+// Why a draft's text can't be checked: its location has no readable settings.
 std::string no_settings(const DraftState& state) {
-    return state.synced ? "The reply settings of the review's location can't be read." : "The review's location is no longer synced.";
+    return state.synced ? "The settings of the review's location can't be read." : "The review's location is no longer synced.";
 }
 
 OptString switch_obstacle(const DraftState& state) {
@@ -174,9 +174,9 @@ Result<model::ReplyDraft> edit_draft(pqxx::transaction_base& tx, audit::Writer& 
         audit.nothing_changed();
         return *get_draft(tx, draft_id);
     }
-    const auto settings = stored_reply_settings(tx, state->location_id);
+    const auto settings = stored_settings(tx, state->location_id);
     if (!settings) return conflict("review_not_postable", no_settings(*state));
-    const auto report = domain::run_reply_checks(cleaned, {.voice = settings->voice, .target_language = state->language, .mode = state->mode});
+    const auto report = domain::run_reply_checks(cleaned, {.settings = *settings, .target_language = state->language, .mode = state->mode});
     tx.exec("UPDATE reply_drafts SET text = $2, checks = $3::jsonb, edited_by = $4, edited_at = $5::timestamptz, "
             "status_reason = NULL, updated_at = $5::timestamptz WHERE id = $1",
             pqxx::params{draft_id, cleaned, boost::json::serialize(boost::json::value_from(report.results)), audit.user_id(),
@@ -204,10 +204,10 @@ Result<model::ReplyDraft> approve_draft(pqxx::transaction_base& tx, audit::Write
     if (text::trim(state->text).empty()) return conflict("draft_empty", "The draft has no text to post.");
     if (state->text.size() > kMaxReplyBytes) return conflict("checks_failed", "The text is longer than Google allows for a reply.");
 
-    const auto settings = stored_reply_settings(tx, state->location_id);
+    const auto settings = stored_settings(tx, state->location_id);
     if (!settings) return conflict("review_not_postable", no_settings(*state));
-    // Run now, not read from the row: the voice may have changed since the draft was checked.
-    const auto report = domain::run_reply_checks(state->text, {.voice = settings->voice, .target_language = state->language, .mode = state->mode});
+    // Run now, not read from the row: the settings may have changed since the draft was checked.
+    const auto report = domain::run_reply_checks(state->text, {.settings = *settings, .target_language = state->language, .mode = state->mode});
     if (!report.passed()) {
         return conflict("checks_failed", std::format("The reply fails a check ({}). Edit the text first.", report.failed_names()));
     }
@@ -250,6 +250,18 @@ Result<model::ReplyDraft> reject_draft(pqxx::transaction_base& tx, audit::Writer
 
 namespace {
 
+// The reply settings that decide whether and when a draft auto replies, in this order: the snapshot's "policy",
+// which the claim compares with the one taken when the draft was scheduled.
+boost::json::object auto_reply_policy(const domain::ReplySettings& reply) {
+    return {{"auto_reply_positive", reply.auto_reply_positive},
+            {"auto_reply_rating_only", reply.auto_reply_rating_only},
+            {"auto_reply_min_stars", reply.auto_reply_min_stars},
+            {"auto_reply_delay_min_minutes", reply.auto_reply_delay_min_minutes},
+            {"auto_reply_delay_max_minutes", reply.auto_reply_delay_max_minutes},
+            {"auto_reply_window_start", reply.auto_reply_window_start},
+            {"auto_reply_window_end", reply.auto_reply_window_end}};
+}
+
 // Whether a draft may be posted without a person, as things are now.
 struct AutoVerdict {
     bool ok = false;
@@ -275,7 +287,7 @@ AutoVerdict no(AutoVerdict verdict, std::string reason, bool by_configuration = 
 // Every condition of an auto reply, read in the caller's transaction. Called
 // when the pipeline has stored the draft (`at_claim` false) and again by the
 // claim, just before the PUT, so that a switch flipped, a pause, an edit or
-// a changed voice in between stops the post. The review's own state (still
+// changed settings in between stop the post. The review's own state (still
 // there, unchanged, no reply, no open post) is the claim's business, as for
 // an approved draft.
 AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core::TimePoint now, bool at_claim) {
@@ -352,11 +364,11 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
     if (row[26].as<bool>()) return no(std::move(verdict), "This review already had a draft or an attempt to post, so a person decides.");
     if (row[7].is_null() || !row[7].as<bool>()) return no(std::move(verdict), "The review was analyzed again after this draft was written.");
 
-    // 4. The reply checks, run now: the voice may have changed since the draft was checked.
-    const auto settings = stored_reply_settings(tx, verdict.location_id);
-    if (!settings) return no(std::move(verdict), "The reply settings of the review's location can't be read.");
+    // 4. The reply checks, run now: the settings may have changed since the draft was checked.
+    const auto settings = stored_settings(tx, verdict.location_id);
+    if (!settings) return no(std::move(verdict), "The settings of the review's location can't be read.");
     const auto report = domain::run_reply_checks(
-        text, {.voice = settings->voice, .target_language = row[5].as<std::string>(), .mode = row[4].as<std::string>()});
+        text, {.settings = *settings, .target_language = row[5].as<std::string>(), .mode = row[4].as<std::string>()});
     if (!report.passed()) return no(std::move(verdict), std::format("The reply fails a check ({}).", report.failed_names()));
 
     // 5. The go-live test (D-074): this location's configuration, as it is
@@ -367,7 +379,7 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
     if (!go_live.passed) return no(std::move(verdict), go_live.reason);
 
     // 6. Timing.
-    const auto timing = domain::posting_timing(settings->policy);
+    const auto timing = domain::posting_timing(settings->reply);
     if (!timing) return no(std::move(verdict), std::format("The reply policy's timing can't be used: {}.", timing.error()));
     verdict.timing = *timing;
     if (timing->window) {
@@ -389,7 +401,7 @@ AutoVerdict auto_verdict(pqxx::transaction_base& tx, std::int64_t draft_id, core
                         // What was tested (D-074), next to which rules allowed the post.
                         {"fingerprint", go_live.fingerprint},
                         {"prompt_version", row[6].as<std::string>()},
-                        {"policy", boost::json::value_from(settings->policy)},
+                        {"policy", auto_reply_policy(settings->reply)},
                         {"auto_posting", boost::json::object{{"five_star", five_star},
                                                              {"four_star", four_star},
                                                              {"daily_cap", cap},

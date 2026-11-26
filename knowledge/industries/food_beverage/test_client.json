@@ -1,20 +1,11 @@
 {
   "name": "Golden Harbor Buffet",
   "template": "polished_hospitality",
-  "voice": {
-    "reply_name": "Golden Harbor Buffet",
-    "business_facts": [
-      "An all-you-can-eat buffet in a suburban shopping plaza, which opened recently in a renovated space that used to be a different buffet.",
-      "The buffet is mostly Chinese and pan-Asian food with sushi, seafood, dim sum, a noodle soup station and desserts.",
-      "Lunch and dinner are priced differently, with seniors and children priced separately."
-    ],
-    "emoji": {
-      "allowed": false,
-      "max": 0,
-      "preferred": []
-    },
-    "promos_allowed": false,
-    "contact_allowed": false,
+  "content": {
+    "business_facts": "- An all-you-can-eat buffet in a suburban shopping plaza, which opened recently in a renovated space that used to be a different buffet.\n- The buffet is mostly Chinese and pan-Asian food with sushi, seafood, dim sum, a noodle soup station and desserts.\n- Lunch and dinner are priced differently, with seniors and children priced separately.",
+    "emoji_allowed": false,
+    "emoji_max": 0,
+    "emoji_preferred": [],
     "words_to_avoid": [
       "cheap",
       "sorry for any inconvenience",
@@ -27,18 +18,19 @@
       "For complaints, apologise for the specific issue (restocking, temperature, cleanliness, seasoning) and say the team will review it; do not promise a specific fix or date.",
       "Do not address the reviewer by name; we never know it."
     ],
-    "example_replies": [
-      "Thank you for the kind review. We're glad the sushi and the seafood were to your liking, and we look forward to your next visit.",
-      "Thank you for your honest feedback. We apologize that the dim sum station sat empty during your visit. We will review this with our team."
-    ]
+    "chinese_variant": "zh-CN"
   },
-  "localization": {
+  "reply": {
     "reply_languages": [
       "en",
       "zh",
       "es"
     ],
-    "chinese_script": "simplified"
-  },
-  "policy": {}
+    "example_replies": [
+      "Thank you for the kind review. We're glad the sushi and the seafood were to your liking, and we look forward to your next visit.",
+      "Thank you for your honest feedback. We apologize that the dim sum station sat empty during your visit. We will review this with our team."
+    ],
+    "promos_allowed": false,
+    "contact_allowed": false
+  }
 }

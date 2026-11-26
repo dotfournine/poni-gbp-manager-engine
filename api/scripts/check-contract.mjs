@@ -281,7 +281,7 @@ try {
     check(`PATCH ${path} (no change)`, "/api/locations/{id}", "PATCH", unchanged);
     if (unchanged.response.headers.get("etag") !== read) fail(`PATCH ${path} (no change)`, "a change that changes nothing answered with another ETag");
     // Its own fields (D-102), sent as the seed left them: a change that changes nothing.
-    const own = { enabled: true, industry_key: "wellness", analyze_from: null, audience: "" };
+    const own = { enabled: true, industry_key: "wellness", analyze_from: null };
     const same = await call("PATCH", path, { body: own, headers: ifMatch(read) });
     check(`PATCH ${path} (its own fields, as they are)`, "/api/locations/{id}", "PATCH", same);
     if (same.status !== 200 || !same.json?.enabled || same.json?.industry_key !== "wellness") fail(`PATCH ${path}`, `the seeded location is not switched on with its industry: ${same.text.slice(0, 200)}`);
@@ -512,39 +512,62 @@ try {
   expectStatus("GET /api/knowledge/industries/no_such_industry/corpus", await call("GET", "/api/knowledge/industries/no_such_industry/corpus"), 404, "not_found");
   expectStatus("PATCH /api/knowledge", await call("PATCH", "/api/knowledge", { body: {} }), 405, "method_not_allowed");
 
-  // A location's reply settings (D-093): its own complete voice, localization and policy. A save sends all of
-  // them; here they are read, saved back as they are, saved with a change, and put back. Every location has
-  // settings from its discovery (D-102), and only the seeded location's are saved: between the change and the
-  // putting back, a real location's replies would be drafted under the check's name, and a go-live test
-  // running there would be cancelled and started again (D-077).
-  const settingsSpec = "/api/locations/{id}/reply-settings";
-  if (seededLocation) {
-    const path = `/api/locations/${seededLocation.id}/reply-settings`;
+  // A location's content and reply settings (D-107): two complete bundles, each sent whole with If-Match (D-108).
+  // Here each is read, saved back as it is, saved with a change, and put back. Every location has both from its
+  // discovery (D-102), and only the seeded location's are saved: between the change and the putting back, a real
+  // location's replies would be drafted under the check's words, and a go-live test running there would be
+  // cancelled and started again (D-077).
+  const bundles = [
+    {
+      name: "content-settings",
+      change: (b) => ({ ...b, base_style: "Contract Check" }),
+      changed: (json) => json?.base_style === "Contract Check",
+      outside: (b) => ({ ...b, emoji_max: 99 }),
+      leftOut: "chinese_variant",
+    },
+    {
+      name: "reply-settings",
+      change: (b) => ({ ...b, signature: "Contract Check" }),
+      changed: (json) => json?.signature === "Contract Check",
+      outside: (b) => ({ ...b, signature: "two\nlines" }),
+      leftOut: "signature",
+    },
+  ];
+  for (const bundle of bundles) {
+    const settingsSpec = `/api/locations/{id}/${bundle.name}`;
+    if (!seededLocation) {
+      if (requireData) fail(`PUT ${settingsSpec}`, "the seeded location is missing, so there are no settings to save; was the seed applied?");
+      else console.log(`skip  ${bundle.name}: this database has no seeded location, and the check saves no other location's settings`);
+      continue;
+    }
+    const path = `/api/locations/${seededLocation.id}/${bundle.name}`;
     const stored = await call("GET", path);
     check(`GET ${path}`, settingsSpec, "GET", stored);
-    if (stored.status === 200) {
-      const { voice, localization, policy } = stored.json;
-      const save = async (what, body, expected) => {
-        const got = await call("PUT", path, { body });
-        check(`PUT ${path} (${what})`, settingsSpec, "PUT", got);
-        if (got.status !== expected) fail(`PUT ${path} (${what})`, `expected ${expected}, got ${got.status}: ${got.text.slice(0, 200)}`);
-        return got;
-      };
-      await save("no change", { voice, localization, policy }, 200);
-      const changed = await save("a new name", { voice: { ...voice, reply_name: "Contract Check" }, localization, policy }, 200);
-      if (changed.json?.voice?.reply_name !== "Contract Check") fail(`PUT ${path}`, "the answer does not hold what was saved");
-      await save("a value outside its limits", { voice: { ...voice, emoji: { ...voice.emoji, max: 99 } }, localization, policy }, 400);
-      await save("a field left out", { voice: { ...voice, sign_off: undefined }, localization, policy }, 400);
-      await save("put back", { voice, localization, policy }, 200);
-    } else {
-      fail(`GET ${path}`, `every location has reply settings, got ${stored.status}: ${stored.text.slice(0, 200)}`);
+    if (stored.status !== 200 || !stored.response.headers.get("etag")) {
+      fail(`GET ${path}`, `every location has its ${bundle.name} with an ETag, got ${stored.status}: ${stored.text.slice(0, 200)}`);
+      continue;
     }
-  } else if (requireData) {
-    fail(`PUT ${settingsSpec}`, "the seeded location is missing, so there are no settings to save; was the seed applied?");
-  } else {
-    console.log("skip  reply settings: this database has no seeded location, and the check saves no other location's settings");
+    const original = stored.json;
+    const save = async (what, body, expected) => {
+      const got = await call("PUT", path, { body, headers: ifMatch(await etagOf(path)) });
+      check(`PUT ${path} (${what})`, settingsSpec, "PUT", got);
+      if (got.status !== expected) fail(`PUT ${path} (${what})`, `expected ${expected}, got ${got.status}: ${got.text.slice(0, 200)}`);
+      return got;
+    };
+    const unchanged = await save("no change", original, 200);
+    if (unchanged.response.headers.get("etag") !== stored.response.headers.get("etag")) {
+      fail(`PUT ${path} (no change)`, "a save that changes nothing answered with another ETag");
+    }
+    const changed = await save("a change", bundle.change(original), 200);
+    if (!bundle.changed(changed.json)) fail(`PUT ${path}`, "the answer does not hold what was saved");
+    await save("a value outside its limits", bundle.outside(original), 400);
+    await save("a member left out", { ...original, [bundle.leftOut]: undefined }, 400);
+    await save("put back", original, 200);
+    if (bundle.name === "content-settings") await expectGuarded(settingsSpec, "PUT", path, original);
   }
-  expectStatus("GET /api/locations/999999999/reply-settings", await call("GET", "/api/locations/999999999/reply-settings"), 404, "not_found");
+  for (const name of ["content-settings", "reply-settings"]) {
+    expectStatus(`GET /api/locations/999999999/${name}`, await call("GET", `/api/locations/999999999/${name}`), 404, "not_found");
+  }
   const aiTag = await etagOf("/api/ai/settings");
   const aiUnchanged = await call("PATCH", "/api/ai/settings", { body: {}, headers: ifMatch(aiTag) });
   check("PATCH /api/ai/settings (no change)", "/api/ai/settings", "PATCH", aiUnchanged);

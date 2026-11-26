@@ -42,18 +42,21 @@ boost::json::object model_json(const ModelSetup& setup) {
 }
 
 // The languages and scripts a reply can be written in with these settings.
-std::vector<std::pair<std::string, std::optional<std::string>>> targets(const Localization& localization) {
-    std::set<std::string> languages(localization.reply_languages.begin(), localization.reply_languages.end());
-    languages.insert(localization.fallback_language);
+std::vector<std::pair<std::string, std::optional<std::string>>> targets(const ResolvedSettings& settings) {
+    std::set<std::string> languages(settings.reply.reply_languages.begin(), settings.reply.reply_languages.end());
+    languages.insert(settings.reply.fallback_language);
+    // A set variant fixes the script; none follows the review, so both scripts can be asked for.
+    const auto& variant = settings.content.chinese_variant;
+    const bool simplified = !variant || *variant == "zh-CN";
+    const bool traditional = !variant || *variant != "zh-CN";
     std::vector<std::pair<std::string, std::optional<std::string>>> out;
     for (const auto& language : languages) {
         if (language != "zh") {
             out.emplace_back(language, std::nullopt);
             continue;
         }
-        // "match" follows the review, so both scripts can be asked for.
-        if (localization.chinese_script != "traditional") out.emplace_back(language, "Hans");
-        if (localization.chinese_script != "simplified") out.emplace_back(language, "Hant");
+        if (simplified) out.emplace_back(language, "Hans");
+        if (traditional) out.emplace_back(language, "Hant");
     }
     return out;
 }
@@ -64,7 +67,7 @@ Fingerprint fingerprint(const FingerprintInput& input) {
     boost::json::object prompts;
     prompts["analyzer"] =
         short_hash(analyzer_messages(input.business_name, input.industry, 5, kPlaceholderReview, "").front().content);
-    for (const auto& [language, script] : targets(input.settings.localization)) {
+    for (const auto& [language, script] : targets(input.settings)) {
         for (const auto& sample : kModes) {
             const bool rating_only = sample.mode == kModeRatingOnly || sample.mode == kModeRatingOnlyLow;
             const GeneratorInput writer{.business_name = input.business_name,
@@ -83,17 +86,18 @@ Fingerprint fingerprint(const FingerprintInput& input) {
         }
     }
 
-    const auto& voice = input.settings.voice;
+    const auto& content = input.settings.content;
+    const auto& reply = input.settings.reply;
     Fingerprint out;
     out.inputs = {{"gate", kGateVersion},
                   {"prompts", std::move(prompts)},
                   {"analyzer", model_json(input.analyzer)},
                   {"writer", model_json(input.writer)},
-                  // What run_reply_checks reads of the voice.
-                  {"checks", boost::json::object{{"length", boost::json::value_from(voice.length)},
-                                                 {"emoji_allowed", voice.emoji.allowed},
-                                                 {"emoji_max", voice.emoji.max},
-                                                 {"contact_allowed", voice.contact_allowed}}}};
+                  // What run_reply_checks reads of the settings.
+                  {"checks", boost::json::object{{"length", boost::json::value_from(reply.length)},
+                                                 {"emoji_allowed", content.emoji_allowed},
+                                                 {"emoji_max", content.emoji_max},
+                                                 {"contact_allowed", reply.contact_allowed}}}};
     // Boost.JSON keeps an object's members in the order they were added, and
     // every member above is added in a fixed order (std::map and std::set
     // iterate sorted), so equal inputs serialize to equal text.
@@ -101,10 +105,10 @@ Fingerprint fingerprint(const FingerprintInput& input) {
     return out;
 }
 
-AutoReplyScope scope_of(const PolicyRules& policy) {
-    return {.positive = policy.auto_post_positive,
-            .rating_only = policy.auto_post_rating_only,
-            .min_stars = static_cast<int>(std::clamp<std::int64_t>(policy.auto_post_min_stars, 4, 5))};
+AutoReplyScope scope_of(const ReplySettings& reply) {
+    return {.positive = reply.auto_reply_positive,
+            .rating_only = reply.auto_reply_rating_only,
+            .min_stars = static_cast<int>(std::clamp<std::int64_t>(reply.auto_reply_min_stars, 4, 5))};
 }
 
 bool may_auto_reply(std::string_view category) { return category == kCaseControl || category == kCaseReal; }

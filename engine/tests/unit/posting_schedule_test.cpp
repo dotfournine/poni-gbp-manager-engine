@@ -1,6 +1,7 @@
 // When an auto reply goes out: the random delay and the posting window in a
 // location's own time zone, through both daylight-saving changes.
 
+#include "domain/dates.hpp"
 #include "domain/posting_schedule.hpp"
 
 #include <gtest/gtest.h>
@@ -140,28 +141,28 @@ TEST(PostingSchedule, TheDelayComesFirstAndThenTheWindow) {
     EXPECT_FALSE(post_time(now, timing, "", 0.3)) << "a window needs a zone";
 }
 
-TEST(PostingSchedule, ThePolicysTimingIsReadAndRefusedWhenItIsNonsense) {
-    PolicyRules policy;
-    EXPECT_FALSE(posting_timing(policy).value().window) << "the defaults: no delay, no window";
+TEST(PostingSchedule, TheReplySettingsTimingIsReadAndRefusedWhenItIsNonsense) {
+    ReplySettings reply;
+    EXPECT_FALSE(posting_timing(reply).value().window) << "the defaults: no delay, no window";
 
-    policy.auto_post_delay_min_minutes = 20;
-    policy.auto_post_delay_max_minutes = 120;
-    policy.auto_post_window_start = "09:00";
-    policy.auto_post_window_end = "21:00";
-    const auto timing = posting_timing(policy);
+    reply.auto_reply_delay_min_minutes = 20;
+    reply.auto_reply_delay_max_minutes = 120;
+    reply.auto_reply_window_start = "09:00";
+    reply.auto_reply_window_end = "21:00";
+    const auto timing = posting_timing(reply);
     ASSERT_TRUE(timing);
     EXPECT_EQ(timing->delay_max_minutes, 120);
     EXPECT_EQ(timing->window->start, 9 * 60);
     EXPECT_EQ(timing->window->end, 21 * 60);
 
     // A pair that does not fit: a stored row is not a save's word, so the use asks again.
-    policy.auto_post_delay_min_minutes = 200;
-    EXPECT_FALSE(posting_timing(policy));
-    policy.auto_post_delay_min_minutes = 20;
-    policy.auto_post_window_end = "";
-    EXPECT_FALSE(posting_timing(policy));
-    policy.auto_post_window_end = "09:00";
-    EXPECT_FALSE(posting_timing(policy));
+    reply.auto_reply_delay_min_minutes = 200;
+    EXPECT_FALSE(posting_timing(reply));
+    reply.auto_reply_delay_min_minutes = 20;
+    reply.auto_reply_window_end = "";
+    EXPECT_FALSE(posting_timing(reply));
+    reply.auto_reply_window_end = "09:00";
+    EXPECT_FALSE(posting_timing(reply));
 
     EXPECT_EQ(parse_clock_time("00:00"), 0);
     EXPECT_EQ(parse_clock_time("23:59"), 23 * 60 + 59);

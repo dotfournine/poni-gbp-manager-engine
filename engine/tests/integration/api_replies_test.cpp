@@ -777,7 +777,7 @@ TEST_F(RepliesApi, AScheduledReplyCanBeTakenBackThroughTheApi) {
     // Switched on in this test's schema, with a delay so the reply is still waiting.
     exec("UPDATE locations SET auto_reply_enabled = true, auto_reply_five_star = true");
     certify(spa_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto draft_id = draft_for("r1");
     const auto target = "/api/drafts/" + std::to_string(draft_id);
     ASSERT_EQ(read(target).at("status").as_string(), "scheduled");
@@ -823,8 +823,6 @@ TEST_F(RepliesApi, APersonResumesAPausedLocationAndAPauseOnEverything) {
     EXPECT_EQ(post("/api/locations/999999/auto-posting/resume").status, 404u);
 }
 
-// A location that lost its client lost its reply settings with it (D-093): a draft that waited there can't be
-// checked against a voice any more, and is refused for what is the matter, not for unreadable settings.
 // The location keeps its settings while it is switched off (D-102), so a draft can still be edited; it can't be approved.
 TEST_F(RepliesApi, ADraftOfALocationThatIsSwitchedOffCannotBeApproved) {
     posting(true);
@@ -839,26 +837,26 @@ TEST_F(RepliesApi, ADraftOfALocationThatIsSwitchedOffCannotBeApproved) {
 }
 
 TEST_F(RepliesApi, ThePolicyCarriesTheDelayAndTheWindow) {
-    const auto stored = read(settings_path(spa_)).at("policy");
-    EXPECT_EQ(stored.at("auto_post_delay_min_minutes").as_int64(), 0);
-    EXPECT_EQ(stored.at("auto_post_window_start").as_string(), "");
+    const auto stored = read(reply_settings_path(spa_));
+    EXPECT_EQ(stored.at("auto_reply_delay_min_minutes").as_int64(), 0);
+    EXPECT_EQ(stored.at("auto_reply_window_start").as_string(), "");
 
-    const auto saved = save_settings(spa_, "policy", R"({"auto_post_delay_min_minutes": 20, "auto_post_delay_max_minutes": 120,
-                                                          "auto_post_window_start": "09:00", "auto_post_window_end": "21:00"})");
+    const auto saved = save_reply_settings(spa_, R"({"auto_reply_delay_min_minutes": 20, "auto_reply_delay_max_minutes": 120,
+                                                          "auto_reply_window_start": "09:00", "auto_reply_window_end": "21:00"})");
     ASSERT_EQ(saved.status, 200u) << saved.body;
     const auto settings = auto_posting_of(spa_);
     EXPECT_EQ(settings.at("delay_max_minutes").as_int64(), 120);
     EXPECT_EQ(settings.at("window_end").as_string(), "21:00");
     EXPECT_THAT(std::string(settings.at("timing_problem").as_string()), HasSubstr("time zone"));
 
-    const auto message = [&](std::string_view rules) { return error_message(save_settings(spa_, "policy", rules)); };
-    EXPECT_THAT(message(R"({"auto_post_delay_min_minutes": 200, "auto_post_delay_max_minutes": 100})"), HasSubstr("minimum is greater"));
-    EXPECT_THAT(message(R"({"auto_post_delay_max_minutes": 5000})"), HasSubstr("between 0 and 1440"));
-    EXPECT_THAT(message(R"({"auto_post_window_start": "9am", "auto_post_window_end": "21:00"})"), HasSubstr("09:00"));
-    EXPECT_THAT(message(R"({"auto_post_window_start": "09:00", "auto_post_window_end": ""})"), HasSubstr("only one end"));
-    EXPECT_THAT(message(R"({"auto_post_window_start": "09:00", "auto_post_window_end": "09:00"})"), HasSubstr("not a span of time"));
+    const auto message = [&](std::string_view rules) { return error_message(save_reply_settings(spa_, rules)); };
+    EXPECT_THAT(message(R"({"auto_reply_delay_min_minutes": 200, "auto_reply_delay_max_minutes": 100})"), HasSubstr("minimum is greater"));
+    EXPECT_THAT(message(R"({"auto_reply_delay_max_minutes": 5000})"), HasSubstr("between 0 and 1440"));
+    EXPECT_THAT(message(R"({"auto_reply_window_start": "9am", "auto_reply_window_end": "21:00"})"), HasSubstr("09:00"));
+    EXPECT_THAT(message(R"({"auto_reply_window_start": "09:00", "auto_reply_window_end": ""})"), HasSubstr("only one end"));
+    EXPECT_THAT(message(R"({"auto_reply_window_start": "09:00", "auto_reply_window_end": "09:00"})"), HasSubstr("not a span of time"));
     // An empty pair removes the window.
-    EXPECT_EQ(save_settings(spa_, "policy", R"({"auto_post_window_start": "", "auto_post_window_end": ""})").status, 200u);
+    EXPECT_EQ(save_reply_settings(spa_, R"({"auto_reply_window_start": "", "auto_reply_window_end": ""})").status, 200u);
     EXPECT_TRUE(auto_posting_of(spa_).at("timing_problem").is_null());
 }
 

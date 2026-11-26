@@ -176,10 +176,22 @@ def test_a_test_client_names_a_template_that_exists(kb):
 
 
 def test_the_defaults_are_complete(kb):
-    kb.edit("defaults.json", lambda d: d["voice"].pop("sign_off"))
-    only(problems(kb), "defaults.json", "sign_off")
-    kb.edit("defaults.json", lambda d: d["voice"].update({"sign_off": ""}) or d["voice"]["length"].pop("es"))
-    only(problems(kb), "voice.length: the defaults need limits for 'es'")
+    kb.edit("defaults.json", lambda d: d["reply"].pop("signature"))
+    only(problems(kb), "defaults.json", "signature")
+    kb.edit("defaults.json", lambda d: d["reply"].update({"signature": ""}) or d["reply"]["length"].pop("es"))
+    only(problems(kb), "reply.length: the defaults need limits for 'es'")
+
+
+def test_a_layer_is_held_to_the_bundles_limits(kb):
+    kb.edit(f"{FOOD}/test_client.json", lambda c: c["reply"].update({"signature": "Thanks,\nthe team"}))
+    only(problems(kb), f"{FOOD}/test_client.json", "reply.signature")
+    kb.edit(f"{FOOD}/test_client.json", lambda c: c["reply"].update({"signature": ""}))
+    kb.edit(f"{FOOD}/test_client.json", lambda c: c["content"].update({"chinese_variant": "simplified"}))
+    only(problems(kb), f"{FOOD}/test_client.json", "content.chinese_variant")
+    kb.edit(f"{FOOD}/test_client.json", lambda c: c["content"].update({"chinese_variant": None}))
+    kb.edit(f"{FOOD}/test_client.json", lambda c: c["reply"].update({"auto_reply_window_start": "09:00"}))
+    kb.edit(f"{FOOD}/test_client.json", lambda c: c["reply"].update({"auto_reply_window_end": "09:00"}))
+    only(problems(kb), "reply: the posting window's start and end must differ")
 
 
 def test_a_default_model_needs_a_price(kb):
@@ -202,8 +214,8 @@ def test_the_report_summary_has_a_default_provider_and_a_priced_model(kb):
 
 
 def test_a_format_these_scripts_do_not_read(kb):
-    kb.edit("manifest.json", lambda m: m.update(format=2))
-    only(problems(kb), "format 2 is not the format these scripts read (1)")
+    kb.edit("manifest.json", lambda m: m.update(format=1))
+    only(problems(kb), "format 1 is not the format these scripts read (2)")
 
 
 def test_check_says_what_it_found(kb, capsys):

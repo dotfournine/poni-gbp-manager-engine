@@ -108,7 +108,7 @@ protected:
         const auto answer = analyzer_answer(c, setup.industry, analyzer);
         Outcome out;
         out.analysis = build_analysis(setup.industry, c.text, AnalyzerAnswer{.json = &answer, .error = {}});
-        out.plan = plan_draft(out.analysis, c.stars, true, setup.settings.localization);
+        out.plan = plan_draft(out.analysis, c.stars, true, setup.settings);
         out.draft = finish_draft(out.analysis, out.plan, c.stars, true, generator_answer(c, out.plan, generator), setup.settings);
         return out;
     }

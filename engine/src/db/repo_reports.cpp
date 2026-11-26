@@ -4,7 +4,6 @@
 #include "db/repo_knowledge.hpp"
 #include "domain/dates.hpp"
 #include "domain/posting_schedule.hpp"
-#include "domain/reply_settings.hpp"
 #include "domain/report_html.hpp"
 #include "jobs/queue.hpp"
 

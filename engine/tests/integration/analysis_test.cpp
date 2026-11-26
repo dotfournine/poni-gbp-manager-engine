@@ -85,14 +85,14 @@ constexpr std::string_view kHoldingReply = R"({
 TEST_F(Analysis, BothLocationsHaveAnIndustryAndAVoiceOfTheirOwn) {
     EXPECT_EQ(value<std::string>("SELECT industry_key FROM locations WHERE id = " + std::to_string(spa_)), "wellness");
     EXPECT_EQ(value<std::string>("SELECT industry_key FROM locations WHERE id = " + std::to_string(buffet_)), "food_beverage");
-    EXPECT_EQ(count("reply_settings"), 2) << "one complete row per location, and nothing for a client";
+    EXPECT_EQ(count("content_settings"), 2) << "one complete row of each bundle per location, and nothing for a client";
+    EXPECT_EQ(count("reply_settings"), 2);
     pqxx::work tx{conn()};
-    const auto settings = repo::reply_settings(tx, spa_).value();
-    // The voice template the business took was copied: its line for the writer is part of the voice.
-    EXPECT_THAT(settings.voice.base_style, testing::StartsWith("Warm and casual. "));
-    EXPECT_EQ(settings.voice.reply_name, "Willow Moon Head Spa");
-    EXPECT_EQ(settings.localization.chinese_region, "taiwan");
-    EXPECT_EQ(settings.policy.auto_post_min_stars, 4);
+    const auto settings = repo::stored_settings(tx, spa_).value();
+    // The voice template the business took was copied: its line for the writer is part of the content settings.
+    EXPECT_THAT(settings.content.base_style, testing::StartsWith("Warm and casual. "));
+    EXPECT_FALSE(settings.content.chinese_variant) << "the pack sets none";
+    EXPECT_EQ(settings.reply.auto_reply_min_stars, 4);
 }
 
 TEST_F(Analysis, AnUnrepliedReviewGetsAnAnalysisADraftAndARoute) {
@@ -125,10 +125,10 @@ TEST_F(Analysis, AnUnrepliedReviewGetsAnAnalysisADraftAndARoute) {
     EXPECT_EQ(inputs.at("review").at("text").as_string(), "Lovely head spa with Eva, so relaxing!");
     EXPECT_EQ(inputs.at("mode").as_string(), "positive");
     EXPECT_EQ(inputs.at("target_language").as_string(), "en");
-    EXPECT_EQ(inputs.at("voice").at("reply_name").as_string(), "Willow Moon Head Spa");
-    EXPECT_EQ(inputs.at("policy").at("auto_post_min_stars").as_int64(), 4);
-    EXPECT_THAT(std::string(inputs.at("voice").at("base_style").as_string()), testing::StartsWith("Warm and casual. "));
-    EXPECT_FALSE(inputs.contains("template_key")) << "a voice holds a copy of its template, not a reference";
+    EXPECT_EQ(inputs.at("business_name").as_string(), "LU DREAM SPA 路梦养生馆 - Chelsea");
+    EXPECT_EQ(inputs.at("reply").at("auto_reply_min_stars").as_int64(), 4);
+    EXPECT_THAT(std::string(inputs.at("content").at("base_style").as_string()), testing::StartsWith("Warm and casual. "));
+    EXPECT_FALSE(inputs.contains("template_key")) << "the settings hold a copy of their template, not a reference";
 
     // Nothing was posted: there is no way to, and the review still has no reply.
     EXPECT_FALSE(stored.has_reply);
@@ -150,10 +150,16 @@ TEST_F(Analysis, ADiscoveredLocationDoesNothingUntilAPersonSwitchesItOnAndNeedsN
         EXPECT_FALSE(listed.items[0].client_id);
         EXPECT_FALSE(listed.items[0].industry_key);
     }
-    EXPECT_TRUE(value<bool>(std::format("SELECT r.voice = d.voice AND r.localization = d.localization AND r.policy = d.policy "
-                                        "FROM reply_settings r CROSS JOIN kb_defaults d WHERE r.location_id = {}",
-                                        soho)))
-        << "its settings are the defaults from the start";
+    EXPECT_TRUE(value<bool>(std::format(
+        "SELECT (to_jsonb(c) - 'location_id' - 'created_at' - 'updated_at') = (to_jsonb(d) - 'id') "
+        "FROM content_settings c CROSS JOIN kb_content_defaults d WHERE c.location_id = {}",
+        soho)))
+        << "its content settings are the defaults from the start";
+    EXPECT_TRUE(value<bool>(std::format(
+        "SELECT (to_jsonb(r) - 'location_id' - 'created_at' - 'updated_at') = (to_jsonb(d) - 'id') "
+        "FROM reply_settings r CROSS JOIN kb_reply_defaults d WHERE r.location_id = {}",
+        soho)))
+        << "its reply settings are the defaults from the start";
 
     const auto full_syncs = std::format("jobs WHERE kind = 'reviews.full_sync' AND (payload->>'location_id')::bigint = {}", soho);
     jobs::Sync sync(db(), clock_, gbp_, queue(), {});
@@ -186,10 +192,9 @@ TEST_F(Analysis, ADiscoveredLocationDoesNothingUntilAPersonSwitchesItOnAndNeedsN
     EXPECT_EQ(analyzed.draft->status, "draft");
 }
 
-// D-102 point 10: a voice without a reply_name names the business by the
-// location's title, whatever client it is grouped under.
-TEST_F(Analysis, AnEmptyReplyNameNamesTheBusinessByTheLocationsTitle) {
-    set_voice(spa_, R"({"reply_name": ""})");
+// D-107 point 5: the business is named by the location's title, whatever
+// client it is grouped under and whatever the pack's business is called.
+TEST_F(Analysis, TheLocationsTitleNamesTheBusiness) {
     const auto id = store(kSpa, "r1", "FIVE", "Lovely head spa!");
     process(id);
     ASSERT_FALSE(llm_.requests.empty());
@@ -225,7 +230,7 @@ TEST_F(Analysis, OnlyStarsAndTheReviewersWordsReachTheModel) {
     EXPECT_EQ(llm_.requests[0].extras.at("enable_thinking").as_bool(), false);
     EXPECT_EQ(llm_.requests[0].provider, "dashscope");
     EXPECT_DOUBLE_EQ(llm_.requests[0].temperature.value(), 0.0);
-    EXPECT_NEAR(llm_.requests[1].temperature.value(), 0.7, 1e-6) << "the writer's temperature is the voice's (D-074)";
+    EXPECT_NEAR(llm_.requests[1].temperature.value(), 0.7, 1e-6) << "the writer's temperature is a reply setting (D-074)";
 }
 
 TEST_F(Analysis, TheOriginalTextIsAnalyzedNotGooglesTranslation) {
@@ -364,9 +369,8 @@ TEST_F(Analysis, TheGeneratorIsAskedForTheReviewersChineseScriptAndItsReplyIsSto
     EXPECT_THAT(llm_.requests[1].messages[0].content, HasSubstr("Traditional Chinese characters only, with natural Taiwan phrasing"));
 }
 
-TEST_F(Analysis, ALocationsSettingsAreItsVoiceAndItsPolicy) {
-    set_policy(spa_, R"({"auto_post_positive": false})");
-    set_voice(spa_, R"({"sign_off": "— The Chelsea team"})");
+TEST_F(Analysis, ALocationsSettingsAreItsContentAndReplySettings) {
+    set_reply(spa_, R"({"auto_reply_positive": false, "signature": "— The Chelsea team"})");
     const auto id = store(kSpa, "r1", "FIVE", "Lovely head spa, so relaxing!");
     process(id);
     EXPECT_THAT(llm_.requests[1].messages[0].content, HasSubstr("Sign off with: \"— The Chelsea team\""));
@@ -586,14 +590,16 @@ TEST_F(Analysis, ReplySettingsThatCannotBeReadFailTheJobInsteadOfBeingSkipped) {
         EXPECT_TRUE(llm_.requests.empty());
         EXPECT_EQ(count("review_analyses"), 0);
     };
-    const auto voice = settings_part(spa_, "voice");
-    set_voice(spa_, R"({"sign_off": 5})");
-    fails_with("the reply settings can't be read: voice: field 'sign_off' has the wrong type");
-    // A field that is missing is not read from the knowledge base's defaults.
-    exec(std::format("UPDATE reply_settings SET voice = voice - 'sign_off' WHERE location_id = {}", spa_));
-    fails_with("the reply settings can't be read: voice: missing field 'sign_off'");
-    exec(std::format("DELETE FROM reply_settings WHERE location_id = {}", spa_));
-    fails_with("the reply settings can't be read: the location has no reply settings");
+    // A limit that is missing from the one document of a row, the lengths, is not read from the knowledge base's defaults.
+    exec(std::format("UPDATE reply_settings SET length = (length - 'en') || jsonb_build_object('en', (length->'en') - 'positive') "
+                     "WHERE location_id = {}",
+                     spa_));
+    fails_with("can't be read: reply settings: ");
+    // And one that is not a length.
+    exec(std::format(R"(UPDATE reply_settings SET length = length || '{{"en": 5}}'::jsonb WHERE location_id = {})", spa_));
+    fails_with("length");
+    exec(std::format("DELETE FROM content_settings WHERE location_id = {}", spa_));
+    fails_with("can't be read: the location has no content settings");
 
     // "Analyze again" is not refused for it as for a location without an industry profile: the job it queues raises the fault.
     EXPECT_TRUE(as_test([&](pqxx::work& tx, audit::Writer& audit) { return repo::request_analysis(tx, audit, id); }).has_value());
@@ -788,10 +794,9 @@ TEST_F(Analysis, TheSeededTablesHoldWhatTheOfflineSuiteReadsFromTheFiles) {
     }
     // The fixture made each client its pack's made-up business through the repository; the suite builds it from the files.
     for (const auto& [key, location] : {std::pair{"wellness", spa_}, std::pair{"food_beverage", buffet_}}) {
-        const auto from_db = repo::reply_settings(tx, location).value();
+        const auto from_db = repo::stored_settings(tx, location).value();
         const auto from_files = files.client(key).settings;
-        EXPECT_EQ(boost::json::value_from(from_db.voice), boost::json::value_from(from_files.voice)) << key;
-        EXPECT_EQ(boost::json::value_from(from_db.localization), boost::json::value_from(from_files.localization)) << key;
-        EXPECT_EQ(boost::json::value_from(from_db.policy), boost::json::value_from(from_files.policy)) << key;
+        EXPECT_EQ(boost::json::value_from(from_db.content), boost::json::value_from(from_files.content)) << key;
+        EXPECT_EQ(boost::json::value_from(from_db.reply), boost::json::value_from(from_files.reply)) << key;
     }
 }

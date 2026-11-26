@@ -115,14 +115,16 @@ TEST_F(Api, DeletingAClientUnlinksItsLocationsAndChangesNothingElse) {
                   .status,
               200u);
     ASSERT_EQ(patch_current(std::format("/api/locations/{}", buffet), std::format(R"({{"client_id": {}}})", client)).status, 200u);
-    ASSERT_EQ(save_settings(spa, "voice", R"({"reply_name": "Willow Moon Head Spa"})").status, 200u);
+    ASSERT_EQ(save_content_settings(spa, R"({"base_style": "Willow Moon house style"})").status, 200u);
     // A report of the location: a row that named the client before D-102, so that the delete failed on it.
     const auto made = post(std::format("/api/locations/{}/reports", spa), R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})");
     ASSERT_EQ(made.status, 201u) << made.body;
     const auto report = json(made).at("id").as_int64();
     // The location and its settings, without the client they name.
     const auto without_the_client = [&](std::int64_t location) {
-        boost::json::object out{{"location", read(std::format("/api/locations/{}", location))}, {"settings", read(settings_path(location))}};
+        boost::json::object out{{"location", read(std::format("/api/locations/{}", location))},
+                                {"content", read(content_settings_path(location))},
+                                {"reply", read(reply_settings_path(location))}};
         for (auto& [part, value] : out) {
             value.as_object().erase("client_id");
             value.as_object().erase("client_name");
@@ -321,8 +323,8 @@ TEST_F(Api, LocationsAreGroupedUnderClientsAndTheLinkChangesNothingElse) {
     EXPECT_EQ(read("/api/locations").at("total").as_int64(), 2);
     EXPECT_EQ(read("/api/locations?linked=false").at("total").as_int64(), 2);
     // A location the engine works on, with settings and auto reply of its own.
-    ASSERT_EQ(patch_current(target, R"({"enabled": true, "industry_key": "wellness", "audience": "Office workers"})").status, 200u);
-    ASSERT_EQ(save_settings(spa, "voice", R"({"reply_name": "Willow Moon Head Spa"})").status, 200u);
+    ASSERT_EQ(patch_current(target, R"({"enabled": true, "industry_key": "wellness"})").status, 200u);
+    ASSERT_EQ(save_content_settings(spa, R"({"base_style": "Willow Moon house style", "audience": "Office workers"})").status, 200u);
     const auto on = patch(target + "/auto-posting", R"({"enabled": true, "five_star": true, "time_zone": "America/New_York"})");
     ASSERT_EQ(on.status, 200u) << on.body;
     // All of it but the client, as it is before and after each change of the link.
@@ -335,7 +337,7 @@ TEST_F(Api, LocationsAreGroupedUnderClientsAndTheLinkChangesNothingElse) {
         auto location = read(target).as_object();
         location.erase("client_id");
         location.erase("client_name");
-        return boost::json::object{{"location", location}, {"settings", read(settings_path(spa)).at("voice")}, {"auto_reply", auto_reply_state()}};
+        return boost::json::object{{"location", location}, {"content", read(content_settings_path(spa))}, {"reply", read(reply_settings_path(spa))}, {"auto_reply", auto_reply_state()}};
     };
     const auto before = all_but_the_client();
     const auto syncs = value<std::string>(std::format("SELECT concat(next_review_poll_at, next_full_sync_at) FROM locations WHERE id = {}", spa));
@@ -406,11 +408,11 @@ TEST_F(Api, ALocationIsSwitchedOnAndOffByAPerson) {
 
     // A location the managing account no longer sees can't be switched on, and the refusal changes nothing else.
     exec(std::format("UPDATE locations SET access_status = 'lost' WHERE id = {}", spa));
-    const auto lost = patch_current(target, R"({"enabled": true, "audience": "Families"})");
+    const auto lost = patch_current(target, R"({"enabled": true, "analyze_from": "2026-01-01"})");
     EXPECT_EQ(lost.status, 409u);
     EXPECT_EQ(error_code(lost), "location_not_accessible");
     EXPECT_FALSE(read(target).at("enabled").as_bool());
-    EXPECT_EQ(read(target).at("audience").as_string(), "");
+    EXPECT_TRUE(read(target).at("analyze_from").is_null());
     EXPECT_EQ(patch(target, R"({"enabled": null})").status, 400u);
 }
 
@@ -422,23 +424,24 @@ TEST_F(Api, ARefusedLocationChangeChangesNothing) {
     ASSERT_EQ(patch(archived_path, R"({"archived": true})", if_match(etag(archived_path, browser_))).status, 200u);
     const auto entries_before = count("audit_log");
 
-    // The audience is fine but the client isn't: neither is applied.
-    const auto refused = patch_current("/api/locations/" + spa, R"({"audience": "Spa guests", "client_id": 999})");
+    // The day is fine but the client isn't: neither is applied.
+    const auto refused = patch_current("/api/locations/" + spa, R"({"analyze_from": "2026-01-01", "client_id": 999})");
     EXPECT_EQ(refused.status, 409u);
     EXPECT_EQ(error_code(refused), "client_not_found");
     EXPECT_EQ(patch_current("/api/locations/" + spa, std::format(R"({{"client_id": {}}})", archived)).status, 409u);
     EXPECT_EQ(patch("/api/locations/" + spa, R"({"client_id": "one"})").status, 400u);
     EXPECT_EQ(patch_current("/api/locations/" + spa, R"({"enabled": true, "industry_key": "no_such_industry"})").status, 400u);
     EXPECT_EQ(patch_current("/api/locations/" + spa, R"({"enabled": true, "analyze_from": "2026-02-30"})").status, 400u);
-    EXPECT_EQ(patch_current("/api/locations/" + spa, R"({"enabled": true, "audience": ")" + std::string(501, 'x') + R"("})").status, 400u);
+    // Who the customers are is a content setting now (D-107): the location's change does not take it.
+    EXPECT_EQ(patch_current("/api/locations/" + spa, R"({"enabled": true, "audience": "Spa guests"})").status, 400u);
     EXPECT_EQ(patch("/api/locations/12345", R"({"client_id": null})").status, 404u);
 
-    EXPECT_EQ(read("/api/locations/" + spa).at("audience").as_string(), "");
+    EXPECT_TRUE(read("/api/locations/" + spa).at("analyze_from").is_null());
     EXPECT_FALSE(read("/api/locations/" + spa).at("enabled").as_bool());
     EXPECT_EQ(count("audit_log"), entries_before);
 
-    ASSERT_EQ(patch_current("/api/locations/" + spa, R"({"audience": "Spa guests"})").status, 200u);
-    EXPECT_EQ(read("/api/audit-log?action=location.update").at("items").at(0).at("after").at("audience").as_string(), "Spa guests");
+    ASSERT_EQ(patch_current("/api/locations/" + spa, R"({"analyze_from": "2026-01-01"})").status, 200u);
+    EXPECT_EQ(read("/api/audit-log?action=location.update").at("items").at(0).at("after").at("analyze_from").as_string(), "2026-01-01");
 }
 
 // D-108: a location's change needs the ETag of what the person read, and a stale one changes nothing.
@@ -447,10 +450,10 @@ TEST_F(Api, ALocationIsChangedOnlyAgainstItsCurrentEtag) {
     const auto target = "/api/locations/" + std::to_string(location_id("9001"));
     const auto read_tag = etag(target, browser_);
 
-    const auto without = patch(target, R"({"audience": "Spa guests"})");
+    const auto without = patch(target, R"({"analyze_from": "2026-01-01"})");
     EXPECT_EQ(without.status, 428u);
     EXPECT_EQ(error_code(without), "precondition_required");
-    const auto changed = patch(target, R"({"audience": "Spa guests"})", if_match(read_tag));
+    const auto changed = patch(target, R"({"analyze_from": "2026-01-01"})", if_match(read_tag));
     ASSERT_EQ(changed.status, 200u) << changed.body;
     const auto new_tag = header(changed, "ETag");
     EXPECT_NE(new_tag, read_tag);
@@ -461,9 +464,9 @@ TEST_F(Api, ALocationIsChangedOnlyAgainstItsCurrentEtag) {
     EXPECT_EQ(stale.status, 412u);
     EXPECT_EQ(error_code(stale), "precondition_failed");
     EXPECT_TRUE(read(target).at("posting_enabled").as_bool());
-    EXPECT_EQ(patch(target, R"({"audience": "Spa guests"})", if_match(read_tag)).status, 412u) << "a stale equal save";
+    EXPECT_EQ(patch(target, R"({"analyze_from": "2026-01-01"})", if_match(read_tag)).status, 412u) << "a stale equal save";
     EXPECT_EQ(count("audit_log"), entries);
-    EXPECT_EQ(patch("/api/locations/12345", R"({"audience": "x"})", if_match(read_tag)).status, 404u);
+    EXPECT_EQ(patch("/api/locations/12345", R"({"analyze_from": "2026-01-01"})", if_match(read_tag)).status, 404u);
 }
 
 // D-108: what the engine writes about a location by itself (a discovery, a review poll) leaves a person's view of it current.
@@ -471,7 +474,7 @@ TEST_F(Api, ALocationsEtagIsNotChangedByADiscoveryOrAReviewPoll) {
     discover_spa_and_buffet();
     const auto spa = location_id("9001");
     const auto target = "/api/locations/" + std::to_string(spa);
-    ASSERT_EQ(patch_current(target, R"({"enabled": true, "audience": "Office workers"})").status, 200u);
+    ASSERT_EQ(patch_current(target, R"({"enabled": true, "analyze_from": "2026-01-01"})").status, 200u);
     const auto read_tag = etag(target, browser_);
     const auto written = [&] { return value<std::string>(std::format("SELECT concat(title, updated_at) FROM locations WHERE id = {}", spa)); };
     const auto before = written();
@@ -496,7 +499,7 @@ TEST_F(Api, ALocationsEtagIsNotChangedByADiscoveryOrAReviewPoll) {
     await(sync.poll_reviews());
     EXPECT_NE(read(target).at("reviews_polled_at"), synced.at("reviews_polled_at")) << "the poll wrote the row";
     EXPECT_EQ(etag(target, browser_), read_tag);
-    EXPECT_EQ(patch(target, R"({"audience": "Families"})", if_match(read_tag)).status, 200u);
+    EXPECT_EQ(patch(target, R"({"analyze_from": "2026-02-01"})", if_match(read_tag)).status, 200u);
 }
 
 TEST_F(Api, DiscoveryCanBeRequestedAndRunsAsAJob) {

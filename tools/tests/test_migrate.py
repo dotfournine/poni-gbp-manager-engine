@@ -222,6 +222,39 @@ def test_reports_become_ready_failed_or_discarded_and_their_sends_name_them(db):
         db.execute("UPDATE reports SET status = 'ready' WHERE id = %s", (draft,))
 
 
+def test_the_settings_bundles_refuse_a_database_with_locations(db):
+    # 0014 (D-107): settings are not carried over, so a database with locations is rebuilt instead.
+    shipped = migrate.load_migrations(SHIPPED)
+    assert migrate.apply_migrations(db, shipped[:13]) == list(range(1, 14))
+    db.execute(
+        "INSERT INTO locations (gbp_location_id, gbp_account_id, title, raw, first_seen_at, last_seen_at, updated_at) "
+        "VALUES ('9001', '111', 'A Spa', '{}', now(), now(), now())"
+    )
+    with pytest.raises(migrate.MigrationError, match="Locations exist: rebuild this database"):
+        migrate.apply_migrations(db, shipped[:14])
+    assert [row[0] for row in recorded(db)][-1] == 13
+
+
+def test_the_settings_bundles_keep_a_lists_order_and_refuse_a_null_entry(db):
+    shipped = migrate.load_migrations(SHIPPED)
+    migrate.apply_migrations(db, shipped[:14])
+    location = one(
+        db,
+        "INSERT INTO locations (gbp_location_id, gbp_account_id, title, raw, first_seen_at, last_seen_at, updated_at) "
+        "VALUES ('9001', '111', 'A Spa', '{}', now(), now(), now()) RETURNING id",
+    )
+    columns = (
+        "location_id, business_facts, base_style, emoji_allowed, emoji_max, emoji_preferred, words_to_avoid, "
+        "style_notes, chinese_variant, english_variant, audience, created_at, updated_at"
+    )
+    insert = f"INSERT INTO content_settings ({columns}) VALUES (%s, '', '', false, 0, '{{}}', %s, '{{}}', NULL, NULL, '', now(), now())"
+    db.execute(insert, (location, ["b", "a", "c"]))
+    assert one(db, "SELECT words_to_avoid FROM content_settings") == ["b", "a", "c"]
+    db.execute("DELETE FROM content_settings")
+    with pytest.raises(psycopg.errors.CheckViolation):
+        db.execute(insert, (location, ["b", None]))
+
+
 @pytest.mark.parametrize(
     "rows",
     [

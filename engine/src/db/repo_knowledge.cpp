@@ -115,12 +115,14 @@ std::optional<domain::CorpusCase> corpus_case(pqxx::transaction_base& tx, const 
 // ---- defaults and prices ---------------------------------------------------------------
 
 KnowledgeDefaults knowledge_defaults(pqxx::transaction_base& tx) {
-    const auto rows = tx.exec("SELECT voice::text, localization::text, policy::text, analysis::text FROM kb_defaults");
-    if (rows.empty()) return {};
-    return {.voice = object_column(rows[0][0]),
-            .localization = object_column(rows[0][1]),
-            .policy = object_column(rows[0][2]),
-            .analysis = object_column(rows[0][3])};
+    // One statement, so a seed that commits meanwhile cannot give one version's content defaults and another's reply defaults.
+    const auto rows = tx.exec("SELECT (SELECT (to_jsonb(c) - 'id')::text FROM kb_content_defaults c), "
+                              "(SELECT (to_jsonb(r) - 'id')::text FROM kb_reply_defaults r), "
+                              "(SELECT analysis::text FROM kb_defaults)");
+    const auto object_or_empty = [](const pqxx::field_ref& field) {
+        return field.is_null() ? boost::json::object{} : object_column(field);
+    };
+    return {.content = object_or_empty(rows[0][0]), .reply = object_or_empty(rows[0][1]), .analysis = object_or_empty(rows[0][2])};
 }
 
 std::optional<model::ModelPrice> model_price(pqxx::transaction_base& tx, const std::string& model) {
@@ -151,12 +153,9 @@ model::Knowledge knowledge(pqxx::transaction_base& tx) {
     const auto common = tx.exec("SELECT severity_flags::text FROM kb_common");
     if (!common.empty()) out.common_severity_flags = typed_column<std::vector<domain::SeverityFlag>>(common[0][0]);
     out.voice_templates = db::rows_as<model::KnowledgeVoiceTemplate>(
-        tx, "SELECT key, label, description, voice FROM kb_voice_templates ORDER BY position, key");
+        tx, "SELECT key, label, description, content, reply FROM kb_voice_templates ORDER BY position, key");
     auto defaults = knowledge_defaults(tx);
-    out.defaults = {.voice = std::move(defaults.voice),
-                    .localization = std::move(defaults.localization),
-                    .policy = std::move(defaults.policy),
-                    .analysis = std::move(defaults.analysis)};
+    out.defaults = {.content = std::move(defaults.content), .reply = std::move(defaults.reply), .analysis = std::move(defaults.analysis)};
     for (const auto& row : tx.exec("SELECT model, input_per_mtok::float8, output_per_mtok::float8 FROM kb_model_prices ORDER BY model")) {
         out.model_prices.emplace(row[0].as<std::string>(),
                                  model::ModelPrice{.input_per_mtok = row[1].as<double>(), .output_per_mtok = row[2].as<double>()});

@@ -46,16 +46,16 @@ model::AutoPosting to_auto_posting(pqxx::transaction_base& tx, model::AutoPostin
         a.go_live_state = go_live_state(tx, setup->fingerprint.hash, setup->scope).state;
     }
 
-    const auto settings = stored_reply_settings(tx, a.location_id);
+    const auto settings = stored_settings(tx, a.location_id);
     if (!settings) {
-        a.timing_problem = "The location's reply policy can't be read.";
+        a.timing_problem = "The location's reply settings can't be read.";
         return a;
     }
-    a.delay_min_minutes = settings->policy.auto_post_delay_min_minutes;
-    a.delay_max_minutes = settings->policy.auto_post_delay_max_minutes;
-    a.window_start = settings->policy.auto_post_window_start;
-    a.window_end = settings->policy.auto_post_window_end;
-    const auto timing = domain::posting_timing(settings->policy);
+    a.delay_min_minutes = settings->reply.auto_reply_delay_min_minutes;
+    a.delay_max_minutes = settings->reply.auto_reply_delay_max_minutes;
+    a.window_start = settings->reply.auto_reply_window_start;
+    a.window_end = settings->reply.auto_reply_window_end;
+    const auto timing = domain::posting_timing(settings->reply);
     if (!timing) {
         a.timing_problem = std::format("The reply policy's timing can't be used: {}.", timing.error());
     } else if (timing->window && !a.time_zone) {
@@ -186,9 +186,9 @@ Result<model::AutoPosting> update_auto_posting(pqxx::transaction_base& tx, audit
         // What must hold while auto reply is on, checked on every change.
         if (!synced) return invalid("Auto reply needs a location that is switched on and still accessible.");
         if (!five && !four) return invalid("Choose which star ratings may be answered automatically before switching auto reply on.");
-        const auto settings = stored_reply_settings(tx, location_id);
-        if (!settings) return invalid("The location's reply policy can't be read.");
-        const auto timing = domain::posting_timing(settings->policy);
+        const auto settings = stored_settings(tx, location_id);
+        if (!settings) return invalid("The location's reply settings can't be read.");
+        const auto timing = domain::posting_timing(settings->reply);
         if (!timing) return invalid(std::format("The reply policy's timing can't be used: {}.", timing.error()));
         if (timing->window && !zone) return invalid("The reply policy has a posting window, so the location needs a time zone first.");
     }
@@ -297,7 +297,7 @@ bool pause_if_checks_keep_failing(pqxx::transaction_base& tx, std::int64_t locat
     if (row[0].as<int>() < limit || row[1].as<int>() < limit) return false;
     return pause_auto_reply(tx, location_id, kPauseChecksFailing,
                               std::format("The last {} written for this location each failed a reply check. Look at them in "
-                                          "the approval queue, and at the voice settings and the model, before resuming.",
+                                          "the approval queue, and at the content and reply settings and the model, before resuming.",
                                           limit == 1 ? std::string("reply") : std::format("{} replies in a row", limit)),
                               now);
 }

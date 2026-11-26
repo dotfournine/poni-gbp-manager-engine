@@ -321,15 +321,16 @@ std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, st
     const auto industry_key = rows[0][1].as<OptString>();
     auto industry = industry_key ? industry_rules(tx, *industry_key) : std::nullopt;
     if (!industry) return none("The location has no industry profile.");
-    auto settings = stored_reply_settings(tx, location_id);
+    auto settings = stored_settings(tx, location_id);
     if (!settings) {
-        return std::unexpected(NoSetup{.reason = unreadable_reply_settings(settings.error()), .settings_error = settings.error()});
+        return std::unexpected(NoSetup{.reason = unreadable_settings(settings.error()), .settings_error = settings.error()});
     }
 
     GoLiveSetup setup;
     setup.location_id = location_id;
     setup.location_title = rows[0][0].as<std::string>();
-    setup.business_name = domain::business_name(settings->voice, setup.location_title);
+    // The business is named by its title (D-107).
+    setup.business_name = setup.location_title;
     setup.industry = std::move(*industry);
     setup.settings = std::move(*settings);
     setup.analyzer = {.provider = ai.analyzer_provider,
@@ -339,7 +340,7 @@ std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, st
                       .extras = extras_for(ai, ai.analyzer_provider)};
     setup.writer = {.provider = ai.generator_provider,
                     .model = ai.generator_model,
-                    .temperature = ai.generator_send_temperature ? std::optional(setup.settings.voice.temperature) : std::nullopt,
+                    .temperature = ai.generator_send_temperature ? std::optional(setup.settings.reply.temperature) : std::nullopt,
                     .max_tokens = ai.max_output_tokens,
                     .extras = extras_for(ai, ai.generator_provider)};
     // The judge measures; it is not what is tested, so it is not in the fingerprint.
@@ -353,7 +354,7 @@ std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, st
                                              .settings = setup.settings,
                                              .analyzer = setup.analyzer,
                                              .writer = setup.writer});
-    setup.scope = domain::scope_of(setup.settings.policy);
+    setup.scope = domain::scope_of(setup.settings.reply);
     return setup;
 }
 
@@ -554,10 +555,10 @@ std::optional<GoLiveCaseWork> go_live_case(pqxx::transaction_base& tx, std::int6
     // started, whatever the location's policy has become since (the policy is
     // not in the fingerprint): a pass must not claim to cover what no case
     // was routed with.
-    work.setup.settings.policy.auto_post_positive = row[11].as<bool>();
-    work.setup.settings.policy.auto_post_rating_only = row[12].as<bool>();
-    work.setup.settings.policy.auto_post_min_stars = row[13].as<std::int64_t>();
-    work.setup.scope = domain::scope_of(work.setup.settings.policy);
+    work.setup.settings.reply.auto_reply_positive = row[11].as<bool>();
+    work.setup.settings.reply.auto_reply_rating_only = row[12].as<bool>();
+    work.setup.settings.reply.auto_reply_min_stars = row[13].as<std::int64_t>();
+    work.setup.scope = domain::scope_of(work.setup.settings.reply);
     if (work.review_id) {
         work.text = row[10].as<std::string>();
     } else if (const auto known = corpus_case(tx, work.setup.industry.key, work.case_key)) {

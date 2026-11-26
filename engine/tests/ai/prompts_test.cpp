@@ -162,8 +162,39 @@ TEST_F(Prompts, TheLanguageIsAnInstructionNotTheModelsChoice) {
                 HasSubstr("using Simplified Chinese characters only"));
     EXPECT_THAT(generator_messages(input(buffet_, "positive", "es"), "n")[0].content, HasSubstr("Write the reply in Spanish."));
     auto canadian = spa_;
-    canadian.settings.localization.english_variant = "ca";
+    canadian.settings.content.english_variant = "en-CA";
     EXPECT_THAT(generator_messages(input(canadian, "positive"), "n")[0].content, HasSubstr("English with Canadian spelling"));
+}
+
+// Until the wording of D-107 point 6 lands, each variant renders what the old
+// localization that said the same rendered; not set is the old "match" with Taiwan phrasing.
+TEST_F(Prompts, EachVariantNamesItsScriptAndRegion) {
+    const auto chinese = [&](std::optional<std::string> variant, std::string_view review_script) {
+        auto setup = spa_;
+        setup.settings.content.chinese_variant = std::move(variant);
+        const auto target = target_language("zh", review_script, setup.settings);
+        return generator_messages(input(setup, "positive", target.language, target.script), "n")[0].content;
+    };
+    constexpr std::string_view chosen = "The language was chosen by the business's settings; follow it even if the review uses another "
+                                        "language or script.";
+    EXPECT_THAT(chinese("zh-CN", "Hant"),
+                HasSubstr(std::format("Write the reply in Chinese, using Simplified Chinese characters only, with natural Mainland China "
+                                      "phrasing. {}",
+                                      chosen)));
+    EXPECT_THAT(chinese("zh-TW", "Hans"), HasSubstr("using Traditional Chinese characters only, with natural Taiwan phrasing."));
+    EXPECT_THAT(chinese("zh-HK", "Hans"), HasSubstr("using Traditional Chinese characters only, with natural Hong Kong phrasing."));
+    // Not set: the review's own script, Taiwan's phrasing.
+    EXPECT_THAT(chinese(std::nullopt, "Hant"), HasSubstr("using Traditional Chinese characters only, with natural Taiwan phrasing."));
+    EXPECT_THAT(chinese(std::nullopt, "Hans"), HasSubstr("using Simplified Chinese characters only, with natural Taiwan phrasing."));
+
+    const auto english = [&](std::optional<std::string> variant) {
+        auto setup = spa_;
+        setup.settings.content.english_variant = std::move(variant);
+        return generator_messages(input(setup, "positive"), "n")[0].content;
+    };
+    EXPECT_THAT(english("en-CA"), HasSubstr("Write the reply in English with Canadian spelling."));
+    EXPECT_THAT(english("en-US"), HasSubstr("Write the reply in English with US spelling."));
+    EXPECT_THAT(english(std::nullopt), HasSubstr("Write the reply in English with US spelling."));
 }
 
 TEST_F(Prompts, EachModeHasItsOwnInstruction) {
@@ -177,11 +208,31 @@ TEST_F(Prompts, EachModeHasItsOwnInstruction) {
     EXPECT_THROW(generator_messages(input(spa_, "no_such_mode"), "n"), std::logic_error);
 }
 
-TEST_F(Prompts, ASignOffNamesTheOwner) {
-    auto family = spa_;
-    family.settings.voice.sign_off = "— {owner_name} and family";
-    family.settings.voice.owner_name = "Mei";
-    EXPECT_THAT(generator_messages(input(family, "positive"), "n")[0].content, HasSubstr("Sign off with: \"— Mei and family\""));
+// Until the sign-off wording of D-107 point 4 lands, only the signature is read.
+TEST_F(Prompts, TheSignatureIsTheSignOffLine) {
+    const auto rendered = [&](std::string signature, std::string name) {
+        auto family = spa_;
+        family.settings.reply.signature = std::move(signature);
+        family.settings.reply.sign_off_name = std::move(name);
+        return generator_messages(input(family, "positive"), "n")[0].content;
+    };
+    EXPECT_THAT(rendered("— Mei and family", ""), HasSubstr("Sign off with: \"— Mei and family\""));
+    EXPECT_THAT(rendered("", ""), HasSubstr("No sign-off line."));
+    // A name alone changes nothing yet.
+    EXPECT_THAT(rendered("", "Mei"), HasSubstr("No sign-off line."));
+    EXPECT_EQ(rendered("", "Mei"), rendered("", ""));
+    EXPECT_THAT(rendered("— the owner", "Mei"), HasSubstr("Sign off with: \"— the owner\""));
+}
+
+TEST_F(Prompts, FactsAreGivenAsTypedOrSaidToBeMissing) {
+    auto none = spa_;
+    none.settings.content.business_facts = "";
+    EXPECT_THAT(generator_messages(input(none, "positive"), "n")[0].content, HasSubstr("(No facts are on file.)"));
+    auto typed = spa_;
+    typed.settings.content.business_facts = "Open late on Fridays.\nParking behind the building.";
+    const auto system = generator_messages(input(typed, "positive"), "n")[0].content;
+    EXPECT_THAT(system, HasSubstr("Open late on Fridays.\nParking behind the building."));
+    EXPECT_THAT(system, Not(HasSubstr("(No facts are on file.)")));
 }
 
 TEST_F(Prompts, ThePromptVersionNamesRevisionAndContent) {
@@ -263,13 +314,13 @@ TEST_F(Prompts, TheAnalyzerSaysWhichChineseScriptAReviewIsIn) {
     const auto traditional_json = answer("Hant");
     const auto traditional = build_analysis(spa_.industry, review, AnalyzerAnswer{.json = &traditional_json, .error = {}});
     EXPECT_EQ(traditional.script, "Hant");
-    EXPECT_EQ(plan_draft(traditional, 5, true, spa_.settings.localization).target.script, "Hant");
+    EXPECT_EQ(plan_draft(traditional, 5, true, spa_.settings).target.script, "Hant");
 
     // An answer that makes no sense for Chinese text, or no answer at all: the script stays untold and the reply is Simplified.
     const auto nonsense_json = answer("Latn");
     const auto nonsense = build_analysis(spa_.industry, review, AnalyzerAnswer{.json = &nonsense_json, .error = {}});
     EXPECT_EQ(nonsense.script, "Hani");
-    EXPECT_EQ(plan_draft(nonsense, 5, true, spa_.settings.localization).target.script, "Hans");
+    EXPECT_EQ(plan_draft(nonsense, 5, true, spa_.settings).target.script, "Hans");
     const auto failed = build_analysis(spa_.industry, review, AnalyzerAnswer{.json = nullptr, .error = "HTTP 503"});
     EXPECT_EQ(failed.script, "Hani");
 

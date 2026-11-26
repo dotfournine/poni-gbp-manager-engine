@@ -147,7 +147,8 @@ std::string CheckReport::failed_names() const {
 }
 
 CheckReport run_reply_checks(std::string_view reply, const CheckContext& context) {
-    const auto& voice = context.voice;
+    const auto& content = context.settings.content;
+    const auto& reply_settings = context.settings.reply;
     CheckReport report;
     const auto folded = text::fold(reply);
     const auto folded_utf8 = text::encode(folded);
@@ -159,18 +160,18 @@ CheckReport run_reply_checks(std::string_view reply, const CheckContext& context
     add("not_empty", !body.empty(), "the reply is empty");
 
     const auto url = scan_for_url(folded);
-    add("no_url", voice.contact_allowed || !url, url.value_or(""));
+    add("no_url", reply_settings.contact_allowed || !url, url.value_or(""));
     const auto email = scan_for_email(folded);
-    add("no_email", voice.contact_allowed || !email, email.value_or(""));
+    add("no_email", reply_settings.contact_allowed || !email, email.value_or(""));
     const auto phone = scan_for_phone(folded);
-    add("no_phone", voice.contact_allowed || !phone, phone.value_or(""));
+    add("no_phone", reply_settings.contact_allowed || !phone, phone.value_or(""));
     {
-        const auto allowed = voice.emoji.allowed ? static_cast<std::size_t>(std::max<std::int64_t>(voice.emoji.max, 0)) : 0;
+        const auto allowed = content.emoji_allowed ? static_cast<std::size_t>(std::max<std::int64_t>(content.emoji_max, 0)) : 0;
         const auto used = count_emoji(reply);
         add("emoji_limit", used <= allowed, std::format("{} emoji, at most {} allowed", used, allowed));
     }
     {
-        const auto& range = length_range(voice, context.target_language, context.mode);
+        const auto& range = length_range(reply_settings, context.target_language, context.mode);
         const auto size = static_cast<std::int64_t>(text::length(body));
         add("length", size >= range.min && size <= range.max,
             std::format("{} characters, expected {} to {}", size, range.min, range.max));

@@ -110,7 +110,7 @@ asio::awaitable<void> run_case(Run& run, std::size_t index) {
     }
     out.analyzer_suspected = analysis.manipulation_suspected;
 
-    const auto plan = plan_draft(analysis, c.stars, true, setup.settings.localization);
+    const auto plan = plan_draft(analysis, c.stars, true, setup.settings);
     out.mode = plan.mode;
     out.target_language = plan.target.language;
     out.target_script = plan.target.script.value_or("");
