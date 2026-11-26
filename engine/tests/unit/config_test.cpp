@@ -140,6 +140,7 @@ TEST(Config, Phase1DefaultsAreSafeForLocalDevelopment) {
     EXPECT_EQ(c->app_session_ttl, 24h * 90) << "the phone app's session (D-095)";
     EXPECT_EQ(c->app_session_idle, 24h * 30);
     EXPECT_EQ(c->review_poll_tick, 60s);
+    EXPECT_EQ(c->review_poll_interval, 120s) << "every location's reviews, every two minutes (D-112)";
     EXPECT_EQ(c->review_full_sync_interval, 3600s);
     EXPECT_EQ(c->location_discovery_interval, 900s);
     EXPECT_EQ(c->staff_check_interval, 300s) << "the staff check, every five minutes (D-106 point 4)";
@@ -191,6 +192,10 @@ TEST(Config, RejectsBadPhase1Values) {
                 HasSubstr("PONI_GOOGLE_CREDENTIALS"));
     EXPECT_THAT(load_config(env_of({{"PONI_REVIEW_POLL_TICK_S", "1"}}), std::nullopt).error(),
                 HasSubstr("PONI_REVIEW_POLL_TICK_S"));
+    EXPECT_EQ(load_config(env_of({{"PONI_REVIEW_POLL_INTERVAL_S", "300"}}), std::nullopt)->review_poll_interval, 300s);
+    EXPECT_THAT(load_config(env_of({{"PONI_REVIEW_POLL_INTERVAL_S", "59"}}), std::nullopt).error(),
+                ::testing::AllOf(HasSubstr("PONI_REVIEW_POLL_INTERVAL_S"), HasSubstr("60")))
+        << "a minute at least, and the message names it";
     EXPECT_THAT(load_config(env_of({{"PONI_STAFF_CHECK_INTERVAL_S", "59"}}), std::nullopt).error(),
                 HasSubstr("PONI_STAFF_CHECK_INTERVAL_S"));
     EXPECT_EQ(load_config(env_of({{"PONI_STAFF_CHECK_INTERVAL_S", "60"}}), std::nullopt)->staff_check_interval, 60s)

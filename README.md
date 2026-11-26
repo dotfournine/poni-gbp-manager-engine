@@ -130,7 +130,8 @@ Settings are environment variables. `--config FILE` (or `PONI_CONFIG`) names an 
 | `PONI_TRUST_FORWARDED_FOR` | `false` | `true` behind a reverse proxy: the visitor's address is taken from `X-Forwarded-For` |
 | `PONI_GBP_OAUTH_CLIENT_ID` / `_SECRET` | none | The Google OAuth client (a web client) through which the GBP managing account, the sending mailbox and the Workspace administrator are connected on the status page. Its redirect addresses must include `<PONI_PUBLIC_URL>/api/connections/gbp/callback`, `.../gmail/callback` and `.../workspace/callback` |
 | `PONI_LOCATION_DISCOVERY_INTERVAL_S` | `900` | How often locations are discovered |
-| `PONI_REVIEW_POLL_TICK_S` | `60` | How often the review poll job runs. Each location has its own interval on top (default 120 s) |
+| `PONI_REVIEW_POLL_TICK_S` | `60` | How often the review poll job runs. Due polls are picked up at this tick; how often a location is polled is `PONI_REVIEW_POLL_INTERVAL_S` |
+| `PONI_REVIEW_POLL_INTERVAL_S` | `120` | How often each location's reviews are polled (D-112); at least 60 |
 | `PONI_REVIEW_FULL_SYNC_INTERVAL_S` | `3600` | How often every review of a location is reconciled |
 | `PONI_STAFF_CHECK_INTERVAL_S` | `300` | How often the staff check reads the Workspace directory's list and disables or enables users (D-106); at least 60 |
 | `PONI_PUBSUB_SUBSCRIPTION` | none | `projects/…/subscriptions/…`; empty means polling only |

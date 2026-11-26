@@ -421,6 +421,7 @@ std::expected<Config, std::string> load_config(const Environment& env, const std
     s.text("PONI_GBP_OAUTH_CLIENT_SECRET", c.gbp_oauth_client_secret);
     s.seconds("PONI_LOCATION_DISCOVERY_INTERVAL_S", 60, c.location_discovery_interval);
     s.seconds("PONI_REVIEW_POLL_TICK_S", 10, c.review_poll_tick);
+    s.seconds("PONI_REVIEW_POLL_INTERVAL_S", 60, c.review_poll_interval);
     s.seconds("PONI_REVIEW_FULL_SYNC_INTERVAL_S", 300, c.review_full_sync_interval);
     s.seconds("PONI_STAFF_CHECK_INTERVAL_S", 60, c.staff_check_interval);
     s.parsed("PONI_PUBSUB_SUBSCRIPTION", c.pubsub_subscription,

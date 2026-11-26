@@ -112,7 +112,6 @@ struct Location {
     std::optional<std::string> access_lost_at;
     std::string first_seen_at;
     std::string last_seen_at;
-    std::int64_t review_poll_interval_s = 0;
     // The location's kill switch for posting; the global one must be on too.
     bool posting_enabled = true;
     std::int64_t review_count = 0;
@@ -133,7 +132,7 @@ BOOST_DESCRIBE_STRUCT(Location, (),
                       (id, gbp_location_id, gbp_account_id, client_id, client_name, enabled, industry_key, analyze_from, audience,
                        title, store_code, primary_category,
                        address, locality, administrative_area, postal_code, region_code, phone, website_uri, maps_uri,
-                       access_status, access_lost_at, first_seen_at, last_seen_at, review_poll_interval_s,
+                       access_status, access_lost_at, first_seen_at, last_seen_at,
                        posting_enabled, review_count,
                        unreplied_count, average_rating, reviews_polled_at, reviews_full_synced_at, last_sync_error,
                        last_sync_error_at, local_posts_synced_at, local_posts_sync_error, local_posts_sync_error_at,

@@ -293,7 +293,7 @@ TEST_F(SyncTest, PollFindsANewReviewAndStopsAtTheFirstPageWithNothingNew) {
               1);
 }
 
-TEST_F(SyncTest, EachLocationIsPolledAtItsOwnInterval) {
+TEST_F(SyncTest, ALocationIsPolledAgainAfterTheDefaultInterval) {
     const auto spa = enabled_spa();
     seed_reviews(3);
     await(sync_->full_sync(spa));
@@ -307,6 +307,34 @@ TEST_F(SyncTest, EachLocationIsPolledAtItsOwnInterval) {
     clock_.advance(61s);
     await(sync_->poll_reviews());
     EXPECT_EQ(gbp_.batch_calls, 2);
+}
+
+// One interval for every location, the engine's setting (D-112): after a poll and after a failed one.
+TEST_F(SyncTest, ThePollIntervalOfTheSettingsDecidesWhenTheNextPollIsDue) {
+    sync_.emplace(db(), clock_, gbp_, queue(), jobs::SyncOptions{.review_poll_interval = 300s});
+    const auto spa = enabled_spa();
+    seed_reviews(3);
+    await(sync_->full_sync(spa));
+    await(sync_->poll_reviews());
+    ASSERT_EQ(gbp_.batch_calls, 1);
+
+    clock_.advance(280s);
+    await(sync_->poll_reviews());
+    EXPECT_EQ(gbp_.batch_calls, 1) << "not due yet: the interval is five minutes (and the poll takes ten seconds of grace)";
+    clock_.advance(20s);
+    gbp_.fail_batch = ApiError{ApiError::Kind::rate_limited, 429, "HTTP 429 RESOURCE_EXHAUSTED"};
+    await(sync_->poll_reviews());
+    EXPECT_EQ(gbp_.batch_calls, 2);
+    EXPECT_EQ(count("locations WHERE id = " + std::to_string(spa) + " AND last_sync_error IS NOT NULL"), 1);
+
+    gbp_.fail_batch.reset();
+    clock_.advance(280s);
+    await(sync_->poll_reviews());
+    EXPECT_EQ(gbp_.batch_calls, 2) << "a failed poll waits the same interval";
+    clock_.advance(20s);
+    await(sync_->poll_reviews());
+    EXPECT_EQ(gbp_.batch_calls, 3);
+    EXPECT_EQ(count("locations WHERE id = " + std::to_string(spa) + " AND last_sync_error IS NULL"), 1);
 }
 
 TEST_F(SyncTest, OneBatchCallCoversEveryDueLocationOfAnAccount) {

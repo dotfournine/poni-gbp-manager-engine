@@ -43,7 +43,7 @@ const std::string kPost = R"({"topic_type": "standard", "summary": "x", "languag
 const std::map<std::string, std::string> kRoutesWithBody = {
     {"POST /api/clients", "name"},
     {"PATCH /api/clients/{id}", "name"},
-    {"PATCH /api/locations/{id}", "review_poll_interval_s"},
+    {"PATCH /api/locations/{id}", "enabled"},
     {"POST /api/reviews/{id}/ignore", "reason"},
     {"PUT /api/locations/{id}/reply-settings", "voice"},
     {"PATCH /api/ai/settings", "enabled"},
@@ -178,17 +178,18 @@ TEST_F(Bodies, NullClearsWhatCanBeEmptyAndAMemberLeftOutStays) {
     expect_refused(post("/api/clients", R"({"name": "Another", "analyze_from": null})"), "analyze_from", "a client's start day");
 
     // A location's client.
-    EXPECT_EQ(json(patch(spa_path(), R"({"review_poll_interval_s": 600})")).at("client_id").as_int64(), spa_client_);
+    EXPECT_EQ(json(patch(spa_path(), R"({"audience": "Spa guests"})")).at("client_id").as_int64(), spa_client_);
     EXPECT_TRUE(json(patch(spa_path(), R"({"client_id": null})")).at("client_id").is_null());
     expect_refused(patch(spa_path(), R"({"posting_enabled": null})"), "posting_enabled", "the kill switch");
+    // How often reviews are polled is the engine's setting, not the location's (D-112).
+    expect_refused(patch(spa_path(), R"({"review_poll_interval_s": 600})"), "review_poll_interval_s", "the old poll interval");
 }
 
 TEST_F(Bodies, AWholeNumberMayBeWrittenWithAFractionOfZero) {
-    const auto linked = patch(spa_path(), std::format(R"({{"client_id": {}.0, "review_poll_interval_s": 600.0}})", buffet_client_));
+    const auto linked = patch(spa_path(), std::format(R"({{"client_id": {}.0}})", buffet_client_));
     ASSERT_EQ(linked.status, 200u) << linked.body;
     EXPECT_EQ(json(linked).at("client_id").as_int64(), buffet_client_);
-    EXPECT_EQ(json(linked).at("review_poll_interval_s").as_int64(), 600);
-    expect_refused(patch(spa_path(), R"({"review_poll_interval_s": 600.5})"), "review_poll_interval_s", "a fraction");
+    expect_refused(patch(spa_path(), std::format(R"({{"client_id": {}.5}})", spa_client_)), "client_id", "a fraction");
     expect_refused(patch(spa_path(), R"({"client_id": "7"})"), "client_id", "a string");
 }
 

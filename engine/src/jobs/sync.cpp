@@ -142,14 +142,14 @@ asio::awaitable<void> Sync::poll_batch(std::vector<repo::SyncLocation> locations
 
     const auto ids = ids_of(locations);
     if (error) {
-        co_await db_.tx([ids, error = *error, now](pqxx::work& tx) {
-            repo::record_sync_error(tx, ids, error, now, true);
+        co_await db_.tx([ids, error = *error, now, interval = options_.review_poll_interval](pqxx::work& tx) {
+            repo::record_sync_error(tx, ids, error, now, interval, true);
         });
         log::warn("review poll failed", {{"locations", ids.size()}, {"error", *error}});
         co_return;
     }
-    co_await db_.tx([ids, now](pqxx::work& tx) {
-        repo::finish_poll(tx, ids, now);
+    co_await db_.tx([ids, now, interval = options_.review_poll_interval](pqxx::work& tx) {
+        repo::finish_poll(tx, ids, now, interval);
     });
     const boost::json::object fields{{"locations", ids.size()},
                                      {"new", total.created},
@@ -175,8 +175,8 @@ asio::awaitable<void> Sync::full_sync(std::int64_t location_id) {
 
     // Failing the job (to have it retried) also shows the error on the status page.
     const auto fail = [&](std::string error) -> asio::awaitable<void> {
-        co_await db_.tx([location_id, error, now](pqxx::work& tx) {
-            repo::record_sync_error(tx, {location_id}, error, now, false);
+        co_await db_.tx([location_id, error, now, interval = options_.review_poll_interval](pqxx::work& tx) {
+            repo::record_sync_error(tx, {location_id}, error, now, interval, false);
         });
         throw std::runtime_error(std::format("full review sync of location {}: {}", location_id, error));
     };

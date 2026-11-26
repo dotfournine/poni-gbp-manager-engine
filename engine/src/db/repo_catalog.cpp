@@ -62,7 +62,6 @@ std::string location_select() {
                to_char(l.analyze_from, 'YYYY-MM-DD') AS analyze_from, l.audience, l.title, l.store_code,
                l.primary_category, l.address, l.locality, l.administrative_area, l.postal_code, l.region_code,
                l.phone, l.website_uri, l.maps_uri, l.access_status, {} AS access_lost_at, {} AS first_seen_at, {} AS last_seen_at,
-               l.review_poll_interval_s,
                (SELECT count(*) FROM reviews r WHERE r.location_id = l.id AND r.removed_at IS NULL) AS review_count,
                (SELECT count(*) FROM reviews r WHERE r.location_id = l.id AND r.removed_at IS NULL AND r.reply_text IS NULL)
                    AS unreplied_count,
@@ -189,7 +188,7 @@ std::optional<model::Location> get_location(pqxx::transaction_base& tx, std::int
 
 Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const LocationPatch& patch) {
     const auto rows = tx.exec(
-        "SELECT l.client_id, c.name, l.review_poll_interval_s, l.posting_enabled, l.enabled, l.access_status, l.industry_key, "
+        "SELECT l.client_id, c.name, l.posting_enabled, l.enabled, l.access_status, l.industry_key, "
         "to_char(l.analyze_from, 'YYYY-MM-DD'), l.audience, l.auto_post_enabled, l.auto_post_five_star, l.auto_post_four_star "
         "FROM locations l LEFT JOIN clients c ON c.id = l.client_id "
         "WHERE l.id = $1 FOR UPDATE OF l",
@@ -197,19 +196,16 @@ Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Write
     if (rows.empty()) return not_found("location");
     const auto old_client = rows[0][0].as<std::optional<std::int64_t>>();
     const auto old_client_name = rows[0][1].as<OptString>();
-    const auto old_interval = rows[0][2].as<int>();
-    const auto old_posting = rows[0][3].as<bool>();
-    const auto old_enabled = rows[0][4].as<bool>();
-    const bool accessible = rows[0][5].as<std::string>() == "active";
-    const auto old_industry = rows[0][6].as<OptString>();
-    const auto old_from = rows[0][7].as<OptString>();
-    const auto old_audience = rows[0][8].as<std::string>();
-    const auto old_auto_post = rows[0][9].as<bool>(), old_five_star = rows[0][10].as<bool>(), old_four_star = rows[0][11].as<bool>();
+    const auto old_posting = rows[0][2].as<bool>();
+    const auto old_enabled = rows[0][3].as<bool>();
+    const bool accessible = rows[0][4].as<std::string>() == "active";
+    const auto old_industry = rows[0][5].as<OptString>();
+    const auto old_from = rows[0][6].as<OptString>();
+    const auto old_audience = rows[0][7].as<std::string>();
+    const auto old_auto_post = rows[0][8].as<bool>(), old_five_star = rows[0][9].as<bool>(), old_four_star = rows[0][10].as<bool>();
     const auto now = to_timestamptz(audit.now());
 
     // Check everything before writing anything: a refused request changes nothing.
-    const auto interval = patch.review_poll_interval_s.value_or(old_interval);
-    if (interval != old_interval && (interval < 60 || interval > 86400)) return invalid("review_poll_interval_s must be between 60 and 86400.");
     const auto industry = patch.industry_key.over(old_industry);
     // Only an industry the knowledge base supports can be given; one the location already has may stay.
     if (industry && industry != old_industry && !industry_supported(tx, *industry)) {
@@ -241,15 +237,14 @@ Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Write
         before[name] = std::move(was);
         after[name] = std::move(is);
     };
-    changed("review_poll_interval_s", old_interval, interval);
     changed("industry_key", optional_json(old_industry), optional_json(industry));
     changed("analyze_from", optional_json(old_from), optional_json(from));
     changed("audience", boost::json::value(old_audience), boost::json::value(audience));
     const bool new_fields = !after.empty();
     if (new_fields) {
-        tx.exec("UPDATE locations SET review_poll_interval_s = $2, industry_key = $3, analyze_from = $4::date, audience = $5, "
-                "updated_at = $6::timestamptz WHERE id = $1",
-                pqxx::params{id, interval, industry, from, audience, now})
+        tx.exec("UPDATE locations SET industry_key = $2, analyze_from = $3::date, audience = $4, "
+                "updated_at = $5::timestamptz WHERE id = $1",
+                pqxx::params{id, industry, from, audience, now})
             .no_rows();
         audit.record("location.update", "location", id, {.before = std::move(before), .after = std::move(after)});
     }

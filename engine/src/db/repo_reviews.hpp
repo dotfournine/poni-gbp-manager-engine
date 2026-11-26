@@ -93,7 +93,8 @@ void mark_reviews_seen(pqxx::transaction_base& tx, std::int64_t location_id, con
                        core::TimePoint now);
 
 // A poll of these locations succeeded: schedules the next one and clears the error.
-void finish_poll(pqxx::transaction_base& tx, const std::vector<std::int64_t>& location_ids, core::TimePoint now);
+void finish_poll(pqxx::transaction_base& tx, const std::vector<std::int64_t>& location_ids, core::TimePoint now,
+                 std::chrono::seconds poll_interval);
 
 // A full reconciliation succeeded. `detail` holds its numbers.
 void finish_full_sync(pqxx::transaction_base& tx, std::int64_t location_id, const boost::json::object& detail,
@@ -102,7 +103,7 @@ void finish_full_sync(pqxx::transaction_base& tx, std::int64_t location_id, cons
 // A sync of these locations failed. With `reschedule_poll` the next poll is
 // pushed out by the normal interval, so a failing API isn't hammered.
 void record_sync_error(pqxx::transaction_base& tx, const std::vector<std::int64_t>& location_ids, std::string_view error,
-                       core::TimePoint now, bool reschedule_poll);
+                       core::TimePoint now, std::chrono::seconds poll_interval, bool reschedule_poll);
 
 // ---- inbox ---------------------------------------------------------------------
 

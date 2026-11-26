@@ -264,6 +264,7 @@ int run(const core::Config& config) {
     jobs::Sync sync(database, clock, gbp_reader, queue,
                     {.discovery_interval = config.location_discovery_interval,
                      .poll_tick = config.review_poll_tick,
+                     .review_poll_interval = config.review_poll_interval,
                      .full_sync_interval = config.review_full_sync_interval,
                      .notification_pull_interval = config.pubsub_pull_interval});
     jobs::ReviewPipeline pipeline(database, clock, llm_client, queue, {.tick = config.analysis_tick});
