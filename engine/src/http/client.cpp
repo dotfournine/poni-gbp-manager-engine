@@ -454,6 +454,20 @@ std::optional<std::string_view> why_storage_refused(ClientMethod method, const b
 
 }  // namespace
 
+namespace {
+
+// The Google hosts the client only reads from, each one request wide.
+std::optional<std::string_view> why_read_only_host_refused(ClientMethod method, const boost::urls::url& url) {
+    if (is_directory_host(url) && (method != ClientMethod::get || !is_directory_user_list_url(url))) {
+        return "the outbound client only sends Google's Admin SDK a GET of the list of users";
+    }
+    // The field mask is a header: the whole request is checked in the overload that takes it.
+    if (is_places_host(url) && (method != ClientMethod::get || !is_place_url(url))) return kPlacesRefusal;
+    return std::nullopt;
+}
+
+}  // namespace
+
 std::optional<std::string_view> why_refused(ClientMethod method, const boost::urls::url& url, std::string_view public_bucket) {
     if (!is_plain_host(url)) return "the outbound client only sends to a host named with letters, digits, '.' and '-'";
     // The host however it is written; the one allowed address only as the engine writes it.
@@ -461,11 +475,7 @@ std::optional<std::string_view> why_refused(ClientMethod method, const boost::ur
         return "the outbound client only sends Apple's push service a POST of a notification to one device";
     }
     if (is_storage_host(url)) return why_storage_refused(method, url, public_bucket);
-    if (is_directory_host(url) && (method != ClientMethod::get || !is_directory_user_list_url(url))) {
-        return "the outbound client only sends Google's Admin SDK a GET of the list of users";
-    }
-    // The field mask is a header: the whole request is checked below.
-    if (is_places_host(url) && (method != ClientMethod::get || !is_place_url(url))) return kPlacesRefusal;
+    if (const auto refusal = why_read_only_host_refused(method, url)) return refusal;
     switch (method) {
         case ClientMethod::get: return std::nullopt;
         case ClientMethod::put:
