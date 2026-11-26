@@ -1,6 +1,6 @@
 # Runbook: every workflow on made-up data, against the Google mock
 
-The engine can run against `poni-tools mock-google`, a local mock of the Google APIs it uses (D-087), instead of Google. The mock serves made-up businesses (the knowledge base's test clients) and made-up reviews, takes the engine's replies, gives a report its visibility numbers, and keeps the email the engine sends in an outbox. Its test portal is where a person posts, edits and removes reviews.
+The engine can run against `poni-tools mock-google`, a local mock of the Google APIs it uses (D-087), instead of Google. The mock serves made-up businesses (the knowledge base's test clients) and made-up reviews, takes the engine's replies, gives a report its visibility numbers, answers the Google Places read of a place's time zone (so a discovered location gets its zone; any API key will do), and keeps the email the engine sends in an outbox. Its test portal is where a person posts, edits and removes reviews.
 
 Everything below runs next to a normal local setup without touching it: the mock engine gets its own database, its own config file and its own ports (engine 8081, dashboard 5174, mock 8090). Never point the mock engine at the real database or at `~/.config/poni-gbp/engine.env`; the engine refuses to start when a database and the mock setting disagree, in either direction.
 
@@ -96,4 +96,4 @@ The test portal is http://127.0.0.1:8090/, the dashboard http://localhost:5174. 
 
 ## Afterwards
 
-Stop the three programs. The mock keeps its data in `~/.local/state/poni-gbp/mock-google.json`; start it with `--reset` for a fresh set. To start from nothing, drop the database (`docker compose -f deploy/docker-compose.dev.yml exec db dropdb -U poni poni_mock`), create it again and run the mock with `--reset`: a token the engine stored for an old mock is refused by a new one, so connect again on the status page.
+Stop the three programs. The mock keeps its data in `~/.local/state/poni-gbp/mock-google.json`; start it with `--reset` for a fresh set. A state file from before the time zones gains each made-up location's zone when the mock starts and keeps everything else; `--reset` does the same from scratch. To start from nothing, drop the database (`docker compose -f deploy/docker-compose.dev.yml exec db dropdb -U poni poni_mock`), create it again and run the mock with `--reset`: a token the engine stored for an old mock is refused by a new one, so connect again on the status page.
