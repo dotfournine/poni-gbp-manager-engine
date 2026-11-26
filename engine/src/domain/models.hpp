@@ -1003,17 +1003,18 @@ struct ReportSchedule {
     std::string frequency;  // "daily", "weekly" or "monthly"
     std::optional<std::int64_t> weekday;    // 1 (Monday) to 7; weekly
     std::optional<std::int64_t> month_day;  // 1 to 28; monthly
-    std::string time;                       // "HH:MM", local
-    std::string time_zone;
-    bool auto_send = false;
+    std::string time;                       // "HH:MM", in the location's zone (D-109): a schedule has none of its own
     bool enabled = true;
-    std::optional<std::string> last_run_on;
+    bool auto_send = false;
+    std::vector<std::string> recipients;                // in the order given
+    std::optional<std::vector<std::string>> sections;  // nothing: the location's report settings decide (D-111)
+    std::optional<std::string> last_run_on;             // the engine's, not in the ETag
     std::string created_at;
     std::string updated_at;
 };
 BOOST_DESCRIBE_STRUCT(ReportSchedule, (),
-                      (id, location_id, location_title, frequency, weekday, month_day, time, time_zone, auto_send, enabled, last_run_on,
-                       created_at, updated_at))
+                      (id, location_id, location_title, frequency, weekday, month_day, time, enabled, auto_send, recipients, sections,
+                       last_run_on, created_at, updated_at))
 
 using ReportScheduleList = Paged<ReportSchedule>;
 

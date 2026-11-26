@@ -25,14 +25,14 @@ struct ReportSchedule {
     int weekday = 0;        // 1 (Monday) to 7 (Sunday); weekly only
     int month_day = 0;      // 1 to 28; monthly only
     int minute_of_day = 0;  // local time
-    std::string time_zone;
+    std::string time_zone;  // the location's zone (D-109): a schedule has none of its own
 };
 
 // What is wrong with the schedule, if anything.
 std::optional<std::string> schedule_problem(const ReportSchedule& schedule);
 
 struct Occurrence {
-    Day local_day;        // the day of the run, in the schedule's zone
+    Day local_day;        // the day of the run, in the location's zone
     core::TimePoint at;   // the moment of the run
 };
 

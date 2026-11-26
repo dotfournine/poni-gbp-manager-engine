@@ -20,6 +20,7 @@
 
 #include <array>
 
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <optional>
@@ -151,6 +152,9 @@ bool valid_email(std::string_view address);
 // An address as a rule stores it: the ends trimmed and ASCII lower-cased. An address
 // someone asks for is compared with stored ones in this form.
 std::string normal_address(std::string_view raw);
+// A list of addresses as a rule or a report schedule stores it: each one normal_address'd, a repeat dropped, the order
+// kept. Nothing if an address is not valid, or there are fewer than `min_count` or more than 20.
+std::optional<std::vector<std::string>> clean_recipients(const std::vector<std::string>& recipients, std::size_t min_count);
 
 model::NotificationRuleList list_rules(pqxx::transaction_base& tx);
 std::optional<model::NotificationRule> get_rule(pqxx::transaction_base& tx, std::int64_t id);
