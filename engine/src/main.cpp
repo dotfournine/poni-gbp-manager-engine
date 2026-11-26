@@ -16,6 +16,7 @@
 #include "connectors/gbp/performance.hpp"
 #include "connectors/gbp/writer.hpp"
 #include "connectors/google/auth.hpp"
+#include "connectors/google/places.hpp"
 #include "connectors/identity/provider.hpp"
 #include "connectors/llm/net_client.hpp"
 #include "connectors/notify/apns.hpp"
@@ -145,6 +146,8 @@ void configure_limits(core::RateLimiter& limiter) {
         {pubsub::kPubsubApi, {.per_minute = 120, .burst = 10}},
         {storage::kStorageApi, {.per_minute = 120, .burst = 10}},
         {workspace::kDirectoryApi, {.per_minute = 120, .burst = 10}},
+        // A newly discovered location's time zone (D-109): one read per new location.
+        {google::kPlacesApi, {.per_minute = 60, .burst = 5}},
         // A report's send emails each recipient apart, and the notifications share the slots (D-104 point 9).
         {notify::kGmailApi, {.per_minute = 120, .burst = 5}},
         // One slot per connection to Apple's push service, which carries one delivery's pushes.

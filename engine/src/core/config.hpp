@@ -127,6 +127,11 @@ struct Config {
     // <PONI_PUBLIC_URL>/api/connections/gbp/callback and .../gmail/callback.
     std::string gbp_oauth_client_id;
     std::string gbp_oauth_client_secret;
+    // PONI_GOOGLE_PLACES_API_KEY: a Google Maps Platform key restricted to the
+    // Places API (New), with which a newly discovered location's time zone is
+    // read (D-109). Required with a GBP OAuth client unless the mock is on.
+    // Sent only in that request's header: never logged or shown.
+    std::string google_places_api_key;
     std::chrono::seconds location_discovery_interval{900};
     // How often the review poll job runs; it polls the locations whose poll is due.
     std::chrono::seconds review_poll_tick{60};
@@ -138,7 +143,7 @@ struct Config {
     // Development only (D-087): the address of `poni-tools mock-google` on
     // this machine, "http://127.0.0.1:8090". Set, the engine sends every call
     // it makes to Google Business Profile, Google's token endpoint, the
-    // Performance API and Gmail to the mock instead, refuses to talk to any
+    // Performance API, Gmail and Google Places to the mock instead, refuses to talk to any
     // other Google service, and only starts against a database marked as a
     // mock database. Empty: Google, as in production.
     std::string google_mock_url;

@@ -286,6 +286,10 @@ void check_combinations(Settings& s, const Config& c) {
         return s.fail("PONI_PUBLIC_FOLDER_URL is the address of a local folder: PONI_PUBLIC_BUCKET must be that folder's path "
                       "(a bucket's address is Cloud Storage's own)");
     }
+    if (!c.google_mock() && !c.gbp_oauth_client_id.empty() && c.google_places_api_key.empty()) {
+        return s.fail("PONI_GOOGLE_PLACES_API_KEY is required with a GBP OAuth client: a newly discovered location's time zone is read "
+                      "from Google Places.");
+    }
     if (c.google_mock()) {
         if (c.pubsub_subscription) {
             return s.fail("PONI_PUBSUB_SUBSCRIPTION must be empty with PONI_GOOGLE_MOCK_URL: the mock has no Pub/Sub, and a real "
@@ -419,6 +423,7 @@ std::expected<Config, std::string> load_config(const Environment& env, const std
     });
     s.text("PONI_GBP_OAUTH_CLIENT_ID", c.gbp_oauth_client_id);
     s.text("PONI_GBP_OAUTH_CLIENT_SECRET", c.gbp_oauth_client_secret);
+    s.text("PONI_GOOGLE_PLACES_API_KEY", c.google_places_api_key);
     s.seconds("PONI_LOCATION_DISCOVERY_INTERVAL_S", 60, c.location_discovery_interval);
     s.seconds("PONI_REVIEW_POLL_TICK_S", 10, c.review_poll_tick);
     s.seconds("PONI_REVIEW_POLL_INTERVAL_S", 60, c.review_poll_interval);
