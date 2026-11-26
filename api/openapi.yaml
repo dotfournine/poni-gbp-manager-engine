@@ -100,7 +100,7 @@ tags:
   - name: notifications
     description: Notification rules and the delivery log.
   - name: auto-reply
-    description: Replies posted without a person (D-069), per location, with their switches, limits and pauses.
+    description: Replies posted without a person (D-069, D-110), the engine's pauses and state, and taking a scheduled reply back. Auto reply's settings are a location's reply settings.
   - name: go-live
     description: The go-live test (D-074), which a configuration must pass before anything is posted by auto reply with it.
   - name: reports
@@ -1673,111 +1673,81 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /api/auto-posting:
+  /api/system/auto-reply:
     get:
-      operationId: getAutoPosting
-      summary: Auto reply everywhere
+      operationId: getAutoReplyStatus
+      summary: Auto reply's state everywhere
       description: |
-        The pause on every location, the global posting switch, and each
-        enabled location's auto reply settings. Everything is off after
-        installation.
+        The engine's own state of auto reply (D-110): the global posting
+        switch, the pause on every location, and for each switched-on
+        location its pause, what it posted in the last 24 hours, what it has
+        scheduled, whether its reply settings' timing can be used, and where
+        its go-live test stands. All of it is read-only.
+
+        This is the only place the engine's state is served. It is never in
+        a location's reply settings and never in their `ETag`, so a pause
+        never makes a settings form stale. Auto reply's settings (its switch,
+        minimum of stars, delay, window, daily cap and pause after failures)
+        are the location's reply settings (`/api/locations/{id}/reply-settings`).
       tags: [auto-reply]
       responses:
         "200":
-          description: The overview.
+          description: The state.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AutoPostingOverview"
+                $ref: "#/components/schemas/AutoReplyStatus"
         "401":
           $ref: "#/components/responses/Unauthenticated"
 
-  /api/auto-posting/resume:
+  /api/system/auto-reply/resume:
     post:
-      operationId: resumeAllAutoPosting
+      operationId: resumeAllAutoReply
       summary: Lift the pause on every location
       description: |
         The engine pauses auto reply everywhere when Google refuses its
         token or its permission for an automatic reply. Only a person lifts
-        the pause. Replies stopped meanwhile stay in the approval queue.
+        the pause. This lifts the global pause only: a location's own pause
+        stays until it is lifted there. Replies stopped meanwhile stay in the
+        approval queue. Needs no `If-Match`.
       tags: [auto-reply]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       responses:
         "200":
-          description: The overview after resuming.
+          description: The state after resuming.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AutoPostingOverview"
+                $ref: "#/components/schemas/AutoReplyStatus"
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
 
-  /api/locations/{id}/auto-posting:
-    parameters:
-      - $ref: "#/components/parameters/Id"
-    patch:
-      operationId: updateLocationAutoPosting
-      summary: Change a location's auto reply settings
-      description: |
-        Switching auto reply on lets the engine post replies to this
-        location's reviews without a person: drafts routed to `auto_reply`
-        for the chosen star ratings, written from then on. It is refused
-        (400) unless a star rating is chosen, the location is enabled and
-        accessible (D-102), and the reply settings' timing can be used (a posting
-        window needs `time_zone`). The global and the location's posting
-        switch still apply on top, and nothing is posted by auto reply until the
-        location's configuration has passed a go-live test (`go_live_state`,
-        D-074). Switching on or off is audited under its own action.
-      tags: [auto-reply]
-      parameters:
-        - $ref: "#/components/parameters/CsrfToken"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AutoPostingUpdate"
-      responses:
-        "200":
-          description: The settings after the change.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AutoPosting"
-        "400":
-          $ref: "#/components/responses/InvalidRequest"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-
-  /api/locations/{id}/auto-posting/resume:
+  /api/locations/{id}/auto-reply/resume:
     parameters:
       - $ref: "#/components/parameters/Id"
     post:
-      operationId: resumeLocationAutoPosting
+      operationId: resumeLocationAutoReply
       summary: Lift a location's pause
       description: |
         The engine pauses auto reply at a location when
-        `pause_after_failures` replies in a row failed a reply check, when an
-        automatic reply did not appear on
-        Google, or when Google refused one. Only a person lifts the pause.
-        Replies stopped meanwhile stay in the approval queue.
+        `auto_reply_pause_after_failures` replies in a row failed a reply
+        check, when an automatic reply did not appear on Google, or when
+        Google refused one. Only a person lifts the pause, and this lifts the
+        location's own pause only. Replies stopped meanwhile stay in the
+        approval queue. Needs no `If-Match`.
       tags: [auto-reply]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       responses:
         "200":
-          description: The settings after resuming.
+          description: The location's state after resuming.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AutoPosting"
+                $ref: "#/components/schemas/AutoReplyLocation"
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
@@ -1785,9 +1755,9 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
-  /api/auto-posts:
+  /api/auto-replies:
     get:
-      operationId: listAutoPosts
+      operationId: listAutoReplies
       summary: Replies posted without a person
       description: Newest first, with the version of the rules that decided each one and the time from the review to the reply.
       tags: [auto-reply]
@@ -1800,7 +1770,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AutoPostList"
+                $ref: "#/components/schemas/AutoReplyList"
         "400":
           $ref: "#/components/responses/InvalidRequest"
         "401":
@@ -4375,12 +4345,9 @@ components:
           type: [string, "null"]
           description: |
             The location's time zone, an IANA name such as
-            `America/New_York`. It is the same value as
-            `AutoPosting.time_zone`, where the posting window uses it, and
-            the only one a location has. Google gives none, so it is null
-            until a person enters it, in one place only,
-            `PATCH /api/locations/{id}/auto-posting`; `LocationUpdate` does
-            not take it. A report of the location takes this zone unless
+            `America/New_York`. The posting window of the reply settings
+            uses it, and it is the only one a location has. No route sets
+            it, and `LocationUpdate` does not take it. A report of the location takes this zone unless
             it names another (`ReportCreate.time_zone`). It does not change how
             date-times are written: they stay UTC, `scheduled_time` and
             `recurrence.until` of a local post included.
@@ -5104,8 +5071,9 @@ components:
       description: |
         A drafted reply and its route. The route is what the policy would do
         (FR-5). A draft routed to `auto_reply` is scheduled for posting only
-        where a person switched auto reply on for the location and the
-        star rating (`AutoPosting`); every other draft waits for a person.
+        where a person switched auto reply on in the location's reply
+        settings (`ReplySettings.auto_reply_enabled`), for a review with text
+        of at least `auto_reply_min_stars`; every other draft waits for a person.
       additionalProperties: false
       required:
         - id
@@ -5174,7 +5142,7 @@ components:
             that could not be read say other things), and it is null when
             only a switch or the location's auto reply configuration kept
             the draft from being scheduled. A pause is on the location
-            (`AutoPosting.paused`, `pause_reason`), never among the reasons.
+            (`AutoReplyLocation.paused`, `pause_reason`), never among the reasons.
             The values, in this order when several apply, in the engine's
             wording:
 
@@ -5194,8 +5162,8 @@ components:
               `<n> stars` (the rating is below the policy's minimum for
               auto reply; `<n>` is the rating, so `1 stars`, `2 stars` and
               so on), `no star rating`, `contains a complaint`,
-              `auto reply is off for rating-only reviews`,
-              `auto reply is off for positive reviews`.
+              `auto reply is for reviews with text` (a review without text
+              never auto replies, D-110).
             - `regenerated_with_instructions`: a person wrote the reply
               again with instructions of their own and the policy would have
               sent it by auto reply. The route is `approval_queue` and this is the
@@ -5577,10 +5545,22 @@ components:
       type: object
       description: |
         A location's reply settings (D-107): how a reply to a review is
-        written and checked, and when it is posted by itself. Complete: the
-        answer of a read and the body of a save, sent whole.
+        written and checked, and whether and when it is posted by itself
+        (auto reply, D-110). Complete: the answer of a read and the body of a
+        save, sent whole. Only settings are here: the engine's own state of
+        auto reply (its pause, what it posted and scheduled, the go-live
+        state) is served only by `GET /api/system/auto-reply` and is never in
+        these settings or in their `ETag`. Switching a location off sets
+        `auto_reply_enabled` to false, the engine's one write to them, which
+        changes the `ETag`.
+
+        A save with `auto_reply_enabled` true is refused (400) unless the
+        location is switched on and accessible, `auto_reply_min_stars` is 4
+        or 5, the timing can be used, and a posting window has a location
+        time zone the server knows. Switching auto reply on or off is also
+        audited under its own action.
       additionalProperties: false
-      required: [reply_languages, fallback_language, signature, sign_off_name, length, example_replies, promos_allowed, contact_allowed, temperature, auto_reply_positive, auto_reply_rating_only, auto_reply_min_stars, auto_reply_delay_min_minutes, auto_reply_delay_max_minutes, auto_reply_window_start, auto_reply_window_end]
+      required: [reply_languages, fallback_language, signature, sign_off_name, length, example_replies, promos_allowed, contact_allowed, temperature, auto_reply_min_stars, auto_reply_delay_min_minutes, auto_reply_delay_max_minutes, auto_reply_window_start, auto_reply_window_end, auto_reply_enabled, auto_reply_daily_cap, auto_reply_pause_after_failures]
       properties:
         reply_languages:
           type: array
@@ -5631,17 +5611,13 @@ components:
           description: |
             The temperature the reply writer is asked with (D-074). Not part
             of the prompt. A change needs a new go-live test.
-        auto_reply_positive:
-          type: boolean
-          description: A review with text, enough stars and no complaint goes to auto reply when every check passes.
-        auto_reply_rating_only:
-          type: boolean
-          description: The same for a review without text.
         auto_reply_min_stars:
           type: integer
-          minimum: 1
-          maximum: 5
-          description: Reviews below this many stars always wait for a person.
+          enum: [4, 5]
+          description: |
+            Reviews below this many stars always wait for a person; three
+            stars or fewer always do. Only reviews with text auto reply. The
+            width the go-live test covers: a pass at 5 does not cover 4.
         auto_reply_delay_min_minutes:
           type: integer
           minimum: 0
@@ -5658,10 +5634,26 @@ components:
             The posting window in the location's local time, `HH:MM`; empty,
             none. A reply due outside it moves into the next one. A start
             later than the end crosses midnight. A window needs the
-            location's time zone (`AutoPosting.time_zone`).
+            location's time zone (`Location.time_zone`).
         auto_reply_window_end:
           type: string
           pattern: "^(([01][0-9]|2[0-3]):[0-5][0-9])?$"
+        auto_reply_enabled:
+          type: boolean
+          description: |
+            Replies to this location's reviews may be posted without a
+            person. Off until a person switches it on; switching the location
+            off switches it off.
+        auto_reply_daily_cap:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          description: At most this many automatic replies in any 24 hours; the next draft waits for a person.
+        auto_reply_pause_after_failures:
+          type: integer
+          minimum: 1
+          maximum: 20
+          description: This many replies in a row that fail a reply check pause auto reply here (D-076).
     ReplySettingsLayer:
       type: object
       description: The reply settings a voice template sets; a member that is absent is left as it is by taking the template.
@@ -5716,17 +5708,13 @@ components:
           description: |
             The temperature the reply writer is asked with (D-074). Not part
             of the prompt. A change needs a new go-live test.
-        auto_reply_positive:
-          type: boolean
-          description: A review with text, enough stars and no complaint goes to auto reply when every check passes.
-        auto_reply_rating_only:
-          type: boolean
-          description: The same for a review without text.
         auto_reply_min_stars:
           type: integer
-          minimum: 1
-          maximum: 5
-          description: Reviews below this many stars always wait for a person.
+          enum: [4, 5]
+          description: |
+            Reviews below this many stars always wait for a person; three
+            stars or fewer always do. Only reviews with text auto reply. The
+            width the go-live test covers: a pass at 5 does not cover 4.
         auto_reply_delay_min_minutes:
           type: integer
           minimum: 0
@@ -5743,10 +5731,21 @@ components:
             The posting window in the location's local time, `HH:MM`; empty,
             none. A reply due outside it moves into the next one. A start
             later than the end crosses midnight. A window needs the
-            location's time zone (`AutoPosting.time_zone`).
+            location's time zone (`Location.time_zone`).
         auto_reply_window_end:
           type: string
           pattern: "^(([01][0-9]|2[0-3]):[0-5][0-9])?$"
+        auto_reply_enabled:
+          type: boolean
+          description: Always false in a template; only a person switches auto reply on.
+        auto_reply_daily_cap:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        auto_reply_pause_after_failures:
+          type: integer
+          minimum: 1
+          maximum: 20
 
     # ---- pipeline settings and LLM usage -----------------------------------------
 
@@ -6856,38 +6855,28 @@ components:
           type: string
           description: An email address.
 
-    AutoPosting:
+    AutoReplyLocation:
       type: object
       description: |
-        Auto reply at one location (D-069). `enabled` and the
-        star ratings are a person's switches, off after installation. The
-        delay and the window come from the location's reply settings
-        and are changed there. `paused` is set by the engine and lifted by a
-        person.
+        Auto reply at one location as the engine keeps it (D-110). All of it
+        is the engine's state and read-only: the pause the engine put on the
+        location (lifted by a person), what was posted and scheduled, whether
+        the reply settings' timing can be used, and the go-live state. The
+        settings are the location's reply settings. None of this is in them
+        or in their `ETag`.
       additionalProperties: false
       required:
         - location_id
         - location_title
-        - client_id
-        - client_name
-        - enabled
-        - five_star
-        - four_star
-        - daily_cap
-        - time_zone
-        - delay_min_minutes
-        - delay_max_minutes
-        - window_start
-        - window_end
-        - timing_problem
         - posting_enabled
         - paused
         - paused_at
         - pause_reason
         - pause_detail
+        - resumed_at
         - posted_last_24h
         - scheduled
-        - pause_after_failures
+        - timing_problem
         - go_live_state
       properties:
         location_id:
@@ -6895,41 +6884,6 @@ components:
           format: int64
         location_title:
           type: string
-        client_id:
-          type: [integer, "null"]
-          format: int64
-        client_name:
-          type: [string, "null"]
-        enabled:
-          type: boolean
-          description: Replies to this location's reviews may be posted without a person.
-        five_star:
-          type: boolean
-          description: Five-star reviews may be answered automatically.
-        four_star:
-          type: boolean
-          description: Four-star reviews may be answered automatically. Three stars and fewer never are.
-        daily_cap:
-          type: integer
-          minimum: 1
-          maximum: 1000
-          description: At most this many automatic replies in any 24 hours; the next draft waits for a person. 100 unless changed.
-        time_zone:
-          type: [string, "null"]
-          description: |
-            IANA name, for example `America/New_York`. Needed for a posting
-            window. The same value as `Location.time_zone`, set here.
-        delay_min_minutes:
-          type: integer
-        delay_max_minutes:
-          type: integer
-        window_start:
-          type: string
-        window_end:
-          type: string
-        timing_problem:
-          type: [string, "null"]
-          description: Why the timing can't be used. While it is set, nothing is posted by auto reply here.
         posting_enabled:
           type: boolean
           description: The location's posting switch (`Location.posting_enabled`), which auto reply needs too.
@@ -6940,56 +6894,41 @@ components:
           format: date-time
         pause_reason:
           oneOf:
-            - $ref: "#/components/schemas/AutoPostPauseReason"
+            - $ref: "#/components/schemas/AutoReplyPauseReason"
             - type: "null"
         pause_detail:
           type: [string, "null"]
+        resumed_at:
+          type: [string, "null"]
+          format: date-time
+          description: When a person last lifted the location's pause; null if never.
         posted_last_24h:
           type: integer
           format: int64
-          description: Automatic replies sent in the last 24 hours, which the cap counts.
+          description: Automatic replies sent in the last 24 hours, which `auto_reply_daily_cap` counts.
         scheduled:
           type: integer
           format: int64
           description: Drafts scheduled and not yet posted.
-        pause_after_failures:
-          type: integer
-          minimum: 1
-          maximum: 20
-          description: This many replies in a row that fail a reply check pause auto reply here (D-076). 3 unless changed.
+        timing_problem:
+          type: [string, "null"]
+          description: |
+            Why the reply settings' timing can't be used (a posting window
+            without a time zone the server knows). While it is set, nothing
+            is posted by auto reply here.
         go_live_state:
           $ref: "#/components/schemas/GoLiveState"
-    AutoPostPauseReason:
+    AutoReplyPauseReason:
       type: string
       enum: [checks_failing, post_unconfirmed, post_refused]
       description: |
         `checks_failing`: the location's last replies each failed a reply
-        check, as many in a row as `pause_after_failures`. `post_unconfirmed`: an automatic reply was sent and did
-        not appear on Google. `post_refused`: Google refused an automatic
-        reply.
-    AutoPostingUpdate:
+        check, as many in a row as `auto_reply_pause_after_failures`.
+        `post_unconfirmed`: an automatic reply was sent and did not appear
+        on Google. `post_refused`: Google refused an automatic reply.
+    AutoReplyStatus:
       type: object
-      additionalProperties: false
-      properties:
-        enabled:
-          type: boolean
-        five_star:
-          type: boolean
-        four_star:
-          type: boolean
-        daily_cap:
-          type: integer
-          minimum: 1
-          maximum: 1000
-        pause_after_failures:
-          type: integer
-          minimum: 1
-          maximum: 20
-        time_zone:
-          type: [string, "null"]
-          description: An IANA name; null for none. Left out, it stays as it is.
-    AutoPostingOverview:
-      type: object
+      description: The engine's state of auto reply everywhere, read-only (D-110).
       additionalProperties: false
       required:
         - posting_enabled
@@ -6997,6 +6936,7 @@ components:
         - paused_at
         - pause_reason
         - pause_detail
+        - resumed_at
         - locations
       properties:
         posting_enabled:
@@ -7010,15 +6950,19 @@ components:
           format: date-time
         pause_reason:
           oneOf:
-            - $ref: "#/components/schemas/AutoPostPauseReason"
+            - $ref: "#/components/schemas/AutoReplyPauseReason"
             - type: "null"
         pause_detail:
           type: [string, "null"]
+        resumed_at:
+          type: [string, "null"]
+          format: date-time
+          description: When a person last lifted the global pause; null if never.
         locations:
           type: array
-          description: Every enabled location, by title.
+          description: Every switched-on location, by title.
           items:
-            $ref: "#/components/schemas/AutoPosting"
+            $ref: "#/components/schemas/AutoReplyLocation"
     GoLiveState:
       type: string
       enum: [not_tested, running, passed, failed, inconclusive, cancelled]
@@ -7119,9 +7063,7 @@ components:
         - fingerprint
         - status
         - summary
-        - auto_post_positive
-        - auto_post_rating_only
-        - auto_post_min_stars
+        - auto_reply_min_stars
         - corpus_version
         - corpus_current
         - kb_version
@@ -7152,13 +7094,9 @@ components:
         summary:
           type: [string, "null"]
           description: A sentence on the outcome, including how many real reviews were tested or that none were.
-        auto_post_positive:
-          type: boolean
-          description: With the next two, how wide the reply policy was that the cases were routed with. A wider policy needs a new test.
-        auto_post_rating_only:
-          type: boolean
-        auto_post_min_stars:
+        auto_reply_min_stars:
           type: integer
+          description: How wide the reply policy was that the cases were routed with (D-110). A wider policy needs a new test.
         corpus_version:
           type: string
           description: A hash of the cases of the location's industry that the run used.
@@ -7294,7 +7232,7 @@ components:
           description: Every enabled location, by title.
           items:
             $ref: "#/components/schemas/GoLiveLocation"
-    AutoPost:
+    AutoReply:
       type: object
       description: One reply the engine posted without a person.
       additionalProperties: false
@@ -7349,7 +7287,7 @@ components:
           type: [integer, "null"]
           format: int64
           description: From Google returning the review to Google accepting the reply.
-    AutoPostList:
+    AutoReplyList:
       type: object
       additionalProperties: false
       required: [items, total]
@@ -7357,7 +7295,7 @@ components:
         items:
           type: array
           items:
-            $ref: "#/components/schemas/AutoPost"
+            $ref: "#/components/schemas/AutoReply"
         total:
           type: integer
           format: int64
