@@ -224,13 +224,14 @@
    "promos_allowed": false,
    "contact_allowed": false,
    "temperature": 0.7,
-   "auto_reply_positive": true,
-   "auto_reply_rating_only": true,
    "auto_reply_min_stars": 4,
    "auto_reply_delay_min_minutes": 0,
    "auto_reply_delay_max_minutes": 0,
    "auto_reply_window_start": "",
-   "auto_reply_window_end": ""
+   "auto_reply_window_end": "",
+   "auto_reply_enabled": false,
+   "auto_reply_daily_cap": 100,
+   "auto_reply_pause_after_failures": 3
   }
  },
  "fingerprint_inputs": {

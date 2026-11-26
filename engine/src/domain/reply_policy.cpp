@@ -56,10 +56,9 @@ GateDecision gate(const GateInput& input, const ReplySettings& reply) {
         reasons.push_back(input.stars > 0 ? std::format("{} stars", input.stars) : std::string("no star rating"));
     } else if (input.contains_complaint) {
         reasons.emplace_back("contains a complaint");
-    } else if (!input.has_text && !reply.auto_reply_rating_only) {
-        reasons.emplace_back("auto reply is off for rating-only reviews");
-    } else if (input.has_text && !reply.auto_reply_positive) {
-        reasons.emplace_back("auto reply is off for positive reviews");
+    } else if (!input.has_text) {
+        // A rating without words still gets a draft, for a person (D-110).
+        reasons.emplace_back("auto reply is for reviews with text");
     }
     if (!reasons.empty()) return {std::string(kRouteApproval), std::move(reasons)};
     return {std::string(kRouteAutoReply), {}};

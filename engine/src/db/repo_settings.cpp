@@ -5,6 +5,7 @@
 #include "core/text.hpp"
 #include "db/database.hpp"
 #include "db/sql.hpp"
+#include "domain/posting_schedule.hpp"
 #include "domain/prompts.hpp"
 
 #include <boost/json/parse.hpp>
@@ -37,8 +38,8 @@ constexpr std::string_view kContentColumns =
     "english_variant, audience";
 constexpr std::string_view kReplyColumns =
     "reply_languages, fallback_language, signature, sign_off_name, length, example_replies, promos_allowed, contact_allowed, "
-    "temperature, auto_reply_positive, auto_reply_rating_only, auto_reply_min_stars, auto_reply_delay_min_minutes, "
-    "auto_reply_delay_max_minutes, auto_reply_window_start, auto_reply_window_end";
+    "temperature, auto_reply_min_stars, auto_reply_delay_min_minutes, auto_reply_delay_max_minutes, auto_reply_window_start, "
+    "auto_reply_window_end, auto_reply_enabled, auto_reply_daily_cap, auto_reply_pause_after_failures";
 
 struct Bundle {
     std::string_view table;
@@ -165,18 +166,44 @@ Result<domain::ContentSettings> replace_content_settings(pqxx::transaction_base&
 
 Result<domain::ReplySettings> replace_reply_settings(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
                                                      const domain::ReplySettings& settings) {
-    if (!lock_location(tx, location_id)) return not_found("location");
+    // The location's row is the lock, as auto_verdict's and update_location's are.
+    const auto rows = tx.exec("SELECT enabled AND access_status = 'active', time_zone FROM locations WHERE id = $1 FOR UPDATE",
+                              pqxx::params{location_id});
+    if (rows.empty()) return not_found("location");
     if (auto problem = domain::check_reply_settings(settings)) return invalid(std::move(*problem));
-    const auto values = std::format("{}, $3, $4, $5, $6::jsonb, {}, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17", text_array("$2"),
+    if (settings.auto_reply_enabled) {
+        // What must hold while auto reply is on, checked on every save that leaves it on (D-110).
+        // check_reply_settings has held the minimum to 4 or 5 and the timing to what can be used.
+        if (!rows[0][0].as<bool>()) return invalid("Auto reply needs a location that is switched on and still accessible.");
+        const auto zone = rows[0][1].as<std::optional<std::string>>();
+        const auto timing = domain::posting_timing(settings);
+        if (timing && timing->window) {
+            if (!zone) return invalid("The posting window needs the location's time zone, and the location has none yet.");
+            if (!domain::known_time_zone(*zone)) {
+                return invalid(std::format("The posting window needs the location's time zone, and '{}' is not known on this server.", *zone));
+            }
+        }
+    }
+    const auto before = read_bundle<domain::ReplySettings>(tx, kReply, location_id);
+    const bool was_enabled = before && *before && (*before)->auto_reply_enabled;
+
+    const auto values = std::format("{}, $3, $4, $5, $6::jsonb, {}, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18", text_array("$2"),
                                     text_array("$7"));
-    return replace_bundle(tx, audit, kReply, kReplyColumns, values, location_id, settings,
-                          pqxx::params{location_id, db::json_list(settings.reply_languages), settings.fallback_language, settings.signature,
-                                       settings.sign_off_name, boost::json::serialize(boost::json::value_from(settings.length)),
-                                       db::json_list(settings.example_replies), settings.promos_allowed, settings.contact_allowed,
-                                       settings.temperature, settings.auto_reply_positive, settings.auto_reply_rating_only,
-                                       settings.auto_reply_min_stars, settings.auto_reply_delay_min_minutes,
-                                       settings.auto_reply_delay_max_minutes, settings.auto_reply_window_start,
-                                       settings.auto_reply_window_end});
+    auto saved = replace_bundle(tx, audit, kReply, kReplyColumns, values, location_id, settings,
+                                pqxx::params{location_id, db::json_list(settings.reply_languages), settings.fallback_language,
+                                             settings.signature, settings.sign_off_name,
+                                             boost::json::serialize(boost::json::value_from(settings.length)),
+                                             db::json_list(settings.example_replies), settings.promos_allowed, settings.contact_allowed,
+                                             settings.temperature, settings.auto_reply_min_stars, settings.auto_reply_delay_min_minutes,
+                                             settings.auto_reply_delay_max_minutes, settings.auto_reply_window_start,
+                                             settings.auto_reply_window_end, settings.auto_reply_enabled, settings.auto_reply_daily_cap,
+                                             settings.auto_reply_pause_after_failures});
+    // Who switched auto reply on or off must stay easy to find: an entry of its own besides the save's.
+    if (saved && settings.auto_reply_enabled != was_enabled) {
+        audit.record(settings.auto_reply_enabled ? "location.auto_reply_enabled" : "location.auto_reply_disabled", "location", location_id,
+                     {.before = {{"auto_reply_enabled", was_enabled}}, .after = {{"auto_reply_enabled", settings.auto_reply_enabled}}});
+    }
+    return saved;
 }
 
 void write_default_settings(pqxx::transaction_base& tx, std::int64_t location_id, core::TimePoint now) {

@@ -7,6 +7,7 @@
 
 #include "domain/settings.hpp"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -58,5 +59,10 @@ struct GateDecision {
 };
 
 GateDecision gate(const GateInput& input, const ReplySettings& reply);
+
+// Whether a review of `stars` may auto reply under a minimum of `min_stars`.
+// Three stars or fewer never do, whatever the minimum says (FR-5, D-110):
+// the explicit 4 is the guard that holds even if a lower minimum were stored.
+constexpr bool stars_may_auto_reply(std::int64_t stars, std::int64_t min_stars) { return stars >= 4 && stars >= min_stars; }
 
 }  // namespace poni::domain

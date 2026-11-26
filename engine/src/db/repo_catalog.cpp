@@ -196,8 +196,8 @@ std::optional<model::Location> get_location(pqxx::transaction_base& tx, std::int
 Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const LocationPatch& patch) {
     const auto rows = tx.exec(
         "SELECT l.client_id, c.name, l.posting_enabled, l.enabled, l.access_status, l.industry_key, "
-        "to_char(l.analyze_from, 'YYYY-MM-DD'), l.auto_reply_enabled, l.auto_reply_five_star, l.auto_reply_four_star "
-        "FROM locations l LEFT JOIN clients c ON c.id = l.client_id "
+        "to_char(l.analyze_from, 'YYYY-MM-DD'), coalesce(s.auto_reply_enabled, false) "
+        "FROM locations l LEFT JOIN clients c ON c.id = l.client_id LEFT JOIN reply_settings s ON s.location_id = l.id "
         "WHERE l.id = $1 FOR UPDATE OF l",
         pqxx::params{id});
     if (rows.empty()) return not_found("location");
@@ -208,7 +208,7 @@ Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Write
     const bool accessible = rows[0][4].as<std::string>() == "active";
     const auto old_industry = rows[0][5].as<OptString>();
     const auto old_from = rows[0][6].as<OptString>();
-    const auto old_auto_reply = rows[0][7].as<bool>(), old_five_star = rows[0][8].as<bool>(), old_four_star = rows[0][9].as<bool>();
+    const auto old_auto_reply = rows[0][7].as<bool>();
     const auto now = to_timestamptz(audit.now());
 
     // Check everything before writing anything: a refused request changes nothing.
@@ -263,17 +263,15 @@ Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Write
             .no_rows();
         audit.record("location.enable", "location", id, {.before = {{"enabled", false}}, .after = {{"enabled", true}}});
     } else if (new_enabled) {
-        // Auto reply goes with it, and a person switches it on again (D-070).
-        tx.exec("UPDATE locations SET enabled = false, auto_reply_enabled = false, auto_reply_five_star = false, "
-                "auto_reply_four_star = false, updated_at = $2::timestamptz WHERE id = $1",
+        // Auto reply goes with it, and a person switches it on again (D-110): the
+        // engine's one write to a setting, so the reply settings' ETag changes too.
+        tx.exec("UPDATE locations SET enabled = false, updated_at = $2::timestamptz WHERE id = $1", pqxx::params{id, now}).no_rows();
+        tx.exec("UPDATE reply_settings SET auto_reply_enabled = false, updated_at = $2::timestamptz WHERE location_id = $1",
                 pqxx::params{id, now})
             .no_rows();
         audit.record("location.disable", "location", id,
-                     {.before = {{"enabled", true},
-                                 {"auto_reply_enabled", old_auto_reply},
-                                 {"auto_reply_five_star", old_five_star},
-                                 {"auto_reply_four_star", old_four_star}},
-                      .after = {{"enabled", false}, {"auto_reply_enabled", false}, {"auto_reply_five_star", false}, {"auto_reply_four_star", false}}});
+                     {.before = {{"enabled", true}, {"auto_reply_enabled", old_auto_reply}},
+                      .after = {{"enabled", false}, {"auto_reply_enabled", false}}});
     }
 
     const bool new_posting = patch.posting_enabled && *patch.posting_enabled != old_posting;

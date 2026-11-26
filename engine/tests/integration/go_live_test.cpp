@@ -33,16 +33,15 @@ protected:
         // A model that behaves: the location's own praise is praise, and it
         // lets nothing from the corpus through.
         llm_.analyzer = careful;
+        // Both locations auto reply to four stars and up, the wider of the two widths (D-110).
+        set_reply(spa_, R"({"auto_reply_min_stars": 4})");
+        set_reply(buffet_, R"({"auto_reply_min_stars": 4})");
     }
 
     static inline const FakeLlm::Answer careful = FakeLlm::careful(std::string(kRegular));
 
     // What a signed-in person does in the dashboard, written into this test's throwaway schema.
-    void switch_on(std::int64_t location) {
-        exec(std::format("UPDATE locations SET auto_reply_enabled = true, auto_reply_five_star = true, auto_reply_four_star = true "
-                         "WHERE id = {}",
-                         location));
-    }
+    void switch_on(std::int64_t location) { set_reply(location, R"({"auto_reply_enabled": true})"); }
     std::string praise(std::string_view what = "Lovely head spa") { return std::format("{}, as always on {}.", what, kRegular); }
 
     std::int64_t drafted(const std::string& review_id, std::string_view location = kSpa) {
@@ -91,11 +90,11 @@ protected:
     std::string fingerprint(std::int64_t location) { return gate(location).fingerprint; }
 
     // A pass with a policy of this width, as a test leaves it.
-    void pass_with(std::int64_t location, bool positive, bool rating_only, int min_stars) {
-        exec(std::format("INSERT INTO go_live_runs (location_id, fingerprint, fingerprint_inputs, status, auto_reply_positive, "
-                         "auto_reply_rating_only, auto_reply_min_stars, corpus_version, repeats, started_at, finished_at) "
-                         "VALUES ({}, '{}', '{{}}', 'passed', {}, {}, {}, 'test', 3, now(), now())",
-                         location, fingerprint(location), positive, rating_only, min_stars));
+    void pass_with(std::int64_t location, int min_stars) {
+        exec(std::format("INSERT INTO go_live_runs (location_id, fingerprint, fingerprint_inputs, status, auto_reply_min_stars, "
+                         "corpus_version, repeats, started_at, finished_at) "
+                         "VALUES ({}, '{}', '{{}}', 'passed', {}, 'test', 3, now(), now())",
+                         location, fingerprint(location), min_stars));
     }
     std::string run_value(std::int64_t run_id, const std::string& column) {
         return value<std::string>("SELECT coalesce(" + column + "::text, '') FROM go_live_runs WHERE id = " + std::to_string(run_id));
@@ -130,7 +129,7 @@ TEST_F(GoLive, WithoutAPassNothingIsAutoRepliedWhateverTheSwitchSays) {
 TEST_F(GoLive, APassingTestAndOnlyThatLetsAutoReplyStart) {
     review(kSpa, "own1", "FIVE", praise());
     review(kSpa, "own2", "FOUR", praise("Great facial"));
-    review(kSpa, "own3", "FIVE", std::nullopt);                          // a rating without text
+    review(kSpa, "own3", "FIVE", std::nullopt);                          // a rating without text: never auto replies, so not tested
     review(kSpa, "low", "THREE", praise("It was fine"));                 // not praise: left out
     const auto ignored = review(kSpa, "ign", "FIVE", praise("Skip me"));
     exec(std::format("UPDATE reviews SET ignored_at = now(), ignored_by = {} WHERE id = {}", user_, ignored));
@@ -145,8 +144,8 @@ TEST_F(GoLive, APassingTestAndOnlyThatLetsAutoReplyStart) {
     EXPECT_EQ(during.status, "running");
     EXPECT_EQ(during.location_id, spa_);
     EXPECT_EQ(during.location_title, "LU DREAM SPA - Chelsea");
-    EXPECT_EQ(during.real_reviews, 4) << "own1, own2, own3 and r1; not the 3-star one, not the ignored one";
-    EXPECT_EQ(during.cases_total, static_cast<std::int64_t>(corpus_cases("wellness")) + 4);
+    EXPECT_EQ(during.real_reviews, 3) << "own1, own2 and r1; not the one without text, the 3-star one or the ignored one";
+    EXPECT_EQ(during.cases_total, static_cast<std::int64_t>(corpus_cases("wellness")) + 3);
     EXPECT_EQ(during.repeats, 3);
     EXPECT_EQ(during.started_by, "staff@xvisionmediaus.com");
     EXPECT_FALSE(open(spa_)) << "a running test is not a pass";
@@ -157,7 +156,7 @@ TEST_F(GoLive, APassingTestAndOnlyThatLetsAutoReplyStart) {
     EXPECT_EQ(done.status, "passed") << done.summary.value_or("");
     EXPECT_EQ(done.cases_done, done.cases_total);
     EXPECT_EQ(failed_cases(done), 0);
-    EXPECT_THAT(done.summary.value_or(""), HasSubstr("4 of the location's own reviews"));
+    EXPECT_THAT(done.summary.value_or(""), HasSubstr("3 of the location's own reviews"));
     EXPECT_TRUE(done.corpus_current);
     EXPECT_EQ(count("audit_log WHERE action = 'go_live.finished' AND actor = 'system:go-live' AND after->>'status' = 'passed'"), 1);
 
@@ -175,7 +174,7 @@ TEST_F(GoLive, APassingTestAndOnlyThatLetsAutoReplyStart) {
             }
         }
     }
-    EXPECT_EQ(llm_.calls("judge"), 4u);
+    EXPECT_EQ(llm_.calls("judge"), 3u);
     EXPECT_EQ(llm_.calls("generator"), static_cast<std::size_t>(done.cases_total) * 3 + 1) << "and r1's own draft";
     for (const auto& request : llm_.requests) {
         EXPECT_EQ(request.provider, request.task == "judge" ? "anthropic" : "dashscope");
@@ -190,7 +189,7 @@ TEST_F(GoLive, APassingTestAndOnlyThatLetsAutoReplyStart) {
     EXPECT_EQ(count("reply_drafts"), drafts_before);
     EXPECT_EQ(count("notification_deliveries"), notices_before);
     EXPECT_TRUE(gbp_.puts.empty());
-    EXPECT_EQ(count("locations WHERE auto_reply_enabled"), 1) << "the one a person switched on";
+    EXPECT_EQ(count("reply_settings WHERE auto_reply_enabled"), 1) << "the one a person switched on";
     EXPECT_EQ(draft(stopped, "status"), "draft") << "a draft that was stopped is never scheduled again by code";
 
     // From now on a review there is answered without a person.
@@ -211,7 +210,7 @@ TEST_F(GoLive, APassSwitchesNothingOnAndLiftsNoPause) {
         repo::pause_auto_reply(tx, spa_, repo::kPausePostRefused, "Google refused an automatic reply (HTTP 403).", clock_.now());
     });
     EXPECT_EQ(run(tested(spa_)).status, "passed");
-    EXPECT_EQ(count("locations WHERE auto_reply_enabled OR auto_reply_five_star OR auto_reply_four_star"), 0);
+    EXPECT_EQ(count("reply_settings WHERE auto_reply_enabled"), 0);
     EXPECT_EQ(count("locations WHERE auto_reply_paused_at IS NOT NULL"), 1);
     EXPECT_EQ(value<bool>("SELECT posting_enabled FROM system_settings"), true) << "as the fixture left it";
     // Switched on by a person, the location is still paused.
@@ -321,8 +320,9 @@ TEST_F(GoLive, WhatIsNotTestedChangesNothing) {
     certify(spa_);
     const auto original = fingerprint(spa_);
     for (const auto& change : std::vector<std::string>{
-             std::format("UPDATE locations SET auto_reply_daily_cap = 7, auto_reply_pause_after_failures = 5, time_zone = 'America/New_York', "
-                      "auto_reply_four_star = true WHERE id = {}",
+             std::format("UPDATE locations SET time_zone = 'America/New_York' WHERE id = {}", spa_),
+          std::format("UPDATE reply_settings SET auto_reply_daily_cap = 7, auto_reply_pause_after_failures = 5 "
+                      "WHERE location_id = {}",
                       spa_),
           std::format("UPDATE reply_settings SET auto_reply_delay_min_minutes = 5, auto_reply_delay_max_minutes = 30, "
                       "auto_reply_window_start = '09:00', auto_reply_window_end = '21:00' WHERE location_id = {}",
@@ -352,27 +352,23 @@ TEST_F(GoLive, WhatIsNotTestedChangesNothing) {
 }
 
 TEST_F(GoLive, APolicyThatAutoRepliesMoreNeedsANewTestAndOneThatPostsLessDoesNot) {
-    // Tested while the policy auto replied to five-star reviews with text only.
-    set_reply(spa_, R"({"auto_reply_min_stars": 5, "auto_reply_rating_only": false})");
-    pass_with(spa_, true, false, 5);
+    // Tested while the policy auto replied to five-star reviews only.
+    set_reply(spa_, R"({"auto_reply_min_stars": 5})");
+    pass_with(spa_, 5);
     ASSERT_TRUE(open(spa_));
 
     set_reply(spa_, R"({"auto_reply_min_stars": 4})");
     EXPECT_FALSE(open(spa_)) << "four stars were not part of what passed";
-    EXPECT_THAT(gate(spa_).reason, HasSubstr("auto replies more than the last passing test covered"));
+    EXPECT_THAT(gate(spa_).reason, HasSubstr("auto replies to more than the last passing test covered"));
     set_reply(spa_, R"({"auto_reply_min_stars": 5})");
     EXPECT_TRUE(open(spa_)) << "narrowed again, the old pass covers it";
 
-    set_reply(spa_, R"({"auto_reply_rating_only": true})");
-    EXPECT_FALSE(open(spa_)) << "ratings without text were not part of what passed";
-
     // A test with the wider policy covers it, and everything narrower.
+    set_reply(spa_, R"({"auto_reply_min_stars": 4})");
     EXPECT_EQ(run(tested(spa_)).status, "passed");
     EXPECT_TRUE(open(spa_));
-    set_reply(spa_, R"({"auto_reply_rating_only": false, "auto_reply_positive": false})");
+    set_reply(spa_, R"({"auto_reply_min_stars": 5})");
     EXPECT_TRUE(open(spa_)) << "narrowing needs no test";
-    set_reply(spa_, R"({"auto_reply_min_stars": 4, "auto_reply_rating_only": true, "auto_reply_positive": true})");
-    EXPECT_FALSE(open(spa_)) << "wider than any pass";
 }
 
 TEST_F(GoLive, AChangeAfterSchedulingStopsThePostAndTheDraftGoesToAPerson) {
@@ -585,14 +581,15 @@ TEST_F(GoLive, AProviderThatRefusesEveryRequestDoesNotEarnAPass) {
 }
 
 TEST_F(GoLive, TheCasesAreRoutedWithTheSubmittedLocationsPolicyAndThePassCoversNoMore) {
-    // Two locations with one voice. Chelsea auto replies to five-star reviews with
-    // text only; Midtown also four stars and ratings without text.
+    // Two locations with one voice. Chelsea auto replies to five-star reviews
+    // only; Midtown also four stars.
     // The business is named by the title (D-107): two locations share a configuration only under one title.
     gbp_.add_location("9003", value<std::string>(std::format("SELECT title FROM locations WHERE id = {}", spa_)));
     discover();
     const auto midtown = link("9003", spa_client_);
     become_test_client(spa_client_, "wellness");  // the same business, with the same settings (D-102: a link copies none)
-    set_reply(spa_, R"({"auto_reply_min_stars": 5, "auto_reply_rating_only": false})");
+    set_reply(spa_, R"({"auto_reply_min_stars": 5})");
+    set_reply(midtown, R"({"auto_reply_min_stars": 4})");
     ASSERT_EQ(fingerprint(midtown), fingerprint(spa_)) << "the policy is not part of the fingerprint";
     for (const auto& [id, stars, text] : {std::tuple<std::string, std::string, std::optional<std::string>>{"four", "FOUR", praise("Great facial")},
                                            {"bare", "FIVE", std::nullopt}}) {
@@ -602,26 +599,26 @@ TEST_F(GoLive, TheCasesAreRoutedWithTheSubmittedLocationsPolicyAndThePassCoversN
     // Chelsea's test covers Chelsea's width, and Midtown's wider policy still needs its own.
     const auto narrow = run(tested(spa_));
     ASSERT_EQ(narrow.status, "passed") << narrow.summary.value_or("");
-    EXPECT_EQ(narrow.auto_post_min_stars, 5);
-    EXPECT_FALSE(narrow.auto_post_rating_only);
+    EXPECT_EQ(narrow.auto_reply_min_stars, 5);
     EXPECT_EQ(narrow.real_reviews, 0) << "Midtown's reviews are Midtown's";
     EXPECT_TRUE(open(spa_));
     EXPECT_FALSE(open(midtown));
-    EXPECT_THAT(gate(midtown).reason, HasSubstr("auto replies more than the last passing test covered"));
+    EXPECT_THAT(gate(midtown).reason, HasSubstr("auto replies to more than the last passing test covered"));
 
-    // Midtown's own test: its four-star and its text-less review were routed
-    // to auto reply and judged, so what the pass says it covers, it tested.
+    // Midtown's own test: its four-star review was routed to auto reply and
+    // judged, so what the pass says it covers, it tested. Its review without
+    // text is no case at all: it never auto replies (D-110).
     const auto wide = run(tested(midtown));
     ASSERT_EQ(wide.status, "passed") << wide.summary.value_or("");
     EXPECT_EQ(wide.location_id, midtown);
-    EXPECT_EQ(wide.auto_post_min_stars, 4);
-    EXPECT_TRUE(wide.auto_post_rating_only);
+    EXPECT_EQ(wide.auto_reply_min_stars, 4);
+    EXPECT_EQ(wide.real_reviews, 1) << "the four-star review, not the one without text";
     for (const auto& one : *wide.cases) {
         if (one.category != "real") continue;
         EXPECT_EQ(one.attempts.front().route, "auto_reply") << one.case_key;
         EXPECT_EQ(one.attempts.front().rating, "post_as_is") << one.case_key;
     }
-    EXPECT_EQ(llm_.calls("judge"), 2u);
+    EXPECT_EQ(llm_.calls("judge"), 1u);
     EXPECT_TRUE(open(midtown));
     EXPECT_TRUE(open(spa_)) << "the wider pass covers the narrower policy of the same fingerprint";
 }
@@ -820,7 +817,7 @@ std::string sent(const llm::ChatRequest& request) {
 TEST_F(GoLive, ATestAsksTheModelsExactlyWhatThePipelineAsks) {
     const auto with_text = review(kSpa, "own1", "FIVE", praise());
     const auto without_text = review(kSpa, "own2", "FOUR", std::nullopt);
-    // This test is about the location's own two reviews: a short corpus keeps its four test runs short.
+    // This test is about the location's own reviews: a short corpus keeps its four test runs short.
     reseed("DELETE FROM kb_corpus_cases WHERE industry_key = 'wellness' AND category <> 'control'");
 
     // Under the configuration as it is now: what the pipeline asks for the
@@ -843,7 +840,9 @@ TEST_F(GoLive, ATestAsksTheModelsExactlyWhatThePipelineAsks) {
                 EXPECT_EQ(sent(request), sent(asked));
                 EXPECT_EQ(request.location_id, asked.location_id);
             }
-            EXPECT_EQ(in_the_test, static_cast<std::size_t>(domain::kGoLiveRepeats)) << asked.task;
+            // A rating without text never auto replies, so the test leaves it out (D-075, D-110).
+            const bool tested_case = asked.review_id != without_text;
+            EXPECT_EQ(in_the_test, tested_case ? static_cast<std::size_t>(domain::kGoLiveRepeats) : 0u) << asked.task;
         }
         return pipeline;
     };
@@ -1077,7 +1076,10 @@ TEST_F(GoLive, ANewKnowledgeVersionThatChangesAProfileStopsAutoReplyUntilATestPa
     EXPECT_EQ(count("notification_deliveries WHERE event_type = 'system_problem'"), 0) << "the seed tells the person who seeds; the engine tells no one";
 
     // Nothing was switched off and nothing paused: only a passing test was taken away, and only one brings it back.
-    EXPECT_EQ(value<bool>(std::format("SELECT auto_reply_enabled AND auto_reply_paused_at IS NULL FROM locations WHERE id = {}", spa_)), true);
+    EXPECT_EQ(value<bool>(std::format("SELECT s.auto_reply_enabled AND l.auto_reply_paused_at IS NULL FROM locations l "
+                                      "JOIN reply_settings s ON s.location_id = l.id WHERE l.id = {}",
+                                      spa_)),
+              true);
     tested(spa_);
     EXPECT_TRUE(open(spa_));
     EXPECT_EQ(draft(drafted("r3"), "status"), "scheduled");

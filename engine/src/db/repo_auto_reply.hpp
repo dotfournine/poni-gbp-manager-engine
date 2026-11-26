@@ -1,22 +1,21 @@
-// Auto reply per location (D-070 to D-072): the switches
-// a person flips, the pauses the engine puts on itself, and the list of what
-// was posted without a person. Blocking calls on a transaction the caller
-// owns: run them through Database::run.
+// Auto reply's own state (D-072, D-110): the pauses the engine puts on
+// itself, how a person lifts them, what the engine shows of each location,
+// and the list of what was posted without a person. Blocking calls on a
+// transaction the caller owns: run them through Database::run.
 //
-// Everything is off after installation. Only update_auto_posting switches a
-// location on, and it is reached only from the API, as a signed-in person.
-// The engine itself can only switch auto reply *off*: a pause, which a
-// person lifts. How a draft gets scheduled and posted is in repo_posting.
+// The settings, the switch among them, are the location's reply settings
+// (repo_settings), off after installation and switched on only by a person's
+// save. The engine itself can only switch auto reply *off*: a pause, which a
+// person lifts, or the location switched off. How a draft gets scheduled and
+// posted is in repo_posting.
 #pragma once
 
-#include "core/body.hpp"
 #include "core/clock.hpp"
 #include "db/audit.hpp"
 #include "db/failure.hpp"
 #include "db/sql.hpp"
 #include "domain/models.hpp"
 
-#include <boost/describe/class.hpp>
 #include <pqxx/pqxx>
 
 #include <chrono>
@@ -34,7 +33,7 @@ inline constexpr std::string_view kPausePostUnconfirmed = "post_unconfirmed";
 inline constexpr std::string_view kPausePostRefused = "post_refused";
 
 // How many drafts in a row with a failed reply check pause auto reply at a
-// location is the location's own setting (auto_reply_pause_after_failures, D-076).
+// location is the location's own reply setting (auto_reply_pause_after_failures, D-076).
 
 // What decides and starts a post no person approved, as the audit log names it (architecture 4.1, step 5).
 inline audit::Actor auto_reply() { return audit::Actor::system("auto-reply"); }
@@ -46,35 +45,14 @@ inline constexpr std::chrono::hours kAutoReplyCapWindow{24};
 // (a placeholder). What the cap counts and what the page shows are this one count.
 std::string auto_replies_since(std::string_view location, std::string_view since);
 
-// The body of the PATCH, member for member.
-struct AutoPostingPatch {
-    std::optional<bool> enabled;
-    std::optional<bool> five_star;
-    std::optional<bool> four_star;
-    std::optional<int> daily_cap;
-    std::optional<int> pause_after_failures;
-    // Null clears the time zone; left out, it stays as it is.
-    core::Nullable<std::string> time_zone;
-};
-BOOST_DESCRIBE_STRUCT(AutoPostingPatch, (), (enabled, five_star, four_star, daily_cap, pause_after_failures, time_zone))
-
-// The global state and every enabled location.
-model::AutoPostingOverview auto_reply_overview(pqxx::transaction_base& tx, core::TimePoint now);
-
-// A person changes a location's auto reply settings. Switching it on is
-// refused unless a star rating is chosen and the timing the reply policy
-// asks for can be used (a posting window needs a time zone). It does not
-// wait for a passing go-live test (D-076): without one nothing is posted by auto reply
-// whatever the switch says, and the page shows that. Switching on or off is
-// audited under its own name.
-Result<model::AutoPosting> update_auto_posting(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
-                                               const AutoPostingPatch& patch);
+// The global state and every switched-on location.
+model::AutoReplyStatus auto_reply_overview(pqxx::transaction_base& tx, core::TimePoint now);
 
 // A person lifts the pause on a location, or the pause on every location at
 // once (which leaves each location's own pause as it is). Drafts written
 // before now no longer count towards the next pause for failing checks.
-Result<model::AutoPosting> resume_auto_reply(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id);
-model::AutoPostingOverview resume_all_auto_reply(pqxx::transaction_base& tx, audit::Writer& audit);
+Result<model::AutoReplyLocation> resume_auto_reply(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id);
+model::AutoReplyStatus resume_all_auto_reply(pqxx::transaction_base& tx, audit::Writer& audit);
 
 // ---- the engine pauses itself -----------------------------------------------------
 
@@ -93,6 +71,6 @@ bool pause_if_checks_keep_failing(pqxx::transaction_base& tx, std::int64_t locat
 // ---- what was posted by auto reply --------------------------------------------------
 
 // Newest first.
-model::AutoPostList list_auto_replies(pqxx::transaction_base& tx, const db::Page& page);
+model::AutoReplyList list_auto_replies(pqxx::transaction_base& tx, const db::Page& page);
 
 }  // namespace poni::repo

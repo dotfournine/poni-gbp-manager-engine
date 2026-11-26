@@ -61,18 +61,15 @@ struct Fingerprint {
 
 Fingerprint fingerprint(const FingerprintInput& input);
 
-// What a policy routes to auto reply. A test is run with one; a later policy
-// that routes more needs a new test, one that routes less does not.
+// What a policy routes to auto reply: reviews with text of at least this
+// many stars (D-110). A test is run with one; a later policy that routes more
+// needs a new test, one that routes less does not.
 struct AutoReplyScope {
-    bool positive = false;
-    bool rating_only = false;
     // 4 or 5: three stars and fewer never auto reply (FR-5), whatever a policy says.
     int min_stars = 5;
 
     // Everything `other` auto replies, this does too.
-    bool covers(const AutoReplyScope& other) const {
-        return (positive || !other.positive) && (rating_only || !other.rating_only) && min_stars <= other.min_stars;
-    }
+    bool covers(const AutoReplyScope& other) const { return min_stars <= other.min_stars; }
 };
 
 AutoReplyScope scope_of(const ReplySettings& reply);

@@ -325,19 +325,14 @@ TEST_F(Api, LocationsAreGroupedUnderClientsAndTheLinkChangesNothingElse) {
     // A location the engine works on, with settings and auto reply of its own.
     ASSERT_EQ(patch_current(target, R"({"enabled": true, "industry_key": "wellness"})").status, 200u);
     ASSERT_EQ(save_content_settings(spa, R"({"base_style": "Willow Moon house style", "audience": "Office workers"})").status, 200u);
-    const auto on = patch(target + "/auto-posting", R"({"enabled": true, "five_star": true, "time_zone": "America/New_York"})");
+    const auto on = save_reply_settings(spa, R"({"auto_reply_enabled": true, "auto_reply_min_stars": 4})");
     ASSERT_EQ(on.status, 200u) << on.body;
-    // All of it but the client, as it is before and after each change of the link.
-    const auto auto_reply_state = [&] {
-        return value<std::string>(std::format("SELECT concat(auto_reply_enabled, auto_reply_five_star, auto_reply_four_star, time_zone) "
-                                              "FROM locations WHERE id = {}",
-                                              spa));
-    };
+    // All of it but the client, as it is before and after each change of the link. Auto reply is in the reply settings.
     const auto all_but_the_client = [&] {
         auto location = read(target).as_object();
         location.erase("client_id");
         location.erase("client_name");
-        return boost::json::object{{"location", location}, {"content", read(content_settings_path(spa))}, {"reply", read(reply_settings_path(spa))}, {"auto_reply", auto_reply_state()}};
+        return boost::json::object{{"location", location}, {"content", read(content_settings_path(spa))}, {"reply", read(reply_settings_path(spa))}};
     };
     const auto before = all_but_the_client();
     const auto syncs = value<std::string>(std::format("SELECT concat(next_review_poll_at, next_full_sync_at) FROM locations WHERE id = {}", spa));
@@ -394,16 +389,24 @@ TEST_F(Api, ALocationIsSwitchedOnAndOffByAPerson) {
     ASSERT_EQ(patch_current(target, R"({"enabled": true})").status, 200u);
     EXPECT_EQ(read("/api/audit-log?action=location.enable").at("total").as_int64(), 1) << "no change, no entry";
 
-    // Switching off switches auto reply off with it, and a person switches that on again (D-070).
-    ASSERT_EQ(patch(target + "/auto-posting", R"({"enabled": true, "five_star": true, "time_zone": "America/New_York"})").status, 200u);
+    // Switching off switches auto reply off with it, and a person switches that on again (D-110).
+    const auto settings_path = reply_settings_path(spa);
+    ASSERT_EQ(save_reply_settings(spa, R"({"auto_reply_enabled": true})").status, 200u);
+    const auto form = get(settings_path, browser_);  // a reply-settings form, read before the switch-off
+    ASSERT_EQ(form.status, 200u);
     const auto off = patch_current(target, R"({"enabled": false})");
     ASSERT_EQ(off.status, 200u) << off.body;
     EXPECT_FALSE(json(off).at("enabled").as_bool());
-    EXPECT_FALSE(value<bool>(std::format("SELECT auto_reply_enabled OR auto_reply_five_star FROM locations WHERE id = {}", spa)));
+    EXPECT_FALSE(read(settings_path).at("auto_reply_enabled").as_bool());
     const auto entry = read("/api/audit-log?action=location.disable").at("items").at(0);
     EXPECT_TRUE(entry.at("before").at("auto_reply_enabled").as_bool());
     EXPECT_FALSE(entry.at("after").at("auto_reply_enabled").as_bool());
-    EXPECT_EQ(patch(target + "/auto-posting", R"({"enabled": true, "five_star": true})").status, 400u)
+    // The engine's write changed the settings, so the form read before it is stale: its save would switch auto reply on again.
+    EXPECT_NE(etag(settings_path, browser_), header(form, "ETag"));
+    const auto stale = put(settings_path, form.body, if_match(header(form, "ETag")));
+    EXPECT_EQ(stale.status, 412u) << stale.body;
+    EXPECT_FALSE(read(settings_path).at("auto_reply_enabled").as_bool());
+    EXPECT_EQ(save_reply_settings(spa, R"({"auto_reply_enabled": true})").status, 400u)
         << "auto reply needs a location that is switched on";
 
     // A location the managing account no longer sees can't be switched on, and the refusal changes nothing else.

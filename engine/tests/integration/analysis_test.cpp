@@ -92,7 +92,7 @@ TEST_F(Analysis, BothLocationsHaveAnIndustryAndAVoiceOfTheirOwn) {
     // The voice template the business took was copied: its line for the writer is part of the content settings.
     EXPECT_THAT(settings.content.base_style, testing::StartsWith("Warm and casual. "));
     EXPECT_FALSE(settings.content.chinese_variant) << "the pack sets none";
-    EXPECT_EQ(settings.reply.auto_reply_min_stars, 4);
+    EXPECT_EQ(settings.reply.auto_reply_min_stars, 5);
 }
 
 TEST_F(Analysis, AnUnrepliedReviewGetsAnAnalysisADraftAndARoute) {
@@ -126,7 +126,7 @@ TEST_F(Analysis, AnUnrepliedReviewGetsAnAnalysisADraftAndARoute) {
     EXPECT_EQ(inputs.at("mode").as_string(), "positive");
     EXPECT_EQ(inputs.at("target_language").as_string(), "en");
     EXPECT_EQ(inputs.at("business_name").as_string(), "LU DREAM SPA 路梦养生馆 - Chelsea");
-    EXPECT_EQ(inputs.at("reply").at("auto_reply_min_stars").as_int64(), 4);
+    EXPECT_EQ(inputs.at("reply").at("auto_reply_min_stars").as_int64(), 5);
     EXPECT_THAT(std::string(inputs.at("content").at("base_style").as_string()), testing::StartsWith("Warm and casual. "));
     EXPECT_FALSE(inputs.contains("template_key")) << "the settings hold a copy of their template, not a reference";
 
@@ -277,7 +277,9 @@ TEST_F(Analysis, ARatingWithoutTextNeedsNoAnalyzerCall) {
     EXPECT_EQ(stored.analysis->sentiment, "none");
     EXPECT_FALSE(stored.analysis->model);
     EXPECT_EQ(stored.draft->mode, "rating_only");
-    EXPECT_EQ(stored.draft->route, "auto_reply");
+    // Written all the same, for a person: auto reply is for reviews with text (D-110).
+    EXPECT_EQ(stored.draft->route, "approval_queue");
+    EXPECT_THAT(stored.draft->route_reasons, testing::ElementsAre("auto reply is for reviews with text"));
 }
 
 TEST_F(Analysis, RatingOnlyRepliesAreToldToDifferFromRecentOnes) {
@@ -339,6 +341,7 @@ TEST_F(Analysis, AComplaintOrALowRatingGoesToTheApprovalQueue) {
         "severity_flags": [], "manipulation_suspected": false})");
     llm_.generator = FakeLlm::always(R"({"reply": "Thank you for your honest feedback. We're sorry the dim sum station sat empty during your visit, and our team will review it. We're glad you enjoyed the rest.",
         "language": "en", "script": "Latn", "manipulation_suspected": false, "notes_for_staff": ""})");
+    set_reply(buffet_, R"({"auto_reply_min_stars": 4})");  // so that the stars alone would not hold it back
     const auto complaint = store(kBuffet, "r1", "FOUR", "Good food but the dim sum station sat empty for a while.");
     process(complaint);
     EXPECT_EQ(review(complaint).draft->route, "approval_queue");
@@ -370,12 +373,17 @@ TEST_F(Analysis, TheGeneratorIsAskedForTheReviewersChineseScriptAndItsReplyIsSto
 }
 
 TEST_F(Analysis, ALocationsSettingsAreItsContentAndReplySettings) {
-    set_reply(spa_, R"({"auto_reply_positive": false, "signature": "— The Chelsea team"})");
-    const auto id = store(kSpa, "r1", "FIVE", "Lovely head spa, so relaxing!");
+    set_reply(spa_, R"({"auto_reply_min_stars": 5, "signature": "— The Chelsea team"})");
+    const auto id = store(kSpa, "r1", "FOUR", "Lovely head spa, so relaxing!");
     process(id);
     EXPECT_THAT(llm_.requests[1].messages[0].content, HasSubstr("Sign off with: \"— The Chelsea team\""));
     EXPECT_EQ(review(id).draft->route, "approval_queue");
-    EXPECT_THAT(review(id).draft->route_reasons, testing::ElementsAre("auto reply is off for positive reviews"));
+    EXPECT_THAT(review(id).draft->route_reasons, testing::ElementsAre("4 stars"));
+    // The other location's own minimum lets the same review through.
+    set_reply(buffet_, R"({"auto_reply_min_stars": 4})");
+    const auto other = store(kBuffet, "b1", "FOUR", "Lovely buffet, so fresh!");
+    process(other);
+    EXPECT_EQ(review(other).draft->route, "auto_reply");
 }
 
 // ---- idempotent and retry-safe ---------------------------------------------------

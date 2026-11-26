@@ -467,13 +467,14 @@
           "promos_allowed": false,
           "contact_allowed": false,
           "temperature": 0.7,
-          "auto_reply_positive": true,
-          "auto_reply_rating_only": true,
           "auto_reply_min_stars": 4,
           "auto_reply_delay_min_minutes": 0,
           "auto_reply_delay_max_minutes": 0,
           "auto_reply_window_start": "",
-          "auto_reply_window_end": ""
+          "auto_reply_window_end": "",
+          "auto_reply_enabled": false,
+          "auto_reply_daily_cap": 100,
+          "auto_reply_pause_after_failures": 3
         }
       },
       "fingerprint": "a2b2d44c1704b28f",
@@ -683,13 +684,14 @@
           "promos_allowed": false,
           "contact_allowed": false,
           "temperature": 0.7,
-          "auto_reply_positive": true,
-          "auto_reply_rating_only": true,
           "auto_reply_min_stars": 4,
           "auto_reply_delay_min_minutes": 0,
           "auto_reply_delay_max_minutes": 0,
           "auto_reply_window_start": "",
-          "auto_reply_window_end": ""
+          "auto_reply_window_end": "",
+          "auto_reply_enabled": false,
+          "auto_reply_daily_cap": 100,
+          "auto_reply_pause_after_failures": 3
         }
       },
       "fingerprint": "67b79a338e7ac197",
@@ -899,13 +901,14 @@
           "promos_allowed": false,
           "contact_allowed": false,
           "temperature": 0.3,
-          "auto_reply_positive": true,
-          "auto_reply_rating_only": true,
           "auto_reply_min_stars": 4,
           "auto_reply_delay_min_minutes": 0,
           "auto_reply_delay_max_minutes": 0,
           "auto_reply_window_start": "",
-          "auto_reply_window_end": ""
+          "auto_reply_window_end": "",
+          "auto_reply_enabled": false,
+          "auto_reply_daily_cap": 100,
+          "auto_reply_pause_after_failures": 3
         }
       },
       "fingerprint": "99812dc28426d63f",
@@ -1102,13 +1105,14 @@
           "promos_allowed": false,
           "contact_allowed": false,
           "temperature": 0.7,
-          "auto_reply_positive": true,
-          "auto_reply_rating_only": true,
           "auto_reply_min_stars": 4,
           "auto_reply_delay_min_minutes": 0,
           "auto_reply_delay_max_minutes": 0,
           "auto_reply_window_start": "",
-          "auto_reply_window_end": ""
+          "auto_reply_window_end": "",
+          "auto_reply_enabled": false,
+          "auto_reply_daily_cap": 100,
+          "auto_reply_pause_after_failures": 3
         }
       },
       "fingerprint": "457360398c5b078d",
@@ -1310,13 +1314,14 @@
           "promos_allowed": false,
           "contact_allowed": false,
           "temperature": 0.7,
-          "auto_reply_positive": true,
-          "auto_reply_rating_only": true,
           "auto_reply_min_stars": 4,
           "auto_reply_delay_min_minutes": 0,
           "auto_reply_delay_max_minutes": 0,
           "auto_reply_window_start": "",
-          "auto_reply_window_end": ""
+          "auto_reply_window_end": "",
+          "auto_reply_enabled": false,
+          "auto_reply_daily_cap": 100,
+          "auto_reply_pause_after_failures": 3
         }
       },
       "fingerprint": "403bf8e8867b1543",
@@ -1515,13 +1520,14 @@
           "promos_allowed": true,
           "contact_allowed": false,
           "temperature": 0.7,
-          "auto_reply_positive": true,
-          "auto_reply_rating_only": true,
           "auto_reply_min_stars": 5,
           "auto_reply_delay_min_minutes": 20,
           "auto_reply_delay_max_minutes": 120,
           "auto_reply_window_start": "",
-          "auto_reply_window_end": ""
+          "auto_reply_window_end": "",
+          "auto_reply_enabled": false,
+          "auto_reply_daily_cap": 100,
+          "auto_reply_pause_after_failures": 3
         }
       },
       "fingerprint": "486b91da4ed3337b",
@@ -1711,13 +1717,14 @@
           "promos_allowed": false,
           "contact_allowed": false,
           "temperature": 0.7,
-          "auto_reply_positive": false,
-          "auto_reply_rating_only": true,
           "auto_reply_min_stars": 5,
           "auto_reply_delay_min_minutes": 5,
           "auto_reply_delay_max_minutes": 45,
           "auto_reply_window_start": "09:00",
-          "auto_reply_window_end": "21:30"
+          "auto_reply_window_end": "21:30",
+          "auto_reply_enabled": false,
+          "auto_reply_daily_cap": 100,
+          "auto_reply_pause_after_failures": 3
         }
       },
       "fingerprint": "2affab47dc1e6bb3",
@@ -1904,13 +1911,14 @@
           "promos_allowed": false,
           "contact_allowed": false,
           "temperature": 0.7,
-          "auto_reply_positive": true,
-          "auto_reply_rating_only": true,
           "auto_reply_min_stars": 4,
           "auto_reply_delay_min_minutes": 0,
           "auto_reply_delay_max_minutes": 0,
           "auto_reply_window_start": "",
-          "auto_reply_window_end": ""
+          "auto_reply_window_end": "",
+          "auto_reply_enabled": false,
+          "auto_reply_daily_cap": 100,
+          "auto_reply_pause_after_failures": 3
         }
       },
       "fingerprint": "8aa5077b28fdad21",
@@ -2112,13 +2120,14 @@
           "promos_allowed": false,
           "contact_allowed": false,
           "temperature": 0.7,
-          "auto_reply_positive": true,
-          "auto_reply_rating_only": false,
           "auto_reply_min_stars": 4,
           "auto_reply_delay_min_minutes": 0,
           "auto_reply_delay_max_minutes": 0,
           "auto_reply_window_start": "",
-          "auto_reply_window_end": ""
+          "auto_reply_window_end": "",
+          "auto_reply_enabled": false,
+          "auto_reply_daily_cap": 100,
+          "auto_reply_pause_after_failures": 3
         }
       },
       "fingerprint": "457360398c5b078d",
@@ -2322,13 +2331,14 @@
           "promos_allowed": false,
           "contact_allowed": true,
           "temperature": 0.7,
-          "auto_reply_positive": true,
-          "auto_reply_rating_only": true,
           "auto_reply_min_stars": 4,
           "auto_reply_delay_min_minutes": 0,
           "auto_reply_delay_max_minutes": 0,
           "auto_reply_window_start": "",
-          "auto_reply_window_end": ""
+          "auto_reply_window_end": "",
+          "auto_reply_enabled": false,
+          "auto_reply_daily_cap": 100,
+          "auto_reply_pause_after_failures": 3
         }
       },
       "fingerprint": "14450dff3f261607",
@@ -2530,13 +2540,14 @@
           "promos_allowed": false,
           "contact_allowed": false,
           "temperature": 0.7,
-          "auto_reply_positive": true,
-          "auto_reply_rating_only": true,
           "auto_reply_min_stars": 4,
           "auto_reply_delay_min_minutes": 0,
           "auto_reply_delay_max_minutes": 0,
           "auto_reply_window_start": "",
-          "auto_reply_window_end": ""
+          "auto_reply_window_end": "",
+          "auto_reply_enabled": false,
+          "auto_reply_daily_cap": 100,
+          "auto_reply_pause_after_failures": 3
         }
       },
       "fingerprint": "457360398c5b078d",
@@ -2738,13 +2749,14 @@
           "promos_allowed": false,
           "contact_allowed": false,
           "temperature": 0.7,
-          "auto_reply_positive": true,
-          "auto_reply_rating_only": true,
           "auto_reply_min_stars": 5,
           "auto_reply_delay_min_minutes": 0,
           "auto_reply_delay_max_minutes": 0,
           "auto_reply_window_start": "",
-          "auto_reply_window_end": ""
+          "auto_reply_window_end": "",
+          "auto_reply_enabled": false,
+          "auto_reply_daily_cap": 100,
+          "auto_reply_pause_after_failures": 3
         }
       },
       "fingerprint": "79631b26bd419c28",
@@ -2946,13 +2958,14 @@
           "promos_allowed": false,
           "contact_allowed": false,
           "temperature": 0.7,
-          "auto_reply_positive": true,
-          "auto_reply_rating_only": true,
           "auto_reply_min_stars": 4,
           "auto_reply_delay_min_minutes": 0,
           "auto_reply_delay_max_minutes": 0,
           "auto_reply_window_start": "",
-          "auto_reply_window_end": ""
+          "auto_reply_window_end": "",
+          "auto_reply_enabled": false,
+          "auto_reply_daily_cap": 100,
+          "auto_reply_pause_after_failures": 3
         }
       },
       "fingerprint": "b461f01a024f7169",
@@ -3154,13 +3167,14 @@
           "promos_allowed": false,
           "contact_allowed": false,
           "temperature": 0.7,
-          "auto_reply_positive": true,
-          "auto_reply_rating_only": true,
           "auto_reply_min_stars": 5,
           "auto_reply_delay_min_minutes": 0,
           "auto_reply_delay_max_minutes": 0,
           "auto_reply_window_start": "",
-          "auto_reply_window_end": ""
+          "auto_reply_window_end": "",
+          "auto_reply_enabled": false,
+          "auto_reply_daily_cap": 100,
+          "auto_reply_pause_after_failures": 3
         }
       },
       "fingerprint": "ca69780a8b2552d8",
@@ -3362,13 +3376,14 @@
           "promos_allowed": false,
           "contact_allowed": false,
           "temperature": 0.7,
-          "auto_reply_positive": true,
-          "auto_reply_rating_only": true,
           "auto_reply_min_stars": 4,
           "auto_reply_delay_min_minutes": 0,
           "auto_reply_delay_max_minutes": 0,
           "auto_reply_window_start": "",
-          "auto_reply_window_end": ""
+          "auto_reply_window_end": "",
+          "auto_reply_enabled": false,
+          "auto_reply_daily_cap": 100,
+          "auto_reply_pause_after_failures": 3
         }
       },
       "fingerprint": null,

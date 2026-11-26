@@ -112,7 +112,11 @@ TEST_F(GoLiveDomain, WhatIsNotTestedIsNotInIt) {
     copy.settings.reply.auto_reply_delay_max_minutes = 45;
     copy.settings.reply.auto_reply_window_start = "09:00";
     copy.settings.reply.auto_reply_window_end = "21:00";
-    copy.settings.reply.auto_reply_min_stars = 5;
+    ASSERT_EQ(copy.settings.reply.auto_reply_min_stars, 5);
+    copy.settings.reply.auto_reply_min_stars = 4;  // the width, which the scope holds (covers), not the fingerprint
+    copy.settings.reply.auto_reply_enabled = true;
+    copy.settings.reply.auto_reply_daily_cap = 7;
+    copy.settings.reply.auto_reply_pause_after_failures = 1;
     // Stored for the sign-off wording to come, and read by no prompt yet.
     copy.settings.reply.sign_off_name = "Mina";
     copy.name = "Willow Moon Head Spa LLC";  // the client's name: the business is named by its title
@@ -147,9 +151,8 @@ TEST_F(GoLiveDomain, TheWritersContentSettingsAreInItAndTheAudienceIsNot) {
 }
 
 TEST_F(GoLiveDomain, AWiderPolicyIsNotCoveredAndANarrowerOneIs) {
+    // The width is the minimum of stars alone (D-110): only reviews with text auto reply, whatever else is set.
     ReplySettings policy;
-    policy.auto_reply_positive = true;
-    policy.auto_reply_rating_only = false;
     policy.auto_reply_min_stars = 5;
     const auto tested = scope_of(policy);
     EXPECT_TRUE(tested.covers(tested));
@@ -157,13 +160,11 @@ TEST_F(GoLiveDomain, AWiderPolicyIsNotCoveredAndANarrowerOneIs) {
     auto wider = policy;
     wider.auto_reply_min_stars = 4;
     EXPECT_FALSE(tested.covers(scope_of(wider))) << "5 to 4 stars";
-    EXPECT_TRUE(scope_of(wider).covers(tested));
-    wider = policy;
-    wider.auto_reply_rating_only = true;
-    EXPECT_FALSE(tested.covers(scope_of(wider)));
-    auto narrower = policy;
-    narrower.auto_reply_positive = false;
-    EXPECT_TRUE(tested.covers(scope_of(narrower)));
+    EXPECT_TRUE(scope_of(wider).covers(tested)) << "4 to 5 stars is narrower";
+    auto other = policy;
+    other.auto_reply_daily_cap = 1;
+    other.auto_reply_delay_max_minutes = 60;
+    EXPECT_TRUE(tested.covers(scope_of(other))) << "the cap and the timing are no width";
 
     // Three stars and fewer never auto reply, so a policy that names them is no wider than four.
     policy.auto_reply_min_stars = 4;

@@ -1,12 +1,11 @@
-// The dashboard's API for auto reply per location (the
-// switches, the star ratings, the cap, the time zone), the pauses and how a
-// person lifts them, the list of what was posted without a person, and
-// taking a scheduled reply back. Paths, parameters and bodies are defined in
-// api/openapi.yaml; change that file first.
+// The dashboard's API for auto reply's own state (D-110): the pauses the
+// engine put on itself and how a person lifts them, what each location's
+// auto reply looks like to the engine, the list of what was posted without a
+// person, and taking a scheduled reply back. Paths, parameters and bodies are
+// defined in api/openapi.yaml; change that file first.
 //
-// Nothing here posts. Switching auto reply on lets the pipeline schedule
-// drafts from then on (repo::schedule_auto_reply); these routes are the only
-// way it is switched on, and each needs a signed-in person.
+// Nothing here posts, and nothing here switches auto reply on: that is a
+// person's save of the location's reply settings (repo::replace_reply_settings).
 
 #include "db/audit.hpp"
 #include "db/database.hpp"
@@ -22,32 +21,20 @@ using boost::beast::http::verb;
 using namespace api_support;
 
 void add_auto_reply_routes(Router& router, const Api& api) {
-    router.add(verb::get, "/api/auto-posting", {Access::user, "auto_posting.read"},
+    router.add(verb::get, "/api/system/auto-reply", {Access::user, "auto_reply.read"},
                [api](const Request&) -> asio::awaitable<Response> {
                    co_return ok(co_await api.query([now = api.clock.now()](pqxx::work& tx) { return repo::auto_reply_overview(tx, now); }));
                });
 
-    router.add(verb::post, "/api/auto-posting/resume", {Access::user, "auto_posting.resume"},
+    // Lifts the pause on every location at once, and nothing else.
+    router.add(verb::post, "/api/system/auto-reply/resume", {Access::user, "auto_reply.resume"},
                [api](const Request& request) -> asio::awaitable<Response> {
                    co_return ok(co_await api.change(request, [](pqxx::work& tx, audit::Writer& audit) {
                        return repo::resume_all_auto_reply(tx, audit);
                    }));
                });
 
-    // The request that lets replies go out without a person. Its own action
-    // name, so a role can later allow everything else and not this.
-    router.add(verb::patch, "/api/locations/{id}/auto-posting", {Access::user, "auto_posting.update"},
-               [api](const Request& request) -> asio::awaitable<Response> {
-                   const auto id = path_id(request);
-                   if (!id) co_return not_found("location");
-                   const auto patch = body_as<repo::AutoPostingPatch>(request);
-                   if (!patch) co_return patch.error();
-                   co_return respond(co_await api.change(request, [id = *id, patch = *patch](pqxx::work& tx, audit::Writer& audit) {
-                       return repo::update_auto_posting(tx, audit, id, patch);
-                   }));
-               });
-
-    router.add(verb::post, "/api/locations/{id}/auto-posting/resume", {Access::user, "auto_posting.resume"},
+    router.add(verb::post, "/api/locations/{id}/auto-reply/resume", {Access::user, "auto_reply.resume"},
                [api](const Request& request) -> asio::awaitable<Response> {
                    const auto id = path_id(request);
                    if (!id) co_return not_found("location");
@@ -56,7 +43,7 @@ void add_auto_reply_routes(Router& router, const Api& api) {
                    }));
                });
 
-    router.add(verb::get, "/api/auto-posts", {Access::user, "auto_posts.list"},
+    router.add(verb::get, "/api/auto-replies", {Access::user, "auto_replies.list"},
                [api](const Request& request) -> asio::awaitable<Response> {
                    const QueryParams query(request.query);
                    db::Page page;
