@@ -1805,6 +1805,11 @@ TEST_F(Reports, SchedulesAreMadeChangedAndDeletedByPeople) {
     EXPECT_EQ(bad(R"("frequency": "hourly")"), 400u);
     EXPECT_EQ(bad(R"("frequency": "weekly")"), 400u);  // no weekday
     EXPECT_EQ(bad(R"("frequency": "monthly", "month_day": 31)"), 400u);
+    // A day that fits no int is refused, not narrowed into one that passes.
+    EXPECT_EQ(bad(R"("frequency": "weekly", "weekday": 4294967297)"), 400u);
+    EXPECT_EQ(bad(R"("frequency": "monthly", "month_day": 4294967297)"), 400u);
+    EXPECT_EQ(bad(R"("frequency": "weekly", "weekday": -4294967295)"), 400u);
+    EXPECT_EQ(bad(R"("frequency": "monthly", "month_day": -4294967295)"), 400u);
     EXPECT_EQ(bad(R"("time": "25:00")"), 400u);
     EXPECT_EQ(bad(R"("time_zone": "America/New_York")"), 400u);  // a schedule has no zone of its own (D-109)
     EXPECT_EQ(post(schedules_path(999999), schedule_body("")).status, 404u);
@@ -1836,6 +1841,32 @@ TEST_F(Reports, SchedulesAreMadeChangedAndDeletedByPeople) {
     EXPECT_TRUE(listed_schedule(chelsea_, id).is_null());
     EXPECT_EQ(del(path, if_match(tag)).status, 404u);
     EXPECT_EQ(count("audit_log WHERE action = 'report_schedule.delete'"), 1);
+}
+
+// 4294967297 is 1 once cut to 32 bits: it must not pass the check as Monday and then break the smallint column.
+TEST_F(Reports, AScheduleDayOutOfRangeIsRefusedAndChangesNothing) {
+    const auto refused_unchanged = [&](std::int64_t id, const std::string& rest, const std::string& member) {
+        const auto path = schedule_path(chelsea_, id);
+        const auto before = listed_schedule(chelsea_, id);
+        const auto tag = etag(path, browser_);
+        const auto response = change_schedule(chelsea_, id, rest);
+        EXPECT_EQ(response.status, 400u) << response.body;
+        EXPECT_EQ(json(response).at("error").at("code").as_string(), "invalid_request");
+        EXPECT_THAT(response.body, HasSubstr(member));
+        EXPECT_EQ(boost::json::serialize(listed_schedule(chelsea_, id)), boost::json::serialize(before));
+        EXPECT_EQ(etag(path, browser_), tag);
+    };
+    const auto weekly = schedule(chelsea_, R"("frequency": "weekly", "weekday": 3)");
+    refused_unchanged(weekly, R"("weekday": 4294967297)", "weekday");
+    EXPECT_EQ(listed_schedule(chelsea_, weekly).at("weekday").as_int64(), 3);
+    const auto monthly = schedule(chelsea_, R"("frequency": "monthly", "month_day": 12)");
+    refused_unchanged(monthly, R"("month_day": 4294967297)", "month_day");
+    EXPECT_EQ(listed_schedule(chelsea_, monthly).at("month_day").as_int64(), 12);
+    EXPECT_EQ(count("audit_log WHERE action = 'report_schedule.update'"), 0);
+
+    // A day the frequency does not use is dropped before it is checked, whatever it is.
+    const auto daily = schedule(chelsea_, R"("frequency": "daily", "weekday": 4294967297)");
+    EXPECT_TRUE(listed_schedule(chelsea_, daily).at("weekday").is_null());
 }
 
 TEST_F(Reports, ADeletedScheduleLeavesItsReports) {
