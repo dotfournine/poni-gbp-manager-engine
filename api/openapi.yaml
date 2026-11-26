@@ -762,6 +762,9 @@ paths:
       responses:
         "200":
           description: The location.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -786,9 +789,14 @@ paths:
         settings, switches, tests and reports stay as they are. Its reply
         settings are its own from discovery (D-093), and change only through
         `PUT /api/locations/{id}/reply-settings`.
+
+        The `ETag` covers the members this body can set (D-108): what the
+        engine writes by itself (the title and address a discovery reads,
+        the poll and sync times, the pause) does not make it stale.
       tags: [locations]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
@@ -797,7 +805,12 @@ paths:
               $ref: "#/components/schemas/LocationUpdate"
       responses:
         "200":
-          description: The location after the change.
+          description: |
+            The location after the change, and its new `ETag`. A change that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -819,6 +832,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
 
   /api/reviews:
     get:
@@ -1226,6 +1243,9 @@ paths:
       responses:
         "200":
           description: The settings.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -1235,10 +1255,16 @@ paths:
     patch:
       operationId: updateAiSettings
       summary: Change the analysis pipeline settings
-      description: Changes the fields that are given. A map or list that is given replaces the stored one.
+      description: |
+        Changes the fields that are given. A map or list that is given replaces the stored one.
+
+        The `ETag` covers the members this body can set (D-108): not
+        `providers`, which come from the engine's configuration, nor
+        `prompt_version` or `updated_at`.
       tags: [settings]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
@@ -1247,7 +1273,12 @@ paths:
               $ref: "#/components/schemas/AiSettingsUpdate"
       responses:
         "200":
-          description: The settings after the change.
+          description: |
+            The settings after the change, and their new `ETag`. A change that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -1258,6 +1289,10 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
 
   /api/llm/usage:
     get:
@@ -1325,6 +1360,9 @@ paths:
       responses:
         "200":
           description: The draft.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -1340,9 +1378,15 @@ paths:
         Replaces the text of a draft that is still waiting (`draft`). The
         reply checks run again on the new text and are stored with it; a
         draft with a failed check is saved but can't be approved.
+
+        The `ETag` covers the draft's `text` (D-108). A draft that is no
+        longer waiting is still a 409 `draft_not_open` when the tag
+        matches. The approval needs no `If-Match`: it carries the exact
+        text it approves.
       tags: [replies]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
@@ -1351,7 +1395,12 @@ paths:
               $ref: "#/components/schemas/DraftUpdate"
       responses:
         "200":
-          description: The draft after the change.
+          description: |
+            The draft after the change, and its new `ETag`. A change that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -1366,6 +1415,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/DraftConflict"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
 
   /api/drafts/{id}/approve:
     parameters:
@@ -2138,6 +2191,9 @@ paths:
       responses:
         "200":
           description: The local post.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -2155,9 +2211,15 @@ paths:
         draft with a failed check is saved but can't be approved. A post
         that is at Google is not changed by this route: it gets an edit of
         its own, which a person approves (`PUT /api/local-posts/{id}/edit`).
+
+        The `ETag` covers the post's content, the members of this body
+        (D-108). A post that is no longer a draft is still a 409
+        `local_post_not_open` when the tag matches. The approval needs no
+        `If-Match`: it carries the exact content it approves.
       tags: [local-posts]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
@@ -2166,7 +2228,12 @@ paths:
               $ref: "#/components/schemas/LocalPostContent"
       responses:
         "200":
-          description: The draft after the change.
+          description: |
+            The draft after the change, and its new `ETag`. A change that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -2181,6 +2248,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/LocalPostConflict"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
     delete:
       operationId: deleteLocalPost
       summary: Delete a draft
@@ -2194,9 +2265,12 @@ paths:
         Google is removed there instead (`POST /api/local-posts/{id}/remove`).
         A copy that is deleted leaves its source's `copies`; the copies of a
         post that is deleted keep their content and get `copied_from_id: null`.
+        It needs the post's `ETag` (D-108), so that a draft is not deleted
+        by someone who has not seen its last change.
       tags: [local-posts]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       responses:
         "204":
           description: The draft is gone.
@@ -2208,6 +2282,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/LocalPostConflict"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
 
   /api/local-posts/{id}/edit:
     parameters:
@@ -2278,6 +2356,10 @@ paths:
         because an edit does not send what they are about:
         `scheduled_in_future` and `recurrence_end`. `media_usable` looks at
         the uploads only when they are not the post's own.
+
+        This route takes no `If-Match` (D-108): `based_on` already holds the
+        edit to what the person read, and the engine needs it to work out
+        the fields the edit changes.
       tags: [local-posts]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -2311,7 +2393,9 @@ paths:
         Discards the post's edit while it is a `draft`; the audit entry
         keeps its content. Nothing at Google is touched and the post stays
         as it is. An edit that is `approved` or `sending`, and a post
-        without an edit, are refused with `local_post_edit_not_open`.
+        without an edit, are refused with `local_post_edit_not_open`. It
+        takes no `If-Match` (D-108): it changes nothing at Google and only
+        ever leaves the post as Google has it.
       tags: [local-posts]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -3164,6 +3248,9 @@ paths:
       responses:
         "200":
           description: The rule.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -3175,10 +3262,11 @@ paths:
     patch:
       operationId: updateNotificationRule
       summary: Change a notification rule
-      description: Changes the fields that are given.
+      description: Changes the fields that are given. The `ETag` covers `recipients` and `enabled` (D-108).
       tags: [notifications]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
@@ -3187,7 +3275,12 @@ paths:
               $ref: "#/components/schemas/NotificationRuleUpdate"
       responses:
         "200":
-          description: The rule after the change.
+          description: |
+            The rule after the change, and its new `ETag`. A change that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -3202,13 +3295,18 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/RuleConflict"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
     delete:
       operationId: deleteNotificationRule
       summary: Remove a notification rule
-      description: Removes the rule. Deliveries it caused stay in the log.
+      description: Removes the rule. Deliveries it caused stay in the log. It needs the rule's `ETag` (D-108).
       tags: [notifications]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       responses:
         "204":
           description: The rule is gone.
@@ -3218,6 +3316,10 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
 
   /api/notification-deliveries:
     get:
@@ -3311,7 +3413,9 @@ paths:
     delete:
       operationId: unregisterDevice
       summary: Stop push to this device
-      description: Removes a device of the signed-in user; another user's device is a 404.
+      description: |
+        Removes a device of the signed-in user; another user's device is a 404.
+        It takes no `If-Match` (D-108): a device is not something a person edits.
       tags: [notifications]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -3369,6 +3473,9 @@ paths:
       responses:
         "200":
           description: The switches.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -3378,9 +3485,13 @@ paths:
     patch:
       operationId: updateSystemSettings
       summary: Flip the posting or sending switch
+      description: |
+        The `ETag` covers the two switches (D-108). A pause of auto-posting
+        that the engine puts on itself does not make it stale.
       tags: [system]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
@@ -3389,7 +3500,12 @@ paths:
               $ref: "#/components/schemas/SystemSettingsUpdate"
       responses:
         "200":
-          description: The switches after the change.
+          description: |
+            The switches after the change, and their new `ETag`. A change that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -3400,6 +3516,10 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
 
   /api/audit-log:
     get:
