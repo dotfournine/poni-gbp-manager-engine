@@ -83,9 +83,17 @@ class MockGoogle:
             self._save()
         else:
             self.state = json.loads(path.read_text(encoding="utf-8"))
-            # A state file from before the directory: it gains one, and nothing else of it changes.
-            if "directory" not in self.state:
+            # A state file from before the directory or the time zones: it gains them, and nothing else of it changes.
+            changed = "directory" not in self.state
+            if changed:
                 self.state["directory"] = directory_users()
+            if any("time_zone" not in loc for loc in self.state["locations"]):
+                changed = True
+                zones = {loc["id"]: loc["time_zone"] for loc in initial_state(knowledge_dir, clock())["locations"]}
+                for loc in self.state["locations"]:
+                    if "time_zone" not in loc and loc["id"] in zones:
+                        loc["time_zone"] = zones[loc["id"]]
+            if changed:
                 self._save()
 
     # ---- storage ------------------------------------------------------------------------
@@ -292,6 +300,16 @@ class MockGoogle:
             }
             self._save()
             return Answer(200, {"comment": comment, "updateTime": updated})
+
+    # ---- Google Places ------------------------------------------------------------------------
+
+    def place_time_zone(self, place_id: str) -> Answer:
+        """places.get with the field mask timeZone, by a location's placeId: the one Places request the engine sends."""
+        with self.lock:
+            loc = next((loc for loc in self.state["locations"] if f"mock-place-{loc['id']}" == place_id), None)
+            if loc is None or not loc.get("time_zone"):
+                return not_found(f"Place '{place_id}' was not found.")
+            return Answer(200, {"timeZone": {"id": loc["time_zone"], "version": "2025b"}})
 
     # ---- the Admin SDK Directory API ----------------------------------------------------------
 

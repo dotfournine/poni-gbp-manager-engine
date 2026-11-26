@@ -9,7 +9,8 @@ from pathlib import Path
 ACCOUNT_ID = "900000000000000001"
 ACCOUNT_NAME = "PONI Mock Agency"
 
-# Per industry pack: the locations its test client gets, and the reviews they start with
+# Per industry pack: the locations its test client gets, the IANA zone Google Places gives for each,
+# and the reviews they start with
 # (days ago, reviewer, stars, text or None for a rating-only review, a reply by the owner or None).
 _LOCATIONS: dict[str, list[dict]] = {
     "food_beverage": [
@@ -19,6 +20,7 @@ _LOCATIONS: dict[str, list[dict]] = {
             "locality": "Fairview",
             "region": "VA",
             "street": "100 Example Plaza",
+            "time_zone": "America/New_York",
             "reviews": [
                 (
                     40,
@@ -47,6 +49,7 @@ _LOCATIONS: dict[str, list[dict]] = {
             "locality": "New York",
             "region": "NY",
             "street": "200 Example Avenue, Floor 3",
+            "time_zone": "America/New_York",
             "reviews": [
                 (
                     30,
@@ -65,6 +68,7 @@ _LOCATIONS: dict[str, list[dict]] = {
             "locality": "Queens",
             "region": "NY",
             "street": "300 Example Street",
+            "time_zone": "America/New_York",
             "reviews": [
                 (14, "Taylor W.", 4, "Lovely foot massage, a bit pricey but worth it.", None),
                 (4, "林女士", 5, "头疗做得很舒服，技师手法很专业，强烈推荐！", None),
@@ -81,6 +85,7 @@ _GENERIC = {
     "locality": "Springfield",
     "region": "IL",
     "street": "400 Example Road",
+    "time_zone": "America/Chicago",
     "reviews": [
         (20, "Sam G.", 5, "Friendly staff and quick service.", None),
         (5, "Alex N.", 4, "Good experience overall.", None),
@@ -165,6 +170,7 @@ def initial_state(knowledge_dir: Path, now: datetime) -> dict:
                         "postalCode": "00000",
                         "addressLines": [spec["street"]],
                     },
+                    "time_zone": spec["time_zone"],
                 }
             )
             for days, reviewer, stars, text, owner_reply in spec["reviews"]:

@@ -2,7 +2,8 @@
 
 The engine rewrites https://mybusiness.googleapis.com/v4/... to http://127.0.0.1:<port>/mybusiness.googleapis.com/v4/...
 (http::google_mock_address), so the first segment says which API a request is for. GET, POST and the one PUT of
-a reply are answered; there is no PATCH and no DELETE.
+a reply are answered; there is no PATCH and no DELETE. The one Places request, a place's time zone, takes a key
+instead of a token.
 """
 
 from __future__ import annotations
@@ -45,6 +46,7 @@ _GET = [
     ),
     (re.compile(r"^/admin\.googleapis\.com/admin/directory/v1/users$"), "list_directory_users"),
     (re.compile(rf"^/admin\.googleapis\.com/admin/directory/v1/users/{_ID}$"), "directory_user"),
+    (re.compile(r"^/places\.googleapis\.com/v1/places/([A-Za-z0-9_-]+)$"), "place_time_zone"),
 ]
 _POST = [
     (re.compile(r"^/oauth2\.googleapis\.com/token$"), "token"),
@@ -133,6 +135,13 @@ def make_handler(mock: MockGoogle) -> type[BaseHTTPRequestHandler]:
             single = {key: values[0] for key, values in query.items()}
             if name == "consent":
                 return self._send(mock.consent(single))
+            if name == "place_time_zone":
+                # Places takes an API key, not a token. Any key will do; it is never printed or answered.
+                if not self.headers.get("X-Goog-Api-Key"):
+                    return self._send(google_error(403, "PERMISSION_DENIED", "The request is missing a valid API key."))
+                if self.headers.get("X-Goog-FieldMask") != "timeZone":
+                    return self._send(google_error(400, "INVALID_ARGUMENT", "The field mask must be timeZone."))
+                return self._send(mock.place_time_zone(ids[0]))
             if not self._authorized():
                 return self._unauthorized()
             match name:
