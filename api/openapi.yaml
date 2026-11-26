@@ -3941,7 +3941,6 @@ components:
         - access_lost_at
         - first_seen_at
         - last_seen_at
-        - review_poll_interval_s
         - posting_enabled
         - review_count
         - unreplied_count
@@ -4037,10 +4036,6 @@ components:
           type: string
           format: date-time
           description: The last discovery that saw the location.
-        review_poll_interval_s:
-          type: integer
-          format: int64
-          description: Seconds between review polls of this location.
         posting_enabled:
           type: boolean
           description: The location's kill switch for posting replies and local posts; the global switch must be on too.
@@ -4127,10 +4122,6 @@ components:
           type: string
           maxLength: 500
           description: As in `Location`.
-        review_poll_interval_s:
-          type: integer
-          minimum: 60
-          maximum: 86400
         posting_enabled:
           type: boolean
           description: The location's kill switch. Off, no reply and no local post is sent to this location.
