@@ -69,18 +69,6 @@ boost::json::object rule_json(const model::NotificationRule& rule) {
             {"enabled", rule.enabled}};
 }
 
-// Trimmed, lower-cased, without repeats; nothing if any address is not valid.
-std::optional<std::vector<std::string>> clean_recipients(const std::vector<std::string>& recipients) {
-    std::vector<std::string> out;
-    for (const auto& raw : recipients) {
-        auto address = normal_address(raw);
-        if (!valid_email(address)) return std::nullopt;
-        if (!std::ranges::contains(out, address)) out.push_back(std::move(address));
-    }
-    if (out.empty() || out.size() > 20) return std::nullopt;
-    return out;
-}
-
 std::string delivery_select() {
     return std::format("SELECT d.id, d.event_type, d.location_id, d.review_id, d.escalation_id, d.report_id, "
                        "(SELECT u.email FROM users u WHERE u.id = d.requested_by) AS requested_by, d.channel, d.recipient, d.subject, "
@@ -113,6 +101,17 @@ bool valid_email(std::string_view address) {
         if (c == '<' || c == '>' || c == ',' || c == ';' || c == '"' || c == '(' || c == ')' || c == '\\') return false;
     }
     return true;
+}
+
+std::optional<std::vector<std::string>> clean_recipients(const std::vector<std::string>& recipients, std::size_t min_count) {
+    std::vector<std::string> out;
+    for (const auto& raw : recipients) {
+        auto address = normal_address(raw);
+        if (!valid_email(address)) return std::nullopt;
+        if (!std::ranges::contains(out, address)) out.push_back(std::move(address));
+    }
+    if (out.size() < min_count || out.size() > 20) return std::nullopt;
+    return out;
 }
 
 int emit(pqxx::transaction_base& tx, const NotificationEvent& event, core::TimePoint now) {
@@ -224,7 +223,7 @@ Result<model::NotificationRule> create_rule(pqxx::transaction_base& tx, audit::W
     if (rule.event_type == kEventLocationReport && !location_id) {
         return invalid("A rule for a location's reports must name the location whose reports it sends.");
     }
-    const auto recipients = clean_recipients(rule.recipients);
+    const auto recipients = clean_recipients(rule.recipients, 1);
     if (!recipients) {
         return invalid("\"recipients\" must be 1 to 20 valid email addresses.");
     }
@@ -253,7 +252,7 @@ Result<model::NotificationRule> update_rule(pqxx::transaction_base& tx, audit::W
     const auto before = *get_rule(tx, id);
     auto recipients = before.recipients;
     if (patch.recipients) {
-        const auto cleaned = clean_recipients(*patch.recipients);
+        const auto cleaned = clean_recipients(*patch.recipients, 1);
         if (!cleaned) return invalid("\"recipients\" must be 1 to 20 valid email addresses.");
         recipients = *cleaned;
     }

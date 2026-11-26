@@ -55,8 +55,8 @@ const std::map<std::string, std::string> kRoutesWithBody = {
     {"POST /api/drafts/{id}/regenerate", "instructions"},
     {"POST /api/locations/{id}/reports", "period_start"},
     {"POST /api/reports/{id}/send", "recipients"},
-    {"POST /api/report-schedules", "location_id"},
-    {"PATCH /api/report-schedules/{id}", "frequency"},
+    {"POST /api/locations/{id}/report-settings/schedules", "frequency"},
+    {"PUT /api/locations/{id}/report-settings/schedules/{sid}", "frequency"},
     {"PUT /api/local-posts/{id}", "topic_type"},
     {"POST /api/local-posts/{id}/approve", "topic_type"},
     {"PUT /api/local-posts/{id}/edit", "content"},
@@ -94,7 +94,7 @@ const std::vector<std::string> kRoutesWithoutBody = {
     "DELETE /api/clients/{id}",
     "DELETE /api/notification-rules/{id}",
     "DELETE /api/devices/{id}",
-    "DELETE /api/report-schedules/{id}",
+    "DELETE /api/locations/{id}/report-settings/schedules/{sid}",
     "DELETE /api/local-posts/{id}",
     "DELETE /api/local-posts/{id}/edit",
 };
@@ -276,15 +276,17 @@ TEST_F(Bodies, MembersOfAnotherBodyAreNotTaken) {
     expect_refused(post("/api/drafts/999999999/reject", R"({"reason": "x", "note": "y"})"), "note", "a note on a draft's rejection");
     expect_refused(patch("/api/notification-rules/999999999", R"({"enabled": true, "location_id": 3})"), "location_id", "a rule's location");
     expect_refused(patch("/api/notification-rules/999999999", R"({"event_type": "escalation"})"), "event_type", "a rule's event");
-    expect_refused(patch("/api/report-schedules/999999999", R"({"location_id": 3})"), "location_id", "a schedule's location");
-    // A schedule's weekday is dropped by the engine when the frequency does not use it; a caller can't clear it.
-    expect_refused(patch("/api/report-schedules/999999999", R"({"weekday": null})"), "weekday", "a null weekday");
-    // On a new schedule null says "none", as leaving it out does.
-    const auto schedule = post("/api/report-schedules",
-                               std::format(R"({{"location_id": {}, "frequency": "daily", "weekday": null, "month_day": null, "time": "09:00",
-                                               "time_zone": "America/New_York"}})",
-                                           spa_));
-    EXPECT_EQ(schedule.status, 201u) << schedule.body;
+    // A schedule travels whole (D-111): a missing member and one it does not have are each refused, by name.
+    const std::string schedule = R"({"frequency": "daily", "weekday": null, "month_day": null, "time": "09:00", "enabled": false,
+                                     "auto_send": false, "recipients": [])";
+    const auto schedules = spa_path("/report-settings/schedules");
+    expect_refused(post(schedules, schedule + "}"), "sections", "a schedule without its sections");
+    expect_refused(put(schedules + "/999999999", schedule + "}"), "sections", "a schedule's PUT without its sections");
+    expect_refused(post(schedules, schedule + R"(, "sections": null, "location_id": 3})"), "location_id", "a schedule's location");
+    expect_refused(post(schedules, schedule + R"(, "sections": null, "time_zone": "America/New_York"})"), "time_zone", "a schedule's zone");
+    // Null says "none" for the members that may be null.
+    const auto made = post(schedules, schedule + R"(, "sections": null})");
+    EXPECT_EQ(made.status, 201u) << made.body;
     // The body may be left out where the spec says so, and is read like any other where it is sent.
     EXPECT_EQ(post("/api/reviews/999999999/ignore", "").status, 404u);
     expect_refused(post("/api/reviews/999999999/ignore", R"({"reason": 5})"), "reason", "a reason that is no text");
