@@ -19,9 +19,9 @@ SELECT 'contract-location-1', 'contract-account-1', c.id, true, 'Contract Check 
  WHERE c.name = 'Contract Check Spa'
 ON CONFLICT (gbp_location_id) DO NOTHING;
 
--- The location's content and reply settings (D-107): what discovery gives
--- every location, copies of the knowledge base's defaults (D-102). The
--- knowledge base is seeded by the time this file is applied.
+-- The location's content, reply and report settings (D-107, D-111): what
+-- discovery gives every location, copies of the knowledge base's defaults
+-- (D-102). The knowledge base is seeded by the time this file is applied.
 INSERT INTO content_settings (location_id, business_facts, base_style, emoji_allowed, emoji_max, emoji_preferred, words_to_avoid, style_notes, chinese_variant,
                               english_variant, audience, created_at, updated_at)
 SELECT l.id, d.business_facts, d.base_style, d.emoji_allowed, d.emoji_max, d.emoji_preferred, d.words_to_avoid,
@@ -39,6 +39,12 @@ SELECT l.id, d.reply_languages, d.fallback_language, d.signature, d.sign_off_nam
        d.auto_reply_delay_max_minutes, d.auto_reply_window_start, d.auto_reply_window_end, d.auto_reply_enabled,
        d.auto_reply_daily_cap, d.auto_reply_pause_after_failures, now(), now()
   FROM locations l, kb_reply_defaults d
+ WHERE l.gbp_location_id = 'contract-location-1'
+ON CONFLICT (location_id) DO NOTHING;
+
+INSERT INTO report_settings (location_id, format, sections, created_at, updated_at)
+SELECT l.id, d.format, d.sections, now(), now()
+  FROM locations l, kb_report_defaults d
  WHERE l.gbp_location_id = 'contract-location-1'
 ON CONFLICT (location_id) DO NOTHING;
 

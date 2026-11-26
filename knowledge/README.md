@@ -10,7 +10,7 @@ Everything the system knows that is the same for every client and that nobody ch
 | `industries/<key>/corpus.json` | The industry's test corpus: severity, manipulation and ordinary cases |
 | `industries/<key>/test_client.json` | A made-up business the test suites run as |
 | `voices/<key>.json` | Voice templates: each sets some members of the content settings and of the reply settings (`content`, `reply`) |
-| `defaults.json` | What a newly discovered location starts from, its complete content settings and reply settings (`content`, `reply`, D-107), and the default of every analysis setting (`analysis`) |
+| `defaults.json` | What a newly discovered location starts from: its three complete bundles, the content settings, the reply settings and the report settings (`content`, `reply`, D-107; `report`, D-111), and the default of every analysis setting (`analysis`) |
 | `models.json` | Model prices in USD per million tokens |
 | `schema/` | A JSON Schema per kind of file. Unknown keys are refused |
 
@@ -34,6 +34,7 @@ uv run poni-tools seed                               # check, then replace the k
 - Every change gets a new `version` in `manifest.json`: today's date, `YYYYMMDD`; a second one on the same day ends in `-2`. The seed refuses changed content under a version that is already seeded, and `publish` never replaces an archive.
 - A file that is not part of the layout (a mistyped name) and a key no schema knows are refused: nothing is left out without a word.
 - A change to what the analyzer is told about an industry (its label, its topic ids, its item types, a severity flag's id, label, description or switch, and the common flags) changes the fingerprint of every location of that industry, so each needs a new go-live test before it auto replies again. `poni-tools seed` prints those locations for the person who seeds; the engine notifies no one. A topic's label, new corpus cases, templates, defaults and prices change no fingerprint.
+- The report defaults' `format` is `html`: a save of `pdf` is refused until PDF reports exist (D-111), so a `pdf` default would give every new location report settings it could not save as they are. Their `sections` name each of the seven sections at most once. The reply defaults never switch auto reply on, which `poni-tools check` refuses and the database refuses too.
 - An item type with `"person": true` is a staff member a reviewer named: a location's report lists such items under employee recognition, not among the items (D-086). The analyzer is not told the flag, so setting it changes no fingerprint; adding the item type does.
 
 ## Onboarding a new industry

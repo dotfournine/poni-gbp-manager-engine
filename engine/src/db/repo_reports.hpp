@@ -22,6 +22,7 @@
 #include "domain/report_schedule.hpp"
 
 #include <boost/describe/class.hpp>
+#include <boost/json/object.hpp>
 
 #include <pqxx/pqxx>
 
@@ -42,16 +43,18 @@ inline constexpr int kBuildReportAttempts = 4;
 
 struct NewReport {
     std::int64_t location_id = 0;
-    domain::Period period;
-    std::string time_zone;
+    domain::Period period;  // the location's days, in its time zone (D-109)
     std::optional<std::int64_t> schedule_id;
     bool auto_send = false;
+    // Nothing: the location's report settings' sections (D-111).
+    std::optional<std::vector<std::string>> sections;
 };
 
 // Writes the report as "building" and enqueues its job, requested by the
-// audit's actor (a person, or nobody: a schedule). Without a time zone it
-// takes the location's, else UTC. Refuses a location that is unknown or
-// switched off, a time zone the system does not know, a period that is
+// audit's actor (a person, or nobody: a schedule), with the format of the
+// location's report settings and their sections, or the report's own
+// (D-111), in the location's time zone, which it records (D-109). Refuses a location that is unknown or
+// switched off, a location's time zone the system does not know, a period that is
 // upside down, longer than 400 days or not over yet, and any report while
 // there is no public bucket (`link_base` empty): its page would have nowhere to go.
 Result<model::Report> create_report(pqxx::transaction_base& tx, audit::Writer& audit, const NewReport& report, std::string_view link_base);
@@ -91,13 +94,23 @@ struct ReportMail {
     std::string body;
 };
 
+// The union of the recipients of every schedule of the location, enabled or not, sorted by bytes, each once:
+// whom a person's send can reach (D-111).
+std::vector<std::string> report_recipients(pqxx::transaction_base& tx, std::int64_t location_id);
+
+// Whose send it is, which decides its recipients (D-111). `person`: the location's report_recipients, or
+// those of them a request names. `schedule`: the recipients of the schedule that made the report, of
+// the report's own location, while it is on and sends by itself; none, no schedule any more, or a
+// schedule switched off, and the send is refused.
+enum class SendFor { person, schedule };
+
 // The checks of a send, under the report's row lock, in this order: `only`, when given, names at
 // least one address; the report is ready; its location is switched on; email sending is on and a
-// mailbox is connected; there is a public bucket (`link_base`); the location has recipients; and
-// each address of `only` is one of them (trimmed and lower-cased first). Then the mail: to every
-// recipient, or to those of `only`, with the report's link in its body. Writes nothing.
+// mailbox is connected; there is a public bucket (`link_base`); there are recipients, as `who`
+// decides; and each address of `only` is one of them (trimmed and lower-cased first). Then the
+// mail: to every recipient, or to those of `only`, with the report's link in its body. Writes nothing.
 Result<ReportMail> prepare_report_send(pqxx::transaction_base& tx, std::int64_t report_id,
-                                       const std::optional<std::vector<std::string>>& only, std::string_view link_base);
+                                       const std::optional<std::vector<std::string>>& only, std::string_view link_base, SendFor who);
 
 // After the sends: one delivery row per address as it ended, under `event_key` and in the name of
 // the audit's actor (a person, or nobody: its schedule), the audit entry with the counts, and the
@@ -151,36 +164,37 @@ std::optional<model::Report> get_report(pqxx::transaction_base& tx, std::int64_t
 
 // ---- schedules ------------------------------------------------------------------------
 
-// Both are the API's request bodies (POST and PATCH /api/report-schedules).
-struct NewSchedule {
-    std::int64_t location_id = 0;  // an enabled location
+// The body of a schedule's POST and PUT (/api/locations/{id}/report-settings/schedules, D-111): the whole schedule.
+struct ScheduleInput {
+    static constexpr bool sent_whole = true;
     std::string frequency;
-    // Each for its frequency; null or left out otherwise.
-    core::Nullable<std::int64_t> weekday;
-    core::Nullable<std::int64_t> month_day;
-    std::string time;  // "HH:MM"
-    std::string time_zone;
-    std::optional<bool> auto_send;  // nothing: off
-    std::optional<bool> enabled;    // nothing: on
+    std::optional<std::int64_t> weekday;    // weekly's; stored as null for another frequency
+    std::optional<std::int64_t> month_day;  // monthly's; the same
+    std::string time;                       // "HH:MM", local to the location
+    bool enabled = true;
+    bool auto_send = false;
+    std::vector<std::string> recipients;               // at most 20; at least one while enabled
+    std::optional<std::vector<std::string>> sections;  // null: the location's report settings decide
 };
-BOOST_DESCRIBE_STRUCT(NewSchedule, (), (location_id, frequency, weekday, month_day, time, time_zone, auto_send, enabled))
-// weekday and month_day can't be cleared by a PATCH: the one the frequency does not use is dropped.
-struct SchedulePatch {
-    std::optional<std::string> frequency;
-    std::optional<std::int64_t> weekday;
-    std::optional<std::int64_t> month_day;
-    std::optional<std::string> time;
-    std::optional<std::string> time_zone;
-    std::optional<bool> auto_send;
-    std::optional<bool> enabled;
-};
-BOOST_DESCRIBE_STRUCT(SchedulePatch, (), (frequency, weekday, month_day, time, time_zone, auto_send, enabled))
+BOOST_DESCRIBE_STRUCT(ScheduleInput, (), (frequency, weekday, month_day, time, enabled, auto_send, recipients, sections))
 
-// Every schedule, by location title.
-model::ReportScheduleList list_schedules(pqxx::transaction_base& tx);
-Result<model::ReportSchedule> create_schedule(pqxx::transaction_base& tx, audit::Writer& audit, const NewSchedule& schedule);
-Result<model::ReportSchedule> update_schedule(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const SchedulePatch& patch);
-Result<void> delete_schedule(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id);
+// A schedule's members its PUT sets, with the values it holds, for its ETag (D-108): not last_run_on, which the engine writes.
+boost::json::object editable(const model::ReportSchedule& schedule);
+
+// The location's schedules, oldest first; not_found("location") for an unknown one.
+Result<model::ReportScheduleList> list_schedules(pqxx::transaction_base& tx, std::int64_t location_id);
+// One of the location's schedules; not_found("report schedule") for one of another location, too.
+Result<model::ReportSchedule> get_schedule(pqxx::transaction_base& tx, std::int64_t location_id, std::int64_t id);
+// Refuses a location that is unknown or switched off, and a schedule that is not one (400).
+Result<model::ReportSchedule> create_schedule(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
+                                              const ScheduleInput& schedule);
+// Locks the schedule's row and gives its ETag, for api.change_if_match; another location's is not_found.
+Result<std::string> current_schedule_etag(pqxx::transaction_base& tx, std::int64_t location_id, std::int64_t id);
+// Replaces the schedule whole, its row locked by current_schedule_etag. A save that changes nothing records nothing.
+Result<model::ReportSchedule> replace_schedule(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id, std::int64_t id,
+                                               const ScheduleInput& schedule);
+// Its reports stay; they only forget which schedule asked for them.
+Result<void> delete_schedule(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id, std::int64_t id);
 
 // A report that has been building for longer than its job can take has lost
 // the job (a restart during the last attempt, say): it is marked failed, so
@@ -190,8 +204,8 @@ int fail_stalled_reports(pqxx::transaction_base& tx, core::TimePoint now);
 
 // Builds the report of every enabled schedule of an enabled location whose
 // latest run has come and has not been built yet: one report per schedule and run day, however often
-// this is called. A schedule made or changed after a run's moment does not
-// run for it. `link_base` as for create_report. Returns how many reports were started.
+// this is called, in the location's time zone and with the schedule's sections, if it has its own. A schedule
+// made or changed after a run's moment does not run for it. `link_base` as for create_report. Returns how many reports were started.
 int start_due_reports(pqxx::transaction_base& tx, std::string_view link_base, core::TimePoint now);
 
 }  // namespace poni::repo

@@ -54,7 +54,8 @@ std::optional<std::string> knowledge_problem(pqxx::transaction_base& tx) {
     }
     // A migration that rebuilds a defaults table leaves it empty for the next seed (a migration writes no kb_* row):
     // without its row, no location could be discovered.
-    for (const auto table : {std::string_view("kb_content_defaults"), std::string_view("kb_reply_defaults")}) {
+    for (const auto table :
+         {std::string_view("kb_content_defaults"), std::string_view("kb_reply_defaults"), std::string_view("kb_report_defaults")}) {
         if (tx.query_value<std::int64_t>(std::format("SELECT count(*) FROM {}", table)) != 1) {
             return std::format("the knowledge base has no row in {}; run `poni-tools seed` to fill it", table);
         }
@@ -127,11 +128,15 @@ KnowledgeDefaults knowledge_defaults(pqxx::transaction_base& tx) {
     // One statement, so a seed that commits meanwhile cannot give one version's content defaults and another's reply defaults.
     const auto rows = tx.exec("SELECT (SELECT (to_jsonb(c) - 'id')::text FROM kb_content_defaults c), "
                               "(SELECT (to_jsonb(r) - 'id')::text FROM kb_reply_defaults r), "
+                              "(SELECT (to_jsonb(p) - 'id')::text FROM kb_report_defaults p), "
                               "(SELECT analysis::text FROM kb_defaults)");
     const auto object_or_empty = [](const pqxx::field_ref& field) {
         return field.is_null() ? boost::json::object{} : object_column(field);
     };
-    return {.content = object_or_empty(rows[0][0]), .reply = object_or_empty(rows[0][1]), .analysis = object_or_empty(rows[0][2])};
+    return {.content = object_or_empty(rows[0][0]),
+            .reply = object_or_empty(rows[0][1]),
+            .report = object_or_empty(rows[0][2]),
+            .analysis = object_or_empty(rows[0][3])};
 }
 
 std::optional<model::ModelPrice> model_price(pqxx::transaction_base& tx, const std::string& model) {
@@ -164,7 +169,10 @@ model::Knowledge knowledge(pqxx::transaction_base& tx) {
     out.voice_templates = db::rows_as<model::KnowledgeVoiceTemplate>(
         tx, "SELECT key, label, description, content, reply FROM kb_voice_templates ORDER BY position, key");
     auto defaults = knowledge_defaults(tx);
-    out.defaults = {.content = std::move(defaults.content), .reply = std::move(defaults.reply), .analysis = std::move(defaults.analysis)};
+    out.defaults = {.content = std::move(defaults.content),
+                    .reply = std::move(defaults.reply),
+                    .report = std::move(defaults.report),
+                    .analysis = std::move(defaults.analysis)};
     for (const auto& row : tx.exec("SELECT model, input_per_mtok::float8, output_per_mtok::float8 FROM kb_model_prices ORDER BY model")) {
         out.model_prices.emplace(row[0].as<std::string>(),
                                  model::ModelPrice{.input_per_mtok = row[1].as<double>(), .output_per_mtok = row[2].as<double>()});

@@ -283,6 +283,81 @@ def test_every_location_has_a_time_zone(db):
         db.execute(insert, ("9003", " "))
 
 
+def test_rule_recipients_become_an_array_in_their_order(db):
+    # 0017 (D-107): a rule's recipients are a text[], carried over exactly.
+    shipped = migrate.load_migrations(SHIPPED)
+    assert migrate.apply_migrations(db, shipped[:16])[-1] == 16
+    insert = (
+        "INSERT INTO notification_rules (event_type, recipients, created_at, updated_at) "
+        "VALUES (%s, %s::jsonb, now(), now()) RETURNING id"
+    )
+    two = db.execute(insert, ("escalation", '["b@example.com", "a@example.com"]')).fetchone()[0]
+    none = db.execute(insert, ("approval_needed", "[]")).fetchone()[0]
+
+    assert migrate.apply_migrations(db, shipped[:17]) == [17]
+    assert dict(db.execute("SELECT id, recipients FROM notification_rules").fetchall()) == {
+        two: ["b@example.com", "a@example.com"],
+        none: [],
+    }
+    assert one(db, "SELECT pg_typeof(recipients)::text FROM notification_rules LIMIT 1") == "text[]"
+    # No list named: an empty one, as the jsonb default gave.
+    unnamed = one(
+        db,
+        "INSERT INTO notification_rules (event_type, created_at, updated_at) "
+        "VALUES ('system_problem', now(), now()) RETURNING recipients",
+    )
+    assert unnamed == []
+    with pytest.raises(psycopg.errors.CheckViolation):
+        db.execute("UPDATE notification_rules SET recipients = ARRAY['a@example.com', NULL] WHERE id = %s", (two,))
+    with pytest.raises(psycopg.errors.CheckViolation):
+        db.execute(
+            "UPDATE notification_rules SET recipients = %s WHERE id = %s",
+            ([f"{i}@example.com" for i in range(21)], two),
+        )
+
+
+def test_the_report_settings_refuse_a_database_with_locations(db):
+    # 0018 (D-111): settings are not carried over, so a database with locations is rebuilt instead.
+    shipped = migrate.load_migrations(SHIPPED)
+    assert migrate.apply_migrations(db, shipped[:17])[-1] == 17
+    db.execute(
+        "INSERT INTO locations (gbp_location_id, gbp_account_id, title, time_zone, raw, first_seen_at, last_seen_at, "
+        "updated_at) VALUES ('9001', '111', 'A Spa', 'America/New_York', '{}', now(), now(), now())"
+    )
+    with pytest.raises(migrate.MigrationError, match="Locations exist: rebuild this database"):
+        migrate.apply_migrations(db, shipped[:18])
+    assert [row[0] for row in recorded(db)][-1] == 17
+
+
+def test_report_sections_keep_their_order_and_take_only_known_keys(db):
+    shipped = migrate.load_migrations(SHIPPED)
+    assert migrate.apply_migrations(db, shipped[:18])[-1] == 18
+    location = one(
+        db,
+        "INSERT INTO locations (gbp_location_id, gbp_account_id, title, time_zone, raw, first_seen_at, last_seen_at, "
+        "updated_at) VALUES ('9001', '111', 'A Spa', 'America/New_York', '{}', now(), now(), now()) RETURNING id",
+    )
+    insert = "INSERT INTO report_settings (location_id, format, sections, created_at, updated_at) VALUES (%s, %s, %s, now(), now())"
+    db.execute(insert, (location, "html", ["visibility", "summary"]))
+    assert one(db, "SELECT sections FROM report_settings") == ["visibility", "summary"]
+    db.execute("DELETE FROM report_settings")
+    for format, sections in (
+        ("html", ["summary", None]),
+        ("html", ["summary", "pictures"]),
+        ("html", []),
+        ("docx", ["summary"]),
+    ):
+        with pytest.raises(psycopg.errors.CheckViolation):
+            db.execute(insert, (location, format, sections))
+    # A report's own sections are held to the same keys.
+    with pytest.raises(psycopg.errors.CheckViolation):
+        db.execute(
+            "INSERT INTO reports (location_id, period_start, period_end, time_zone, status, format, sections, created_at, "
+            "updated_at) VALUES (%s, '2026-10-01', '2026-10-31', 'UTC', 'building', 'html', %s, now(), now())",
+            (location, ["summary", None]),
+        )
+
+
 @pytest.mark.parametrize(
     "rows",
     [

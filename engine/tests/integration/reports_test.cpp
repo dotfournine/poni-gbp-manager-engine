@@ -155,10 +155,10 @@ protected:
         return value<std::string>(std::format("SELECT {}->>'status' FROM audit_log WHERE action = 'report.discard' AND object_id = '{}'", side, id));
     }
 
-    void recipients(std::int64_t location, const std::string& list) {
-        const auto response = post("/api/notification-rules",
-                                   std::format(R"({{"event_type": "location_report", "location_id": {}, "recipients": {}}})", location, list));
-        ASSERT_EQ(response.status, 201u) << response.body;
+    // Addresses a person's send of the location's reports can go to (D-111): a schedule of the location that is
+    // switched off, so that it runs nothing, with these recipients. Returns its id.
+    std::int64_t recipients(std::int64_t location, const std::string& list) {
+        return schedule(location, std::format(R"("enabled": false, "recipients": {})", list));
     }
     // What a person does on the settings page; in this test's throwaway database.
     void sending_on() { exec("UPDATE system_settings SET email_sending_enabled = true"); }
@@ -170,17 +170,42 @@ protected:
                          repo::kGmailCredential));
     }
 
+    static std::string schedules_path(std::int64_t location) { return std::format("/api/locations/{}/report-settings/schedules", location); }
+    static std::string schedule_path(std::int64_t location, std::int64_t id) { return std::format("{}/{}", schedules_path(location), id); }
+    // A whole schedule's body (D-111): a daily one at 09:00, on, to one recipient, with the location's sections,
+    // and `rest` ("member": value, ...) laid over it.
+    static boost::json::object schedule_object(const std::string& rest) {
+        auto body = boost::json::parse(R"({"frequency": "daily", "weekday": null, "month_day": null, "time": "09:00", "enabled": true,
+                                           "auto_send": false, "recipients": ["owner@spa.example"], "sections": null})")
+                        .as_object();
+        if (!rest.empty()) {
+            for (const auto& [key, value] : boost::json::parse("{" + rest + "}").as_object()) body[key] = value;
+        }
+        return body;
+    }
+    static std::string schedule_body(const std::string& rest) { return boost::json::serialize(schedule_object(rest)); }
+
     std::int64_t schedule(std::int64_t location, const std::string& rest) {
-        const auto response = post("/api/report-schedules", std::format(R"({{"location_id": {}, {}}})", location, rest));
+        const auto response = post(schedules_path(location), schedule_body(rest));
         EXPECT_EQ(response.status, 201u) << response.body;
         return response.status == 201 ? json(response).at("id").as_int64() : 0;
     }
-    // A schedule as the dashboard reads it, from the list; null once it is gone.
-    boost::json::value listed_schedule(std::int64_t id) {
-        for (const auto& item : read("/api/report-schedules").at("items").as_array()) {
+    // A schedule as the dashboard reads it, from the location's list; null once it is gone.
+    boost::json::value listed_schedule(std::int64_t location, std::int64_t id) {
+        for (const auto& item : read(schedules_path(location)).at("items").as_array()) {
             if (item.at("id").as_int64() == id) return item;
         }
         return nullptr;
+    }
+    // A person's change: the schedule as it was read, with `rest` laid over it, saved whole with its ETag.
+    http::Response change_schedule(std::int64_t location, std::int64_t id, const std::string& rest) {
+        const auto path = schedule_path(location, id);
+        const auto current = get(path, browser_);
+        EXPECT_EQ(current.status, 200u) << current.body;
+        auto body = json(current).as_object();
+        for (const auto* engines : {"id", "location_id", "location_title", "last_run_on", "created_at", "updated_at"}) body.erase(engines);
+        for (const auto& [key, value] : boost::json::parse("{" + rest + "}").as_object()) body[key] = value;
+        return put(path, boost::json::serialize(body), if_match(header(current, "ETag")));
     }
 
     FakeLlm llm_;
@@ -289,7 +314,7 @@ TEST_F(Reports, NamedStaffAreListedApartFromTheItems) {
 
     const auto id = generate(chelsea_);
     const auto d = data(id);
-    EXPECT_EQ(d.at("version").as_int64(), 3);
+    EXPECT_EQ(d.at("version").as_int64(), 4);
     // The therapists are not items; the treatment is.
     ASSERT_EQ(d.at("items_praised").as_array().size(), 1u);
     EXPECT_EQ(d.at("items_praised").at(0).at("label").as_string(), "Head spa");
@@ -578,7 +603,7 @@ TEST_F(Reports, NothingOfAReportIsServedWithoutASession) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
     generate(chelsea_);
     // The routes of reports, from the router's table: the 8 there are (D-104) and every one added since.
-    EXPECT_GE(expect_session_and_csrf({"/reports", "/report-schedules"}, R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"), 8u);
+    EXPECT_GE(expect_session_and_csrf({"/reports", "/report-settings"}, R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"), 8u);
     // There is no route for a token at all: the engine does not host reports' pages.
     EXPECT_EQ(get("/r/anything.html").status, 404u);
     // Nor for the page, its share links or rejecting it, even signed in.
@@ -600,14 +625,19 @@ TEST_F(Reports, APeriodMustBeOverAndMakeSense) {
     EXPECT_EQ(create(chelsea_, R"({"period_start": "2025-01-01", "period_end": "2026-10-31"})"), 400u);
     EXPECT_EQ(create(chelsea_, R"({"period_start": "October", "period_end": "2026-10-31"})"), 400u);
     EXPECT_EQ(create(chelsea_, R"({"period_start": "2026-10-01"})"), 400u);
-    EXPECT_EQ(create(chelsea_, R"({"period_start": "2026-10-01", "period_end": "2026-10-31", "time_zone": "Mars/Base"})"), 400u);
+    // A report has no zone of its own to ask for (D-109): the body is refused, and names the member.
+    const auto zoned = post(std::format("/api/locations/{}/reports", chelsea_),
+                            R"({"period_start": "2026-10-01", "period_end": "2026-10-31", "time_zone": "Asia/Tokyo"})");
+    EXPECT_EQ(zoned.status, 400u);
+    EXPECT_THAT(error_message(zoned), HasSubstr("time_zone"));
     EXPECT_EQ(create(999999, R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"), 404u);
     // An archived client changes nothing about its location's reports (D-102).
     exec(std::format("UPDATE clients SET archived = true WHERE id = {}", buffet_client_));
     EXPECT_EQ(create(buffet_, R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"), 201u);
-    // A zone of its own: the same day ended hours earlier in Tokyo.
-    const auto tokyo = post(std::format("/api/locations/{}/reports", chelsea_),
-                            R"({"period_start": "2026-11-09", "period_end": "2026-11-09", "time_zone": "Asia/Tokyo"})");
+    // A location in Tokyo: its report is in its zone, where 21:00 on November 10 has not ended that day either.
+    exec(std::format("UPDATE locations SET time_zone = 'Asia/Tokyo' WHERE id = {}", uptown_));
+    EXPECT_EQ(create(uptown_, R"({"period_start": "2026-11-10", "period_end": "2026-11-10"})"), 400u);
+    const auto tokyo = post(std::format("/api/locations/{}/reports", uptown_), R"({"period_start": "2026-11-09", "period_end": "2026-11-09"})");
     ASSERT_EQ(tokyo.status, 201u);
     EXPECT_EQ(json(tokyo).at("time_zone").as_string(), "Asia/Tokyo");
     EXPECT_EQ(json(tokyo).at("status").as_string(), "building");
@@ -757,7 +787,7 @@ TEST_F(Reports, WithoutAPublicBucketNoReportIsStarted) {
                                  R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"))
                            .at("id")
                            .as_int64();
-    const auto schedule_id = schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
+    const auto schedule_id = schedule(chelsea_, R"("frequency": "daily", "time": "09:00")");
     start(false);
 
     const auto refused = post(std::format("/api/locations/{}/reports", chelsea_), R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})");
@@ -778,25 +808,30 @@ TEST_F(Reports, WithoutAPublicBucketNoReportIsStarted) {
     clock_.advance(2h);
     EXPECT_EQ(await(reporter_->start_due()), 0);
     EXPECT_EQ(count("reports"), 1);
-    EXPECT_TRUE(listed_schedule(schedule_id).at("last_run_on").is_null());
+    EXPECT_TRUE(listed_schedule(chelsea_, schedule_id).at("last_run_on").is_null());
 }
 
-TEST_F(Reports, ARuleForALocationsReportsMustNameALocation) {
-    const auto all = post("/api/notification-rules", R"({"event_type": "location_report", "recipients": ["everyone@example.com"]})");
-    EXPECT_EQ(all.status, 400u) << all.body;
-    EXPECT_THAT(all.body, HasSubstr("must name the location"));
-    const auto none = post("/api/notification-rules",
-                           R"({"event_type": "location_report", "location_id": null, "recipients": ["everyone@example.com"]})");
-    EXPECT_EQ(none.status, 400u) << none.body;
-    EXPECT_EQ(error_code(post("/api/notification-rules",
-                              R"({"event_type": "location_report", "location_id": 999999, "recipients": ["x@example.com"]})")),
-              "location_not_found");
+// A report's recipients are its location's schedules' (D-111): no rule is for a location's reports.
+TEST_F(Reports, ALocationReportRuleNoLongerExists) {
+    for (const auto& location : {std::format("{}", chelsea_), std::string("null")}) {
+        const auto refused = post("/api/notification-rules", std::format(R"({{"event_type": "location_report", "location_id": {}, )"
+                                                                          R"("recipients": ["owner@spa.example"]}})",
+                                                                          location));
+        EXPECT_EQ(refused.status, 400u) << refused.body;
+        EXPECT_EQ(error_code(refused), "invalid_request");
+        EXPECT_EQ(error_message(refused), "\"event_type\" must be escalation, approval_needed or system_problem.");
+    }
+    EXPECT_EQ(count("notification_rules"), 0);
     // The database holds the same rule, whatever the code does.
+    EXPECT_THROW(exec(std::format("INSERT INTO notification_rules (event_type, location_id, recipients, created_at, updated_at) "
+                                  "VALUES ('location_report', {}, ARRAY['x@example.com'], now(), now())",
+                                  chelsea_)),
+                 pqxx::check_violation);
     EXPECT_THROW(exec("INSERT INTO notification_rules (event_type, recipients, created_at, updated_at) "
-                      "VALUES ('location_report', '[\"x@example.com\"]', now(), now())"),
+                      "VALUES ('location_report', ARRAY['x@example.com'], now(), now())"),
                  pqxx::check_violation);
     EXPECT_THROW(exec("INSERT INTO notification_rules (event_type, location_id, recipients, created_at, updated_at) "
-                      "VALUES ('client_report', 1, '[\"x@example.com\"]', now(), now())"),
+                      "VALUES ('client_report', 1, ARRAY['x@example.com'], now(), now())"),
                  pqxx::check_violation);
 }
 
@@ -805,7 +840,7 @@ TEST_F(Reports, ASwitchedOffLocationGetsNoReport) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
     generate(chelsea_);
     const auto pages = public_.puts;
-    schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
+    schedule(chelsea_, R"("frequency": "daily", "time": "09:00")");
     const auto building = json(post(std::format("/api/locations/{}/reports", chelsea_),
                                     R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"))
                               .at("id")
@@ -815,8 +850,7 @@ TEST_F(Reports, ASwitchedOffLocationGetsNoReport) {
     const auto made = post(std::format("/api/locations/{}/reports", chelsea_), R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})");
     EXPECT_EQ(made.status, 400u);
     EXPECT_THAT(error_message(made), HasSubstr("switched off"));
-    const auto scheduled = post("/api/report-schedules",
-                                std::format(R"({{"location_id": {}, "frequency": "daily", "time": "09:00", "time_zone": "UTC"}})", chelsea_));
+    const auto scheduled = post(schedules_path(chelsea_), schedule_body(""));
     EXPECT_EQ(scheduled.status, 400u);
     // A report asked for before it was switched off is not built.
     run_jobs();
@@ -907,18 +941,20 @@ TEST_F(Reports, ASendGoesOnlyToTheRecipientsOfTheReportsLocation) {
     const auto path = std::format("/api/reports/{}/send", id);
     sending_on();
     connect_mailbox();
-    recipients(uptown_, R"(["uptown@spa.example"])");  // the list of the client's other location is not this location's
-    EXPECT_EQ(error_code(post(path)), "no_recipients");
-    recipients(chelsea_, R"(["owner@spa.example"])");
-    exec(std::format("UPDATE notification_rules SET enabled = false WHERE location_id = {}", chelsea_));
-    EXPECT_EQ(error_code(post(path)), "no_recipients");  // a rule that is switched off names nobody
-    exec(std::format("UPDATE notification_rules SET enabled = true WHERE location_id = {}", chelsea_));
+    recipients(uptown_, R"(["uptown@spa.example"])");  // the schedules of the client's other location are not this location's
+    const auto nobody = post(path);
+    EXPECT_EQ(error_code(nobody), "no_recipients");
+    EXPECT_EQ(error_message(nobody), "This location's report schedules name no recipient. Add one to a schedule first.");
+    // A schedule that is switched off still names whom a person's send can reach.
+    const auto off = recipients(chelsea_, R"(["owner@spa.example"])");
+    EXPECT_FALSE(listed_schedule(chelsea_, off).at("enabled").as_bool());
+    EXPECT_EQ(boost::json::serialize(report(id).at("recipients")), R"(["owner@spa.example"])");
 
-    // An address the rule does not name, the other location's among them, is refused and named.
+    // An address no schedule of the location names, the other location's among them, is refused and named.
     const auto outsider = post(path, R"({"recipients": ["owner@spa.example", " Uptown@Spa.example "]})");
     EXPECT_EQ(outsider.status, 400u) << outsider.body;
     EXPECT_EQ(error_code(outsider), "invalid_request");
-    EXPECT_EQ(error_message(outsider), "\"uptown@spa.example\" is not a recipient of this location's reports.");
+    EXPECT_EQ(error_message(outsider), "\"uptown@spa.example\" is not a recipient of this location's report schedules.");
     const auto empty = post(path, R"({"recipients": []})");
     EXPECT_EQ(empty.status, 400u);
     EXPECT_THAT(error_message(empty), HasSubstr("must name at least one address"));
@@ -1085,20 +1121,23 @@ TEST_F(Reports, AChannelThatThrowsLeavesEachAddressFailed) {
     EXPECT_EQ(count(std::format("notification_deliveries WHERE report_id = {} AND status = 'failed'", id)), 2);
 }
 
-TEST_F(Reports, TheRecipientsFollowTheRuleAndAListCarriesNone) {
+TEST_F(Reports, TheRecipientsAreTheUnionOfTheLocationsSchedules) {
     add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
     const auto id = generate(chelsea_);
     EXPECT_TRUE(report(id).at("recipients").as_array().empty());
-    recipients(chelsea_, R"(["owner@spa.example", "manager@spa.example", " Owner@spa.example"])");
+    const auto off = recipients(chelsea_, R"(["owner@spa.example", "manager@spa.example", " Owner@spa.example"])");
+    const auto on = schedule(chelsea_, R"("recipients": ["Manager@spa.example", "assistant@spa.example"])");
     recipients(uptown_, R"(["uptown@spa.example"])");
+    // Sorted by bytes, each once, from a schedule that is on and one that is off; the other location's are not among them.
+    EXPECT_EQ(boost::json::serialize(report(id).at("recipients")), R"(["assistant@spa.example","manager@spa.example","owner@spa.example"])");
+    // A schedule's change shows at once.
+    ASSERT_EQ(change_schedule(chelsea_, on, R"("recipients": ["deputy@spa.example"])").status, 200u);
+    EXPECT_EQ(boost::json::serialize(report(id).at("recipients")), R"(["deputy@spa.example","manager@spa.example","owner@spa.example"])");
+    ASSERT_EQ(del_current(schedule_path(chelsea_, on)).status, 204u);
     EXPECT_EQ(boost::json::serialize(report(id).at("recipients")), R"(["manager@spa.example","owner@spa.example"])");
-    const auto rule = std::format("/api/notification-rules/{}",
-                                  value<std::int64_t>(std::format("SELECT id FROM notification_rules WHERE location_id = {}", chelsea_)));
-    ASSERT_EQ(patch_current(rule, R"({"recipients": ["owner@spa.example", "assistant@spa.example"]})").status, 200u);
-    EXPECT_EQ(boost::json::serialize(report(id).at("recipients")), R"(["assistant@spa.example","owner@spa.example"])");
-    ASSERT_EQ(patch_current(rule, R"({"enabled": false})").status, 200u);
+    ASSERT_EQ(change_schedule(chelsea_, off, R"("recipients": [])").status, 200u);
     EXPECT_TRUE(report(id).at("recipients").as_array().empty());
-    ASSERT_EQ(patch_current(rule, R"({"enabled": true})").status, 200u);
+    ASSERT_EQ(change_schedule(chelsea_, off, R"("recipients": ["owner@spa.example", "manager@spa.example"])").status, 200u);
 
     sending_on();
     connect_mailbox();
@@ -1441,9 +1480,9 @@ TEST_F(Reports, ADiscardedReportIsNotSentAndKeepsItsDeliveries) {
 
 // ---- schedules --------------------------------------------------------------------------
 
-TEST_F(Reports, AScheduleBuildsOneReportPerRunInItsOwnTimeZone) {
+TEST_F(Reports, AScheduleBuildsOneReportPerRunInItsLocationsTimeZone) {
     // The clock: 2026-11-10 12:00 UTC, which is 07:00 in New York. A daily schedule at 09:00.
-    const auto id = schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
+    const auto id = schedule(chelsea_, R"("frequency": "daily", "time": "09:00")");
     EXPECT_EQ(await(reporter_->start_due()), 0);  // 09:00 has not come
     clock_.advance(2h);
     EXPECT_EQ(await(reporter_->start_due()), 1);
@@ -1455,10 +1494,11 @@ TEST_F(Reports, AScheduleBuildsOneReportPerRunInItsOwnTimeZone) {
     const auto& made = listed.at("items").at(0);
     EXPECT_EQ(made.at("period_start").as_string(), "2026-11-09");
     EXPECT_EQ(made.at("period_end").as_string(), "2026-11-09");
+    EXPECT_EQ(made.at("time_zone").as_string(), "America/New_York");
     EXPECT_EQ(made.at("schedule_id").as_int64(), id);
     EXPECT_TRUE(made.at("requested_by").is_null());
     EXPECT_EQ(made.at("status").as_string(), "ready");
-    EXPECT_EQ(listed_schedule(id).at("last_run_on").as_string(), "2026-11-10");
+    EXPECT_EQ(listed_schedule(chelsea_, id).at("last_run_on").as_string(), "2026-11-10");
     EXPECT_EQ(count("audit_log WHERE action = 'report.create' AND actor = 'system:report-schedule'"), 1);
 
     // The next day, once.
@@ -1474,19 +1514,19 @@ TEST_F(Reports, AScheduleBuildsOneReportPerRunInItsOwnTimeZone) {
 
 TEST_F(Reports, AScheduleMadeOrChangedAfterItsTimeDoesNotRunForIt) {
     clock_.advance(3h);  // 10:00 in New York
-    const auto id = schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
+    const auto id = schedule(chelsea_, R"("frequency": "daily", "time": "09:00")");
     EXPECT_EQ(await(reporter_->start_due()), 0);
     // Moved to 08:00 at 10:30: no run today for a time that has passed.
     clock_.advance(30min);
-    ASSERT_EQ(patch(std::format("/api/report-schedules/{}", id), R"({"time": "08:00"})").status, 200u);
+    ASSERT_EQ(change_schedule(chelsea_, id, R"("time": "08:00")").status, 200u);
     EXPECT_EQ(await(reporter_->start_due()), 0);
     clock_.advance(24h);
     EXPECT_EQ(await(reporter_->start_due()), 1);
 }
 
 TEST_F(Reports, WeeklyAndMonthlySchedulesCoverTheWeekAndTheMonthBefore) {
-    schedule(chelsea_, R"("frequency": "weekly", "weekday": 3, "time": "08:00", "time_zone": "America/New_York")");
-    schedule(buffet_, R"("frequency": "monthly", "month_day": 5, "time": "09:00", "time_zone": "America/New_York")");
+    schedule(chelsea_, R"("frequency": "weekly", "weekday": 3, "time": "08:00")");
+    schedule(buffet_, R"("frequency": "monthly", "month_day": 5, "time": "09:00")");
     // Wednesday November 11 at 08:00 in New York, then December 5.
     clock_.set(test::t0() + 25h);
     EXPECT_EQ(await(reporter_->start_due()), 1);
@@ -1502,8 +1542,8 @@ TEST_F(Reports, WeeklyAndMonthlySchedulesCoverTheWeekAndTheMonthBefore) {
 
 TEST_F(Reports, ADailyScheduleRunsOnceOnTheDaysClocksChange) {
     // 01:30 in New York exists twice on 2026-11-01 and 02:30 does not exist on 2027-03-14.
-    schedule(chelsea_, R"("frequency": "daily", "time": "01:30", "time_zone": "America/New_York")");
-    schedule(buffet_, R"("frequency": "daily", "time": "02:30", "time_zone": "America/New_York")");
+    schedule(chelsea_, R"("frequency": "daily", "time": "01:30")");
+    schedule(buffet_, R"("frequency": "daily", "time": "02:30")");
     exec("UPDATE report_schedules SET created_at = '2026-10-01T00:00:00Z', updated_at = '2026-10-01T00:00:00Z'");
     const auto at = [](int y, unsigned m, unsigned d, std::chrono::minutes time) {
         return core::TimePoint(std::chrono::sys_days{std::chrono::year{y} / m / d} + time);
@@ -1533,13 +1573,13 @@ TEST_F(Reports, ADailyScheduleRunsOnceOnTheDaysClocksChange) {
 
 TEST_F(Reports, AScheduleSendsByItselfOnceAndOnlyWhereAPersonSaidSo) {
     add_review(chelsea_, "a1", 5, "2026-11-09T15:00:00Z", "Lovely");
-    recipients(chelsea_, R"(["owner@spa.example", "manager@spa.example"])");
     recipients(uptown_, R"(["uptown@spa.example"])");
     sending_on();
     connect_mailbox();
-    const auto by_itself = schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York", "auto_send": true)");
-    EXPECT_TRUE(listed_schedule(by_itself).at("auto_send").as_bool());
-    const auto waits = schedule(uptown_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
+    const auto by_itself = schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "auto_send": true,
+                                                 "recipients": ["owner@spa.example", "manager@spa.example", "Owner@spa.example"])");
+    EXPECT_TRUE(listed_schedule(chelsea_, by_itself).at("auto_send").as_bool());
+    const auto waits = schedule(uptown_, R"("frequency": "daily", "time": "09:00")");
     clock_.advance(2h);
     ASSERT_EQ(await(reporter_->start_due()), 2);
     run_jobs();
@@ -1551,7 +1591,7 @@ TEST_F(Reports, AScheduleSendsByItselfOnceAndOnlyWhereAPersonSaidSo) {
     EXPECT_EQ(report(by_hand).at("auto_send_status").as_string(), "off");
     EXPECT_EQ(count("reports WHERE status = 'ready'"), 3);
 
-    // Its location's recipients, each once, in the schedule's name.
+    // Its schedule's recipients, each once, in the schedule's name.
     ASSERT_EQ(channel_.sent.size(), 2u);
     EXPECT_EQ(channel_.sent[0].recipient, "manager@spa.example");
     EXPECT_EQ(channel_.sent[1].recipient, "owner@spa.example");
@@ -1573,7 +1613,7 @@ TEST_F(Reports, AReportItsScheduleCouldNotSendWaitsForAPerson) {
     add_review(chelsea_, "a1", 5, "2026-11-09T15:00:00Z", "Lovely");
     recipients(chelsea_, R"(["owner@spa.example"])");
     connect_mailbox();
-    schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York", "auto_send": true)");
+    schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "auto_send": true)");
     clock_.advance(2h);
     ASSERT_EQ(await(reporter_->start_due()), 1);
     run_jobs();  // sending is off when it is built
@@ -1596,67 +1636,621 @@ TEST_F(Reports, AReportItsScheduleCouldNotSendWaitsForAPerson) {
     EXPECT_EQ(json(sent).at("auto_send_status").as_string(), "pending");  // what its schedule did
 }
 
+TEST_F(Reports, AScheduledReportGoesToItsOwnSchedulesRecipients) {
+    add_review(chelsea_, "a1", 5, "2026-11-09T15:00:00Z", "Lovely");
+    sending_on();
+    connect_mailbox();
+    const auto by_itself = schedule(chelsea_, R"("auto_send": true, "recipients": ["owner@spa.example", "manager@spa.example"])");
+    const auto other = schedule(chelsea_, R"("auto_send": true, "time": "10:00", "recipients": ["assistant@spa.example"])");
+    recipients(chelsea_, R"(["deputy@spa.example"])");
+    clock_.advance(2h);  // 09:00 has passed in New York, 10:00 has not
+    ASSERT_EQ(await(reporter_->start_due()), 1);
+    run_jobs();
+
+    const auto sent = value<std::int64_t>(std::format("SELECT id FROM reports WHERE schedule_id = {}", by_itself));
+    EXPECT_EQ(report(sent).at("auto_send_status").as_string(), "done");
+    ASSERT_EQ(channel_.sent.size(), 2u);
+    EXPECT_EQ(channel_.sent[0].recipient, "manager@spa.example");
+    EXPECT_EQ(channel_.sent[1].recipient, "owner@spa.example");
+    // The location's other schedules' addresses get nothing of it, although a person's send could reach them.
+    EXPECT_EQ(count("notification_deliveries WHERE recipient IN ('assistant@spa.example', 'deputy@spa.example')"), 0);
+    EXPECT_EQ(report(sent).at("recipients").as_array().size(), 4u);
+
+    // The other schedule's report goes to its own recipient only.
+    clock_.advance(1h);
+    ASSERT_EQ(await(reporter_->start_due()), 1);
+    run_jobs();
+    ASSERT_EQ(channel_.sent.size(), 3u);
+    EXPECT_EQ(channel_.sent[2].recipient, "assistant@spa.example");
+    const auto second = value<std::int64_t>(std::format("SELECT id FROM reports WHERE schedule_id = {}", other));
+    EXPECT_EQ(count(std::format("notification_deliveries WHERE report_id = {}", second)), 1);
+    EXPECT_EQ(count("notification_deliveries WHERE requested_by IS NOT NULL"), 0);
+}
+
+TEST_F(Reports, AScheduledReportWhoseScheduleWasDeletedWaitsForAPerson) {
+    add_review(chelsea_, "a1", 5, "2026-11-09T15:00:00Z", "Lovely");
+    sending_on();
+    connect_mailbox();
+    const auto gone = schedule(chelsea_, R"("auto_send": true, "recipients": ["owner@spa.example"])");
+    recipients(chelsea_, R"(["manager@spa.example"])");
+    clock_.advance(2h);
+    ASSERT_EQ(await(reporter_->start_due()), 1);
+    const auto id = value<std::int64_t>("SELECT id FROM reports");
+    EXPECT_EQ(status(id), "building");
+    ASSERT_EQ(del_current(schedule_path(chelsea_, gone)).status, 204u);
+    run_jobs();
+
+    // Built, and not sent: its schedule's recipients went with it, and the location's others are not its schedule's.
+    EXPECT_EQ(status(id), "ready");
+    EXPECT_TRUE(report(id).at("schedule_id").is_null());
+    EXPECT_EQ(report(id).at("auto_send_status").as_string(), "pending");
+    EXPECT_TRUE(channel_.sent.empty());
+    EXPECT_EQ(count("notification_deliveries"), 0);
+    EXPECT_EQ(count("audit_log WHERE action = 'report.send'"), 0);
+
+    // A person sends it, to the union of the location's schedules' recipients.
+    const auto sent = post(std::format("/api/reports/{}/send", id));
+    ASSERT_EQ(sent.status, 200u) << sent.body;
+    ASSERT_EQ(channel_.sent.size(), 1u);
+    EXPECT_EQ(channel_.sent[0].recipient, "manager@spa.example");
+    EXPECT_EQ(json(sent).at("auto_send_status").as_string(), "pending");
+}
+
+// A person who switches a schedule, or its sending by itself, off while its report builds is obeyed: the
+// switches are read again when the report becomes ready (D-111 point 4).
+TEST_F(Reports, AScheduleSwitchedOffWhileItsReportBuildsSendsNothing) {
+    add_review(chelsea_, "a1", 5, "2026-11-09T15:00:00Z", "Lovely");
+    sending_on();
+    connect_mailbox();
+    const auto quiet = schedule(chelsea_, R"("auto_send": true, "recipients": ["owner@spa.example"])");
+    const auto off = schedule(chelsea_, R"("auto_send": true, "time": "10:00", "recipients": ["manager@spa.example"])");
+    const auto nothing_sent = [&](std::int64_t schedule_id) {
+        const auto id = value<std::int64_t>(std::format("SELECT id FROM reports WHERE schedule_id = {}", schedule_id));
+        EXPECT_EQ(status(id), "ready");
+        EXPECT_EQ(report(id).at("auto_send_status").as_string(), "pending");
+        EXPECT_TRUE(channel_.sent.empty());
+        EXPECT_EQ(count("notification_deliveries"), 0);
+        EXPECT_EQ(count("audit_log WHERE action = 'report.send'"), 0);
+        return id;
+    };
+
+    // Its sending by itself switched off, its recipients kept.
+    clock_.advance(2h);
+    ASSERT_EQ(await(reporter_->start_due()), 1);
+    ASSERT_EQ(change_schedule(chelsea_, quiet, R"("auto_send": false)").status, 200u);
+    run_jobs();
+    const auto first = nothing_sent(quiet);
+
+    // The schedule itself switched off, its sending by itself kept.
+    clock_.advance(1h);
+    ASSERT_EQ(await(reporter_->start_due()), 1);
+    ASSERT_EQ(change_schedule(chelsea_, off, R"("enabled": false)").status, 200u);
+    EXPECT_TRUE(listed_schedule(chelsea_, off).at("auto_send").as_bool());
+    run_jobs();
+    nothing_sent(off);
+
+    // A person can still send it, to the union.
+    const auto sent = post(std::format("/api/reports/{}/send", first));
+    ASSERT_EQ(sent.status, 200u) << sent.body;
+    ASSERT_EQ(channel_.sent.size(), 2u);
+    EXPECT_EQ(channel_.sent[0].recipient, "manager@spa.example");
+    EXPECT_EQ(channel_.sent[1].recipient, "owner@spa.example");
+}
+
+// A schedule sends only to addresses of its report's own location: if a schedule and its report ever named
+// different locations, the schedule's send would find nobody (written in this test's throwaway database).
+TEST_F(Reports, AScheduleThatNamesAnotherLocationThanItsReportSendsNothing) {
+    add_review(chelsea_, "a1", 5, "2026-11-09T15:00:00Z", "Lovely");
+    sending_on();
+    connect_mailbox();
+    const auto moved = schedule(chelsea_, R"("auto_send": true, "recipients": ["uptown@spa.example"])");
+    clock_.advance(2h);
+    ASSERT_EQ(await(reporter_->start_due()), 1);
+    exec(std::format("UPDATE report_schedules SET location_id = {} WHERE id = {}", uptown_, moved));
+    run_jobs();
+
+    const auto id = value<std::int64_t>("SELECT id FROM reports");
+    EXPECT_EQ(value<std::int64_t>(std::format("SELECT schedule_id FROM reports WHERE id = {}", id)), moved);
+    EXPECT_EQ(status(id), "ready");
+    EXPECT_EQ(report(id).at("auto_send_status").as_string(), "pending");
+    EXPECT_TRUE(channel_.sent.empty());
+    EXPECT_EQ(count("notification_deliveries"), 0);
+}
+
+TEST_F(Reports, APersonsSendMayGoToAnyRecipientOfTheLocationsSchedulesAndNoOther) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    const auto id = generate(chelsea_);
+    const auto path = std::format("/api/reports/{}/send", id);
+    schedule(chelsea_, R"("recipients": ["owner@spa.example"])");
+    recipients(chelsea_, R"(["manager@spa.example"])");
+    recipients(uptown_, R"(["uptown@spa.example"])");
+    sending_on();
+    connect_mailbox();
+
+    // An address of another location's schedule is refused, and nothing is sent, not even to the others.
+    const auto outsider = post(path, R"({"recipients": ["owner@spa.example", "uptown@spa.example"]})");
+    EXPECT_EQ(outsider.status, 400u) << outsider.body;
+    EXPECT_EQ(error_message(outsider), "\"uptown@spa.example\" is not a recipient of this location's report schedules.");
+    EXPECT_TRUE(channel_.sent.empty());
+    EXPECT_EQ(count("notification_deliveries"), 0);
+
+    // The disabled schedule's address alone.
+    ASSERT_EQ(post(path, R"({"recipients": ["manager@spa.example"]})").status, 200u);
+    ASSERT_EQ(channel_.sent.size(), 1u);
+    EXPECT_EQ(channel_.sent[0].recipient, "manager@spa.example");
+
+    // Without a list: both schedules' addresses.
+    ASSERT_EQ(post(path).status, 200u);
+    ASSERT_EQ(channel_.sent.size(), 3u);
+    EXPECT_EQ(channel_.sent[1].recipient, "manager@spa.example");
+    EXPECT_EQ(channel_.sent[2].recipient, "owner@spa.example");
+    EXPECT_EQ(count("notification_deliveries WHERE recipient = 'uptown@spa.example'"), 0);
+}
+
 TEST_F(Reports, ADisabledScheduleAndASwitchedOffLocationRunNothing) {
-    const auto off = schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York", "enabled": false)");
-    schedule(buffet_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
+    const auto off = schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "enabled": false)");
+    schedule(buffet_, R"("frequency": "daily", "time": "09:00")");
     switch_location(buffet_, false);
     clock_.advance(2h);
     EXPECT_EQ(await(reporter_->start_due()), 0);
     // Switched on at 09:00 sharp or later: its next run is tomorrow's.
-    ASSERT_EQ(patch(std::format("/api/report-schedules/{}", off), R"({"enabled": true})").status, 200u);
+    ASSERT_EQ(change_schedule(chelsea_, off, R"("enabled": true)").status, 200u);
     EXPECT_EQ(await(reporter_->start_due()), 0);
     clock_.advance(24h);
     EXPECT_EQ(await(reporter_->start_due()), 1);
 }
 
 TEST_F(Reports, SchedulesAreMadeChangedAndDeletedByPeople) {
-    const auto bad = [&](const std::string& rest) {
-        return post("/api/report-schedules", std::format(R"({{"location_id": {}, {}}})", chelsea_, rest)).status;
-    };
-    EXPECT_EQ(bad(R"("frequency": "hourly", "time": "09:00", "time_zone": "America/New_York")"), 400u);
-    EXPECT_EQ(bad(R"("frequency": "weekly", "time": "09:00", "time_zone": "America/New_York")"), 400u);  // no weekday
-    EXPECT_EQ(bad(R"("frequency": "monthly", "month_day": 31, "time": "09:00", "time_zone": "America/New_York")"), 400u);
-    EXPECT_EQ(bad(R"("frequency": "daily", "time": "25:00", "time_zone": "America/New_York")"), 400u);
-    EXPECT_EQ(bad(R"("frequency": "daily", "time": "09:00", "time_zone": "Eastern")"), 400u);
-    EXPECT_EQ(post("/api/report-schedules", R"({"location_id": 999999, "frequency": "daily", "time": "09:00", "time_zone": "UTC"})").status,
-              404u);
+    const auto bad = [&](const std::string& rest) { return post(schedules_path(chelsea_), schedule_body(rest)).status; };
+    EXPECT_EQ(bad(R"("frequency": "hourly")"), 400u);
+    EXPECT_EQ(bad(R"("frequency": "weekly")"), 400u);  // no weekday
+    EXPECT_EQ(bad(R"("frequency": "monthly", "month_day": 31)"), 400u);
+    EXPECT_EQ(bad(R"("time": "25:00")"), 400u);
+    EXPECT_EQ(bad(R"("time_zone": "America/New_York")"), 400u);  // a schedule has no zone of its own (D-109)
+    EXPECT_EQ(post(schedules_path(999999), schedule_body("")).status, 404u);
 
-    const auto id = schedule(chelsea_, R"("frequency": "weekly", "weekday": 1, "time": "08:30", "time_zone": "America/New_York")");
-    auto made = listed_schedule(id);
+    const auto id = schedule(chelsea_, R"("frequency": "weekly", "weekday": 1, "time": "08:30")");
+    auto made = listed_schedule(chelsea_, id);
     EXPECT_EQ(made.at("time").as_string(), "08:30");
     EXPECT_EQ(made.at("weekday").as_int64(), 1);
     EXPECT_FALSE(made.at("auto_send").as_bool());  // off unless a person says otherwise
     EXPECT_TRUE(made.at("enabled").as_bool());
     // A second schedule for the same location is fine.
-    schedule(chelsea_, R"("frequency": "monthly", "month_day": 5, "time": "09:00", "time_zone": "America/New_York")");
-    EXPECT_EQ(read("/api/report-schedules").at("total").as_int64(), 2);
+    schedule(chelsea_, R"("frequency": "monthly", "month_day": 5)");
+    EXPECT_EQ(read(schedules_path(chelsea_)).at("total").as_int64(), 2);
 
-    // Weekly to monthly: the weekday goes, the day of the month is needed.
-    EXPECT_EQ(patch(std::format("/api/report-schedules/{}", id), R"({"frequency": "monthly"})").status, 400u);
-    const auto changed = patch(std::format("/api/report-schedules/{}", id), R"({"frequency": "monthly", "month_day": 10, "auto_send": true})");
+    // Weekly to monthly: the weekday goes, whatever was sent, and the day of the month is needed.
+    EXPECT_EQ(change_schedule(chelsea_, id, R"("frequency": "monthly")").status, 400u);
+    const auto changed = change_schedule(chelsea_, id, R"("frequency": "monthly", "month_day": 10, "auto_send": true)");
     ASSERT_EQ(changed.status, 200u) << changed.body;
     EXPECT_TRUE(json(changed).at("weekday").is_null());
     EXPECT_EQ(json(changed).at("month_day").as_int64(), 10);
     EXPECT_EQ(count("audit_log WHERE action = 'report_schedule.update'"), 1);
     // The same values again: nothing changed, nothing recorded.
-    EXPECT_EQ(patch(std::format("/api/report-schedules/{}", id), R"({"auto_send": true})").status, 200u);
+    EXPECT_EQ(change_schedule(chelsea_, id, R"("auto_send": true)").status, 200u);
     EXPECT_EQ(count("audit_log WHERE action = 'report_schedule.update'"), 1);
 
-    EXPECT_EQ(call(verb::delete_, std::format("/api/report-schedules/{}", id), browser_).status, 204u);
-    EXPECT_TRUE(listed_schedule(id).is_null());
-    EXPECT_EQ(call(verb::delete_, std::format("/api/report-schedules/{}", id), browser_).status, 404u);
+    const auto path = schedule_path(chelsea_, id);
+    const auto tag = etag(path, browser_);
+    EXPECT_EQ(del(path, if_match(tag)).status, 204u);
+    EXPECT_TRUE(listed_schedule(chelsea_, id).is_null());
+    EXPECT_EQ(del(path, if_match(tag)).status, 404u);
     EXPECT_EQ(count("audit_log WHERE action = 'report_schedule.delete'"), 1);
 }
 
 TEST_F(Reports, ADeletedScheduleLeavesItsReports) {
-    const auto id = schedule(chelsea_, R"("frequency": "daily", "time": "09:00", "time_zone": "America/New_York")");
+    const auto id = schedule(chelsea_, R"("frequency": "daily", "time": "09:00")");
     clock_.advance(2h);
     ASSERT_EQ(await(reporter_->start_due()), 1);
     run_jobs();
-    EXPECT_EQ(call(verb::delete_, std::format("/api/report-schedules/{}", id), browser_).status, 204u);
+    EXPECT_EQ(del_current(schedule_path(chelsea_, id)).status, 204u);
     const auto listed = read("/api/reports");
     ASSERT_EQ(listed.at("total").as_int64(), 1);
     EXPECT_TRUE(listed.at("items").at(0).at("schedule_id").is_null());
     EXPECT_EQ(read("/api/reports?status=ready").at("total").as_int64(), 1);
     EXPECT_EQ(read("/api/reports?status=failed").at("total").as_int64(), 0);
+}
+
+// ---- the location's report settings (D-111) ------------------------------------------------
+
+namespace {
+
+// The same fixture, for the settings themselves.
+class ReportSettings : public Reports {};
+
+std::string settings_path(std::int64_t location) { return std::format("/api/locations/{}/report-settings", location); }
+
+const std::string kAllSections =
+    R"(["summary", "at_a_glance", "reviews", "topics", "employee_recognition", "highlights", "visibility"])";
+
+// The seven sections but these.
+std::string sections_without(std::initializer_list<std::string_view> left_out) {
+    boost::json::array out;
+    for (const auto section : domain::kReportSections) {
+        if (std::ranges::find(left_out, section) == left_out.end()) out.emplace_back(section);
+    }
+    return boost::json::serialize(out);
+}
+
+}  // namespace
+
+TEST_F(ReportSettings, ANewLocationHasTheDefaults) {
+    gbp_.add_location("9004", "LU DREAM SPA - SoHo");
+    discover();
+    const auto soho = location_id("9004");
+    const auto response = get(settings_path(soho), browser_);
+    ASSERT_EQ(response.status, 200u) << response.body;
+    EXPECT_EQ(boost::json::serialize(json(response)), boost::json::serialize(boost::json::parse(
+                                                          std::format(R"({{"format": "html", "sections": {}}})", kAllSections))));
+    EXPECT_THAT(header(response, "ETag"), testing::MatchesRegex(R"("[0-9a-f]{64}")"));
+    EXPECT_EQ(get(settings_path(999999), browser_).status, 404u);
+}
+
+TEST_F(ReportSettings, APutReplacesThemWholeWithIfMatch) {
+    const auto path = settings_path(chelsea_);
+    const auto read_tag = etag(path, browser_);
+    const std::string body = R"({"format": "html", "sections": ["summary", "reviews"]})";
+    const auto entries = [&] { return count("audit_log WHERE action = 'report_settings.update'"); };
+
+    EXPECT_EQ(put(path, body).status, 428u);
+    EXPECT_EQ(put(path, body, if_match(R"(")" + std::string(64, '0') + R"(")")).status, 412u);
+    EXPECT_EQ(entries(), 0) << "neither changed anything";
+
+    const auto saved = put(path, body, if_match(read_tag));
+    ASSERT_EQ(saved.status, 200u) << saved.body;
+    EXPECT_EQ(boost::json::serialize(json(saved).at("sections")), R"(["summary","reviews"])");
+    const auto saved_tag = header(saved, "ETag");
+    EXPECT_NE(saved_tag, read_tag);
+    EXPECT_EQ(saved_tag, etag(path, browser_));
+    EXPECT_EQ(count(std::format("audit_log WHERE action = 'report_settings.update' AND object_type = 'location' AND object_id = '{}' "
+                                "AND location_id = {}",
+                                chelsea_, chelsea_)),
+              1);
+    // The tag read before the save is stale now, even for the same body.
+    EXPECT_EQ(put(path, body, if_match(read_tag)).status, 412u);
+
+    // An equal save with the current tag changes nothing: the same tag, and no entry.
+    const auto again = put(path, body, if_match(saved_tag));
+    ASSERT_EQ(again.status, 200u) << again.body;
+    EXPECT_EQ(header(again, "ETag"), saved_tag);
+    EXPECT_EQ(entries(), 1);
+    // Another location's settings are its own.
+    EXPECT_EQ(boost::json::serialize(read(settings_path(uptown_)).at("sections")), boost::json::serialize(boost::json::parse(kAllSections)));
+}
+
+// Each 400 carries a current If-Match: the header and the tag are checked before the change's own limits (D-108 point 3).
+TEST_F(ReportSettings, PdfIsRefusedUntilItExists) {
+    const auto path = settings_path(chelsea_);
+    const auto pdf = put_current(path, std::format(R"({{"format": "pdf", "sections": {}}})", kAllSections));
+    ASSERT_EQ(pdf.status, 400u) << pdf.body;
+    EXPECT_THAT(error_message(pdf), HasSubstr("PDF reports are not supported yet"));
+    const auto other = put_current(path, std::format(R"({{"format": "docx", "sections": {}}})", kAllSections));
+    ASSERT_EQ(other.status, 400u) << other.body;
+    EXPECT_THAT(error_message(other), HasSubstr("must be html or pdf"));
+    EXPECT_EQ(read(path).at("format").as_string(), "html");
+    EXPECT_EQ(count("audit_log WHERE action = 'report_settings.update'"), 0);
+}
+
+TEST_F(ReportSettings, SectionsAreRefusedWhenEmptyUnknownOrRepeated) {
+    const auto path = settings_path(chelsea_);
+    for (const auto* sections : {"[]", R"(["summary", "pictures"])", R"(["reviews", "summary", "reviews"])"}) {
+        const auto refused = put_current(path, std::format(R"({{"format": "html", "sections": {}}})", sections));
+        ASSERT_EQ(refused.status, 400u) << sections << ": " << refused.body;
+        EXPECT_THAT(error_message(refused), HasSubstr("\"sections\"")) << sections;
+    }
+    EXPECT_EQ(boost::json::serialize(read(path).at("sections")), boost::json::serialize(boost::json::parse(kAllSections)));
+    EXPECT_EQ(count("audit_log WHERE action = 'report_settings.update'"), 0);
+}
+
+TEST_F(ReportSettings, SectionsKeepTheirOrder) {
+    const std::string reversed = R"(["visibility","highlights","employee_recognition","topics","reviews","at_a_glance","summary"])";
+    ASSERT_EQ(save_report_settings(chelsea_, std::format(R"({{"sections": {}}})", reversed)).status, 200u);
+    EXPECT_EQ(boost::json::serialize(read(settings_path(chelsea_)).at("sections")), reversed);
+    EXPECT_EQ(value<std::string>(std::format("SELECT array_to_string(sections, ',') FROM report_settings WHERE location_id = {}", chelsea_)),
+              "visibility,highlights,employee_recognition,topics,reviews,at_a_glance,summary");
+}
+
+TEST_F(Reports, AReportRecordsTheFormatAndSectionsItWasCreatedWith) {
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    ASSERT_EQ(save_report_settings(chelsea_, R"({"sections": ["reviews", "summary", "at_a_glance"]})").status, 200u);
+    const auto id = generate(chelsea_);
+    ASSERT_EQ(status(id), "ready");
+    const auto recorded = [&] {
+        const auto r = report(id);
+        return std::format("{} {}", std::string(r.at("format").as_string()), boost::json::serialize(r.at("sections")));
+    };
+    EXPECT_EQ(recorded(), R"(html ["reviews","summary","at_a_glance"])");
+    EXPECT_EQ(boost::json::serialize(data(id).at("sections")), R"(["reviews","summary","at_a_glance"])");
+    EXPECT_EQ(boost::json::serialize(read(std::format("/api/reports?location_id={}", chelsea_)).at("items").at(0).at("sections")),
+              R"(["reviews","summary","at_a_glance"])");
+    EXPECT_THAT(value<std::string>(std::format("SELECT after::text FROM audit_log WHERE action = 'report.create' AND object_id = '{}'", id)),
+                HasSubstr(R"("sections": ["reviews", "summary", "at_a_glance"])"));
+
+    // A later save changes nothing about a report that exists (D-085).
+    ASSERT_EQ(save_report_settings(chelsea_, R"({"sections": ["visibility"]})").status, 200u);
+    EXPECT_EQ(recorded(), R"(html ["reviews","summary","at_a_glance"])");
+    EXPECT_EQ(boost::json::serialize(data(id).at("sections")), R"(["reviews","summary","at_a_glance"])");
+    // The next report is built with the new settings.
+    const auto next = generate(chelsea_, "2026-09-01", "2026-09-30");
+    EXPECT_EQ(boost::json::serialize(report(next).at("sections")), R"(["visibility"])");
+}
+
+TEST_F(Reports, AReportWithoutVisibilityAsksGoogleNothing) {
+    using namespace std::chrono;
+    add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    performance_.set("9001", "CALL_CLICKS", 2026y / October / 12, 9);
+    performance_.keywords["9001"]["2026-10"] = {{"head spa nyc", 400, {}}};
+    ASSERT_EQ(save_report_settings(chelsea_, std::format(R"({{"sections": {}}})", sections_without({"visibility"}))).status, 200u);
+    const auto id = generate(chelsea_);
+    ASSERT_EQ(status(id), "ready");
+    EXPECT_EQ(performance_.daily_calls, 0);
+    EXPECT_EQ(performance_.keyword_calls, 0);
+    EXPECT_FALSE(data(id).at("visibility").at("available").as_bool());
+    EXPECT_THAT(html(id), Not(HasSubstr("Visibility on Google")));
+    EXPECT_THAT(html(id), Not(HasSubstr("head spa nyc")));
+    EXPECT_THAT(html(id), HasSubstr("<h2>At a glance</h2>"));
+}
+
+TEST_F(Reports, AReportWithoutTheSummaryAsksNoModel) {
+    const auto review = add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely");
+    analyze(review, "positive", R"([{"id": "treatment_quality", "polarity": "positive"}])");
+    ASSERT_EQ(save_report_settings(chelsea_, std::format(R"({{"sections": {}}})", sections_without({"summary"}))).status, 200u);
+    const auto id = generate(chelsea_);
+    ASSERT_EQ(status(id), "ready");
+    EXPECT_EQ(llm_.calls("summary"), 0u);
+    EXPECT_TRUE(report(id).at("summary").is_null());
+    EXPECT_TRUE(report(id).at("summary_note").is_null()) << "a section left out is not explained on the report";
+    EXPECT_THAT(html(id), Not(HasSubstr("class=\"summary\"")));
+}
+
+// The summary starts from the review figures or from visibility (order 14): with neither, there is nothing to summarize,
+// however the models are set up.
+TEST_F(Reports, AReportWithOnlyTopicsAndTheSummaryIsNotSummarized) {
+    exec("UPDATE ai_settings SET enabled = true");
+    ASSERT_EQ(read("/api/ai/settings").at("summary_provider").as_string(), "dashscope");
+    ASSERT_TRUE(llm_.configured("dashscope")) << "the summary's provider is configured";
+    const auto review = add_review(chelsea_, "a1", 5, "2026-10-05T15:00:00Z", "Lovely head spa");
+    analyze(review, "positive", R"([{"id": "treatment_quality", "polarity": "positive"}])");
+    ASSERT_EQ(save_report_settings(chelsea_, R"({"sections": ["summary", "topics"]})").status, 200u);
+    const auto id = generate(chelsea_);
+    ASSERT_EQ(status(id), "ready");
+    EXPECT_EQ(data(id).at("reviews").at("new_reviews").as_int64(), 1) << "the period has a new review";
+    EXPECT_EQ(report(id).at("summary_note").as_string(), "There was nothing to summarize.");
+    EXPECT_TRUE(report(id).at("summary").is_null());
+    EXPECT_EQ(llm_.calls("summary"), 0u);
+    EXPECT_THAT(html(id), HasSubstr("What reviewers talk about"));
+}
+
+TEST_F(Reports, AReportWithoutTheReviewsSectionShowsNoSeriousIssues) {
+    const auto complaint = add_review(chelsea_, "b1", 1, "2026-10-07T15:00:00Z", "The room was cold");
+    exec(std::format("INSERT INTO cases (review_id, opened_by, opened_at, updated_at) "
+                     "VALUES ({}, 'severity_flag', '2026-10-07T16:00:00Z', '2026-10-07T16:00:00Z')",
+                     complaint));
+    const auto whole = generate(chelsea_);
+    EXPECT_THAT(html(whole), HasSubstr("Serious issues raised by reviewers: 1 opened"));
+    EXPECT_EQ(data(whole).at("escalations_opened").as_int64(), 1);
+
+    ASSERT_EQ(save_report_settings(chelsea_, std::format(R"({{"sections": {}}})", sections_without({"reviews"}))).status, 200u);
+    const auto id = generate(chelsea_);
+    EXPECT_THAT(html(id), Not(HasSubstr("Serious issues")));
+    EXPECT_EQ(data(id).at("escalations_opened").as_int64(), 0);
+    EXPECT_EQ(data(id).at("escalations_closed").as_int64(), 0);
+    // The review numbers are always computed: the headline figures are read from them.
+    EXPECT_EQ(report(id).at("new_reviews").as_int64(), 1);
+}
+
+// ---- a location's report schedules (D-111 point 3) -------------------------------------
+
+namespace {
+
+// The same fixture, for the schedules under their location.
+class ReportSchedules : public Reports {
+protected:
+    // One member of a schedule as the location's list shows it, as JSON text.
+    std::string listed_members(std::int64_t location, std::int64_t id, std::string_view member) {
+        return boost::json::serialize(listed_schedule(location, id).at(member));
+    }
+};
+
+const std::string kReversedSections =
+    R"(["visibility","highlights","employee_recognition","topics","reviews","at_a_glance","summary"])";
+
+}  // namespace
+
+TEST_F(ReportSchedules, ALocationHasManySchedulesEachWithItsOwnRecipientsAndSections) {
+    const auto weekly = schedule(chelsea_, R"("frequency": "weekly", "weekday": 1, "recipients": ["manager@spa.example"])");
+    const auto monthly = schedule(chelsea_, R"("frequency": "monthly", "month_day": 5, "recipients": ["owner@spa.example", "accounts@spa.example"],
+                                             "sections": ["summary", "reviews", "visibility"])");
+    const auto listed = read(schedules_path(chelsea_));
+    ASSERT_EQ(listed.at("total").as_int64(), 2);
+    const auto& items = listed.at("items").as_array();
+    EXPECT_EQ(items.at(0).at("id").as_int64(), weekly);
+    EXPECT_EQ(boost::json::serialize(items.at(0).at("recipients")), R"(["manager@spa.example"])");
+    EXPECT_TRUE(items.at(0).at("sections").is_null());
+    EXPECT_EQ(items.at(1).at("id").as_int64(), monthly);
+    EXPECT_EQ(boost::json::serialize(items.at(1).at("recipients")), R"(["owner@spa.example","accounts@spa.example"])");
+    EXPECT_EQ(boost::json::serialize(items.at(1).at("sections")), R"(["summary","reviews","visibility"])");
+    for (const auto& item : items) {
+        EXPECT_EQ(item.at("location_id").as_int64(), chelsea_);
+        EXPECT_FALSE(item.as_object().contains("time_zone")) << "a schedule has no zone of its own";
+    }
+    // Under that location only.
+    EXPECT_EQ(read(schedules_path(uptown_)).at("total").as_int64(), 0);
+    EXPECT_EQ(get(schedules_path(999999), browser_).status, 404u);
+}
+
+TEST_F(ReportSchedules, RecipientsAndSectionsKeepTheirOrderAndRecipientsAreCleaned) {
+    const auto id = schedule(chelsea_, std::format(R"("recipients": [" Owner@Spa.Example ", "manager@spa.example", "OWNER@spa.example"],
+                                                    "sections": {})",
+                                                   kReversedSections));
+    EXPECT_EQ(listed_members(chelsea_, id, "recipients"), R"(["owner@spa.example","manager@spa.example"])");
+    EXPECT_EQ(listed_members(chelsea_, id, "sections"), kReversedSections);
+    EXPECT_EQ(value<std::string>(std::format("SELECT array_to_string(recipients, ',') || ' ' || array_to_string(sections, ',') "
+                                             "FROM report_schedules WHERE id = {}",
+                                             id)),
+              "owner@spa.example,manager@spa.example visibility,highlights,employee_recognition,topics,reviews,at_a_glance,summary");
+    // Reversed again by a person, and read back as saved.
+    ASSERT_EQ(change_schedule(chelsea_, id, R"("recipients": ["manager@spa.example", "owner@spa.example"], "sections": ["reviews", "summary"])").status,
+              200u);
+    EXPECT_EQ(listed_members(chelsea_, id, "recipients"), R"(["manager@spa.example","owner@spa.example"])");
+    EXPECT_EQ(listed_members(chelsea_, id, "sections"), R"(["reviews","summary"])");
+
+    // What is refused, each a 400 that says why.
+    boost::json::array many;
+    for (int i = 0; i < 21; ++i) many.emplace_back(std::format("person{}@spa.example", i));
+    const auto refused = [&](const std::string& rest, std::string_view why) {
+        const auto response = post(schedules_path(chelsea_), schedule_body(rest));
+        EXPECT_EQ(response.status, 400u) << rest << ": " << response.body;
+        if (response.status == 400) EXPECT_THAT(error_message(response), HasSubstr(std::string(why))) << rest;
+    };
+    refused(R"("recipients": ["not an address"])", "\"recipients\" must be at most 20 valid email addresses.");
+    refused(std::format(R"("recipients": {})", boost::json::serialize(many)), "\"recipients\" must be at most 20");
+    refused(R"("sections": [])", "\"sections\"");
+    refused(R"("sections": ["summary", "pictures"])", "\"sections\"");
+    refused(R"("sections": ["summary", "summary"])", "\"sections\"");
+    EXPECT_EQ(read(schedules_path(chelsea_)).at("total").as_int64(), 1);
+}
+
+TEST_F(ReportSchedules, AScheduleThatIsOnNeedsARecipient) {
+    const auto on = post(schedules_path(chelsea_), schedule_body(R"("recipients": [])"));
+    ASSERT_EQ(on.status, 400u) << on.body;
+    EXPECT_EQ(error_message(on), "A schedule that is on needs at least one recipient.");
+    // Off, it may wait for its recipients; switched on without one, it is refused.
+    const auto id = schedule(chelsea_, R"("enabled": false, "recipients": [])");
+    EXPECT_EQ(change_schedule(chelsea_, id, R"("enabled": true)").status, 400u);
+    EXPECT_FALSE(listed_schedule(chelsea_, id).at("enabled").as_bool());
+    // The database holds the same rule, whatever the code does.
+    EXPECT_THROW(exec(std::format("UPDATE report_schedules SET enabled = true WHERE id = {}", id)), pqxx::check_violation);
+}
+
+TEST_F(ReportSchedules, APutReplacesItWholeWithIfMatch) {
+    const auto id = schedule(chelsea_, "");
+    const auto path = schedule_path(chelsea_, id);
+    const auto read_tag = etag(path, browser_);
+    const auto body = schedule_body(R"("time": "10:00", "recipients": ["manager@spa.example"])");
+    const auto entries = [&] { return count("audit_log WHERE action = 'report_schedule.update'"); };
+
+    EXPECT_EQ(put(path, body).status, 428u);
+    EXPECT_EQ(put(path, body, if_match(R"(")" + std::string(64, '0') + R"(")")).status, 412u);
+    EXPECT_EQ(entries(), 0) << "neither changed anything";
+
+    const auto saved = put(path, body, if_match(read_tag));
+    ASSERT_EQ(saved.status, 200u) << saved.body;
+    EXPECT_EQ(json(saved).at("time").as_string(), "10:00");
+    EXPECT_EQ(boost::json::serialize(json(saved).at("recipients")), R"(["manager@spa.example"])");
+    const auto saved_tag = header(saved, "ETag");
+    EXPECT_NE(saved_tag, read_tag);
+    EXPECT_EQ(saved_tag, etag(path, browser_));
+    EXPECT_EQ(entries(), 1);
+    // The tag read before the save is stale now, even for the same body.
+    EXPECT_EQ(put(path, body, if_match(read_tag)).status, 412u);
+
+    // An equal save with the current tag changes nothing: the same tag, and no entry.
+    const auto again = put(path, body, if_match(saved_tag));
+    ASSERT_EQ(again.status, 200u) << again.body;
+    EXPECT_EQ(header(again, "ETag"), saved_tag);
+    EXPECT_EQ(entries(), 1);
+
+    // A member left out is a 400 that names it, and changes nothing.
+    auto part = schedule_object(R"("time": "11:00")");
+    part.erase("sections");
+    const auto refused = put(path, boost::json::serialize(part), if_match(saved_tag));
+    ASSERT_EQ(refused.status, 400u) << refused.body;
+    EXPECT_THAT(error_message(refused), HasSubstr("sections"));
+    EXPECT_EQ(etag(path, browser_), saved_tag);
+}
+
+TEST_F(ReportSchedules, ADeleteNeedsIfMatchAndItsReportsStay) {
+    const auto id = schedule(chelsea_, "");
+    clock_.advance(2h);
+    ASSERT_EQ(await(reporter_->start_due()), 1);
+    const auto path = schedule_path(chelsea_, id);
+    EXPECT_EQ(del(path).status, 428u);
+    EXPECT_EQ(del(path, if_match(R"(")" + std::string(64, '0') + R"(")")).status, 412u);
+    EXPECT_FALSE(listed_schedule(chelsea_, id).is_null());
+
+    EXPECT_EQ(del(path, if_match(etag(path, browser_))).status, 204u);
+    EXPECT_TRUE(listed_schedule(chelsea_, id).is_null());
+    EXPECT_EQ(count("reports WHERE schedule_id IS NULL"), 1);
+    EXPECT_EQ(count(std::format("audit_log WHERE action = 'report_schedule.delete' AND location_id = {}", chelsea_)), 1);
+}
+
+TEST_F(ReportSchedules, AScheduleOfAnotherLocationIsNotFound) {
+    const auto id = schedule(chelsea_, "");
+    const auto tag = etag(schedule_path(chelsea_, id), browser_);
+    const auto elsewhere = schedule_path(uptown_, id);
+    EXPECT_EQ(get(elsewhere, browser_).status, 404u);
+    const auto changed = put(elsewhere, schedule_body(R"("time": "10:00")"), if_match(tag));
+    EXPECT_EQ(changed.status, 404u);
+    EXPECT_EQ(error_code(changed), "not_found");
+    EXPECT_EQ(del(elsewhere, if_match(tag)).status, 404u);
+    EXPECT_EQ(get(schedule_path(999999, id), browser_).status, 404u);
+    // Nothing of it changed.
+    EXPECT_EQ(etag(schedule_path(chelsea_, id), browser_), tag);
+    EXPECT_EQ(count("audit_log WHERE action IN ('report_schedule.update', 'report_schedule.delete')"), 0);
+}
+
+TEST_F(ReportSchedules, TheOldRoutesAreGone) {
+    for (const auto& response : {get("/api/report-schedules", browser_), post("/api/report-schedules", schedule_body("")),
+                                 patch("/api/report-schedules/1", R"({"enabled": false})"), del("/api/report-schedules/1")}) {
+        EXPECT_EQ(response.status, 404u) << response.body;
+        EXPECT_EQ(error_code(response), "not_found");
+    }
+}
+
+TEST_F(ReportSchedules, ARunDoesNotMakeAFormStale) {
+    const auto id = schedule(chelsea_, "");
+    const auto path = schedule_path(chelsea_, id);
+    const auto before = etag(path, browser_);
+    clock_.advance(2h);
+    ASSERT_EQ(await(reporter_->start_due()), 1);
+    EXPECT_EQ(listed_schedule(chelsea_, id).at("last_run_on").as_string(), "2026-11-10");
+    EXPECT_EQ(etag(path, browser_), before);
+    EXPECT_EQ(put(path, schedule_body(R"("time": "10:00")"), if_match(before)).status, 200u);
+}
+
+TEST_F(ReportSchedules, SchedulesRunInTheirLocationsTimeZone) {
+    // The clock: 2026-11-10 12:00 UTC, 07:00 in New York and 21:00 in Tokyo. Each location's schedule runs at 09:00 its time.
+    exec(std::format("UPDATE locations SET time_zone = 'Asia/Tokyo' WHERE id = {}", buffet_));
+    schedule(chelsea_, "");
+    schedule(buffet_, "");
+    const auto made = [&](std::int64_t location) {
+        return value<std::string>(std::format("SELECT time_zone || ' ' || period_start::text || '..' || period_end::text FROM reports "
+                                              "WHERE location_id = {} ORDER BY id DESC LIMIT 1",
+                                              location));
+    };
+    clock_.advance(2h);  // 09:00 in New York
+    ASSERT_EQ(await(reporter_->start_due()), 1);
+    EXPECT_EQ(made(chelsea_), "America/New_York 2026-11-09..2026-11-09");
+    clock_.advance(9h + 59min);  // 08:59 on November 11 in Tokyo
+    EXPECT_EQ(await(reporter_->start_due()), 0);
+    clock_.advance(1min);
+    ASSERT_EQ(await(reporter_->start_due()), 1);
+    EXPECT_EQ(made(buffet_), "Asia/Tokyo 2026-11-10..2026-11-10");
+    EXPECT_EQ(listed_schedule(buffet_, value<std::int64_t>(std::format("SELECT id FROM report_schedules WHERE location_id = {}", buffet_)))
+                  .at("last_run_on")
+                  .as_string(),
+              "2026-11-11");
+}
+
+TEST_F(ReportSchedules, AScheduleWithItsOwnSectionsBuildsReportsWithThem) {
+    const auto id = schedule(chelsea_, R"("sections": ["reviews", "summary"])");
+    clock_.advance(2h);
+    ASSERT_EQ(await(reporter_->start_due()), 1);
+    run_jobs();
+    const auto made = value<std::int64_t>(std::format("SELECT id FROM reports WHERE schedule_id = {}", id));
+    EXPECT_EQ(status(made), "ready");
+    EXPECT_EQ(boost::json::serialize(report(made).at("sections")), R"(["reviews","summary"])");
+    EXPECT_EQ(boost::json::serialize(data(made).at("sections")), R"(["reviews","summary"])");
+}
+
+TEST_F(ReportSchedules, AScheduleWithoutItsOwnSectionsUsesTheLocations) {
+    ASSERT_EQ(save_report_settings(chelsea_, R"({"sections": ["visibility", "at_a_glance"]})").status, 200u);
+    const auto id = schedule(chelsea_, "");
+    clock_.advance(2h);
+    ASSERT_EQ(await(reporter_->start_due()), 1);
+    run_jobs();
+    const auto made = value<std::int64_t>(std::format("SELECT id FROM reports WHERE schedule_id = {}", id));
+    EXPECT_EQ(boost::json::serialize(report(made).at("sections")), R"(["visibility","at_a_glance"])");
+    EXPECT_TRUE(listed_schedule(chelsea_, id).at("sections").is_null()) << "the schedule still has none of its own";
 }

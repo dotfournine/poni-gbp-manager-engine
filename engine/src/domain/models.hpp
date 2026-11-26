@@ -515,14 +515,15 @@ struct KnowledgeVoiceTemplate {
 };
 BOOST_DESCRIBE_STRUCT(KnowledgeVoiceTemplate, (), (key, label, description, content, reply))
 
-// What every location starts with when it is discovered (its content and reply settings), and the default of
+// What every location starts with when it is discovered (its content, reply and report settings), and the default of
 // every analysis setting.
 struct KnowledgeDefaults {
     boost::json::value content;
     boost::json::value reply;
+    boost::json::value report;
     boost::json::value analysis;
 };
-BOOST_DESCRIBE_STRUCT(KnowledgeDefaults, (), (content, reply, analysis))
+BOOST_DESCRIBE_STRUCT(KnowledgeDefaults, (), (content, reply, report, analysis))
 
 struct Knowledge {
     // A hash of the files' content, and when it was seeded.
@@ -699,7 +700,7 @@ using EscalationList = Paged<Escalation>;
 
 struct NotificationRule {
     std::int64_t id = 0;
-    std::string event_type;  // "escalation", "approval_needed", "system_problem" or "location_report"
+    std::string event_type;  // "escalation", "approval_needed" or "system_problem"
     std::optional<std::int64_t> location_id;  // nothing: every location
     std::optional<std::string> location_title;
     std::string channel;
@@ -961,6 +962,9 @@ struct Report {
     std::string period_start;
     std::string period_end;
     std::string time_zone;
+    // What it was created with, from the location's report settings or its schedule (D-111); a later save changes neither.
+    std::string format;
+    std::vector<std::string> sections;
     std::optional<std::int64_t> schedule_id;
     std::optional<std::string> requested_by;  // nothing: a schedule
     // "building", "failed", "ready", "discarding", "discarded" or "expired" (D-104).
@@ -980,15 +984,16 @@ struct Report {
     std::optional<std::string> summary;
     std::optional<std::string> summary_note;
     std::string created_at;
-    // The addresses a send can go to now (the location's enabled location_report rule), sorted, each once,
-    // and the report's rows of the delivery log, newest first. Both empty in a list.
+    // The addresses a person's send can go to now (every recipient of the location's report schedules,
+    // enabled or not, D-111), sorted, each once, and the report's rows of the delivery log, newest first.
+    // Both empty in a list.
     std::vector<std::string> recipients;
     std::vector<NotificationDelivery> deliveries;
 };
 BOOST_DESCRIBE_STRUCT(Report, (),
-                      (id, location_id, location_title, period_start, period_end, time_zone, schedule_id, requested_by, status, error,
-                       url, archive_url, auto_send_status, new_reviews, average_rating, response_rate, summary, summary_note,
-                       created_at, recipients, deliveries))
+                      (id, location_id, location_title, period_start, period_end, time_zone, format, sections, schedule_id, requested_by,
+                       status, error, url, archive_url, auto_send_status, new_reviews, average_rating, response_rate, summary,
+                       summary_note, created_at, recipients, deliveries))
 
 using ReportList = Paged<Report>;
 
@@ -999,17 +1004,18 @@ struct ReportSchedule {
     std::string frequency;  // "daily", "weekly" or "monthly"
     std::optional<std::int64_t> weekday;    // 1 (Monday) to 7; weekly
     std::optional<std::int64_t> month_day;  // 1 to 28; monthly
-    std::string time;                       // "HH:MM", local
-    std::string time_zone;
-    bool auto_send = false;
+    std::string time;                       // "HH:MM", in the location's zone (D-109): a schedule has none of its own
     bool enabled = true;
-    std::optional<std::string> last_run_on;
+    bool auto_send = false;
+    std::vector<std::string> recipients;                // in the order given
+    std::optional<std::vector<std::string>> sections;  // nothing: the location's report settings decide (D-111)
+    std::optional<std::string> last_run_on;             // the engine's, not in the ETag
     std::string created_at;
     std::string updated_at;
 };
 BOOST_DESCRIBE_STRUCT(ReportSchedule, (),
-                      (id, location_id, location_title, frequency, weekday, month_day, time, time_zone, auto_send, enabled, last_run_on,
-                       created_at, updated_at))
+                      (id, location_id, location_title, frequency, weekday, month_day, time, enabled, auto_send, recipients, sections,
+                       last_run_on, created_at, updated_at))
 
 using ReportScheduleList = Paged<ReportSchedule>;
 

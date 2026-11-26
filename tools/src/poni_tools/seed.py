@@ -35,6 +35,7 @@ TABLES = (
     "kb_defaults",
     "kb_content_defaults",
     "kb_reply_defaults",
+    "kb_report_defaults",
     "kb_model_prices",
     "kb_meta",
 )
@@ -113,7 +114,11 @@ def _insert_templates_and_defaults(conn: psycopg.Connection, kb: Knowledge) -> N
     defaults = kb.defaults
     conn.execute("INSERT INTO kb_defaults (analysis) VALUES (%s)", (Jsonb(defaults["analysis"]),))
     # One typed column per member, as a location's own rows have them (D-107); a list is a text[].
-    for table, bundle in (("kb_content_defaults", defaults["content"]), ("kb_reply_defaults", defaults["reply"])):
+    for table, bundle in (
+        ("kb_content_defaults", defaults["content"]),
+        ("kb_reply_defaults", defaults["reply"]),
+        ("kb_report_defaults", defaults["report"]),
+    ):
         columns = list(bundle)
         values = [Jsonb(bundle[c]) if c == "length" else bundle[c] for c in columns]
         conn.execute(

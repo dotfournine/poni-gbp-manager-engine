@@ -20,6 +20,7 @@
 
 #include <array>
 
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <optional>
@@ -48,13 +49,15 @@ inline constexpr std::string_view kEventEscalation = "escalation";
 inline constexpr std::string_view kEventApprovalNeeded = "approval_needed";
 inline constexpr std::string_view kEventSystemProblem = "system_problem";
 inline constexpr std::string_view kEventTest = "test";
-// A location's report sent to its own recipients (D-085, D-102). A rule for it
-// must name a location: one for every location would send a report to another
-// location's list.
+// The type of a report send's delivery rows (D-104). No rule has it: a report goes to its
+// location's schedules' recipients (D-111).
 inline constexpr std::string_view kEventLocationReport = "location_report";
-// Every event type, as notification_deliveries.event_type holds them. A rule can be for any but the test message.
+// Every event type, as notification_deliveries.event_type holds them: the delivery log's filter.
 inline constexpr std::array<std::string_view, 5> kEventTypes{kEventEscalation, kEventApprovalNeeded, kEventSystemProblem, kEventTest,
                                                              kEventLocationReport};
+// The event types a rule can be for, as notification_rules.event_type holds them: neither the test
+// message nor a report's send (D-111).
+inline constexpr std::array<std::string_view, 3> kRuleEventTypes{kEventEscalation, kEventApprovalNeeded, kEventSystemProblem};
 // The values of notification_deliveries.status.
 inline constexpr std::array<std::string_view, 4> kDeliveryStatuses{"pending", "sent", "failed", "not_sent"};
 
@@ -151,6 +154,9 @@ bool valid_email(std::string_view address);
 // An address as a rule stores it: the ends trimmed and ASCII lower-cased. An address
 // someone asks for is compared with stored ones in this form.
 std::string normal_address(std::string_view raw);
+// A list of addresses as a rule or a report schedule stores it: each one normal_address'd, a repeat dropped, the order
+// kept. Nothing if an address is not valid, or there are fewer than `min_count` or more than 20.
+std::optional<std::vector<std::string>> clean_recipients(const std::vector<std::string>& recipients, std::size_t min_count);
 
 model::NotificationRuleList list_rules(pqxx::transaction_base& tx);
 std::optional<model::NotificationRule> get_rule(pqxx::transaction_base& tx, std::int64_t id);
@@ -174,9 +180,6 @@ model::NotificationDeliveryList list_deliveries(pqxx::transaction_base& tx, cons
 std::optional<model::NotificationDelivery> get_delivery(pqxx::transaction_base& tx, std::int64_t id);
 
 // ---- a report's sends (D-104) --------------------------------------------------
-
-// The addresses of the location's enabled location_report rules for email, sorted, each once.
-std::vector<std::string> report_recipients(pqxx::transaction_base& tx, std::int64_t location_id);
 
 // What came of one address of a send.
 struct ReportDelivery {

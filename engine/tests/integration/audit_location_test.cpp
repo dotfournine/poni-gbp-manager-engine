@@ -70,9 +70,9 @@ protected:
         return created(post(std::format("/api/locations/{}/reports", location), R"({"period_start": "2026-10-01", "period_end": "2026-10-31"})"));
     }
     std::int64_t schedule(std::int64_t location) {
-        return created(post("/api/report-schedules",
-                            std::format(R"({{"location_id": {}, "frequency": "daily", "time": "09:00", "time_zone": "America/New_York"}})",
-                                        location)));
+        return created(post(std::format("/api/locations/{}/report-settings/schedules", location),
+                            R"({"frequency": "daily", "weekday": null, "month_day": null, "time": "09:00", "enabled": true, "auto_send": false,
+                                "recipients": ["a@example.com"], "sections": null})"));
     }
     std::int64_t rule(const std::string& location) {
         return created(post("/api/notification-rules",
@@ -125,7 +125,7 @@ TEST_F(AuditLocation, AnEntryOfADeleteKeepsTheLocationOfWhatWasDeleted) {
     EXPECT_EQ(location_of("local_post.delete"), buffet_);
 
     const auto schedule_id = schedule(spa_);
-    ASSERT_EQ(del(std::format("/api/report-schedules/{}", schedule_id)).status, 204u);
+    ASSERT_EQ(del_current(std::format("/api/locations/{}/report-settings/schedules/{}", spa_, schedule_id)).status, 204u);
     EXPECT_EQ(location_of("report_schedule.delete"), spa_);
 
     const auto rule_id = rule(std::to_string(buffet_));

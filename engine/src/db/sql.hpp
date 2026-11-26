@@ -41,6 +41,12 @@ std::string json_list(const Range& values) {
     return boost::json::serialize(out);
 }
 
+// A text[] column written from one json_list parameter, in the list's order:
+//     INSERT INTO t (words) VALUES (text_array("$2"))
+inline std::string text_array(std::string_view parameter) {
+    return std::format("ARRAY(SELECT e FROM jsonb_array_elements_text({}::jsonb) WITH ORDINALITY AS t(e, ord) ORDER BY ord)", parameter);
+}
+
 // Collects WHERE conditions and their numbered parameters.
 class Conditions {
 public:

@@ -1,7 +1,9 @@
 // The tiered policy (FR-5): reply mode, target language and the gate.
 
 #include "ai_fixture.hpp"
+#include "core/json.hpp"
 #include "domain/reply_policy.hpp"
+#include "domain/report.hpp"
 #include "domain/settings.hpp"
 #include "domain/review_pipeline.hpp"
 
@@ -234,6 +236,11 @@ TEST(Settings, ASaveIsCheckedAgainstItsLimits) {
     const auto defaults = seed.default_settings().value();
     EXPECT_EQ(check_content_settings(defaults.content), std::nullopt) << "the knowledge base's defaults pass the engine's own rules";
     EXPECT_EQ(check_reply_settings(defaults.reply), std::nullopt) << "the knowledge base's defaults pass the engine's own rules";
+    const auto report = core::from_json<ReportSettings>(seed.defaults().at("report"));
+    ASSERT_TRUE(report) << "the report defaults read as the engine's struct: " << report.error();
+    EXPECT_EQ(check_report_settings(*report), std::nullopt) << "the knowledge base's report defaults pass the engine's own rules";
+    EXPECT_EQ(report->format, "html");
+    EXPECT_EQ(report->sections, all_report_sections());
     for (const auto& key : seed.industries()) {
         EXPECT_EQ(check_content_settings(seed.client(key).settings.content), std::nullopt) << key;
         EXPECT_EQ(check_reply_settings(seed.client(key).settings.reply), std::nullopt) << key;

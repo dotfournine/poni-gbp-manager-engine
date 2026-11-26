@@ -69,18 +69,6 @@ boost::json::object rule_json(const model::NotificationRule& rule) {
             {"enabled", rule.enabled}};
 }
 
-// Trimmed, lower-cased, without repeats; nothing if any address is not valid.
-std::optional<std::vector<std::string>> clean_recipients(const std::vector<std::string>& recipients) {
-    std::vector<std::string> out;
-    for (const auto& raw : recipients) {
-        auto address = normal_address(raw);
-        if (!valid_email(address)) return std::nullopt;
-        if (!std::ranges::contains(out, address)) out.push_back(std::move(address));
-    }
-    if (out.empty() || out.size() > 20) return std::nullopt;
-    return out;
-}
-
 std::string delivery_select() {
     return std::format("SELECT d.id, d.event_type, d.location_id, d.review_id, d.escalation_id, d.report_id, "
                        "(SELECT u.email FROM users u WHERE u.id = d.requested_by) AS requested_by, d.channel, d.recipient, d.subject, "
@@ -115,10 +103,21 @@ bool valid_email(std::string_view address) {
     return true;
 }
 
+std::optional<std::vector<std::string>> clean_recipients(const std::vector<std::string>& recipients, std::size_t min_count) {
+    std::vector<std::string> out;
+    for (const auto& raw : recipients) {
+        auto address = normal_address(raw);
+        if (!valid_email(address)) return std::nullopt;
+        if (!std::ranges::contains(out, address)) out.push_back(std::move(address));
+    }
+    if (out.size() < min_count || out.size() > 20) return std::nullopt;
+    return out;
+}
+
 int emit(pqxx::transaction_base& tx, const NotificationEvent& event, core::TimePoint now) {
     const auto now_text = to_timestamptz(now);
     // A location's own rule and the rule for every location both apply.
-    const auto rules = tx.exec("SELECT id, channel, recipients::text FROM notification_rules "
+    const auto rules = tx.exec("SELECT id, channel, array_to_json(recipients)::text FROM notification_rules "
                                "WHERE event_type = $1 AND enabled AND (location_id IS NULL OR location_id = $2) ORDER BY id",
                                pqxx::params{event.type, event.location_id});
     int created = 0;
@@ -206,13 +205,13 @@ std::optional<model::NotificationRule> get_rule(pqxx::transaction_base& tx, std:
 }
 
 Result<model::NotificationRule> create_rule(pqxx::transaction_base& tx, audit::Writer& audit, const NewRule& rule, bool push_configured) {
-    if (!std::ranges::contains(kEventTypes, std::string_view(rule.event_type)) || rule.event_type == kEventTest) {
-        return invalid("\"event_type\" must be escalation, approval_needed, system_problem or location_report.");
+    if (!std::ranges::contains(kRuleEventTypes, std::string_view(rule.event_type))) {
+        return invalid("\"event_type\" must be escalation, approval_needed or system_problem.");
     }
     const std::string channel = rule.channel.value_or(std::string(kEmailChannel));
     if (channel != kEmailChannel && channel != kPushChannel) return invalid("\"channel\" must be email or push.");
     if (channel == kPushChannel) {
-        // Drafts waiting and a location's reports stay email (D-097).
+        // Drafts waiting stay email (D-097).
         if (rule.event_type != kEventEscalation && rule.event_type != kEventSystemProblem) {
             return invalid("A push rule is for escalation or system_problem only.");
         }
@@ -221,10 +220,7 @@ Result<model::NotificationRule> create_rule(pqxx::transaction_base& tx, audit::W
         }
     }
     const auto& location_id = rule.location_id.value();
-    if (rule.event_type == kEventLocationReport && !location_id) {
-        return invalid("A rule for a location's reports must name the location whose reports it sends.");
-    }
-    const auto recipients = clean_recipients(rule.recipients);
+    const auto recipients = clean_recipients(rule.recipients, 1);
     if (!recipients) {
         return invalid("\"recipients\" must be 1 to 20 valid email addresses.");
     }
@@ -233,9 +229,10 @@ Result<model::NotificationRule> create_rule(pqxx::transaction_base& tx, audit::W
     }
     const auto now = to_timestamptz(audit.now());
     const auto rows = tx.exec(
-        "INSERT INTO notification_rules (event_type, location_id, channel, recipients, enabled, created_at, updated_at) "
-        "VALUES ($1, $2, $6, $3::jsonb, $4, $5::timestamptz, $5::timestamptz) "
-        "ON CONFLICT (event_type, channel, coalesce(location_id, 0)) DO NOTHING RETURNING id",
+        std::format("INSERT INTO notification_rules (event_type, location_id, channel, recipients, enabled, created_at, updated_at) "
+                    "VALUES ($1, $2, $6, {}, $4, $5::timestamptz, $5::timestamptz) "
+                    "ON CONFLICT (event_type, channel, coalesce(location_id, 0)) DO NOTHING RETURNING id",
+                    db::text_array("$3")),
         pqxx::params{rule.event_type, location_id, db::json_list(*recipients), rule.enabled.value_or(true), now, channel});
     if (rows.empty()) {
         return conflict("rule_exists", "A rule for this event type, channel and location already exists; change that one.");
@@ -252,7 +249,7 @@ Result<model::NotificationRule> update_rule(pqxx::transaction_base& tx, audit::W
     const auto before = *get_rule(tx, id);
     auto recipients = before.recipients;
     if (patch.recipients) {
-        const auto cleaned = clean_recipients(*patch.recipients);
+        const auto cleaned = clean_recipients(*patch.recipients, 1);
         if (!cleaned) return invalid("\"recipients\" must be 1 to 20 valid email addresses.");
         recipients = *cleaned;
     }
@@ -261,7 +258,8 @@ Result<model::NotificationRule> update_rule(pqxx::transaction_base& tx, audit::W
         audit.nothing_changed();
         return before;
     }
-    tx.exec("UPDATE notification_rules SET recipients = $2::jsonb, enabled = $3, updated_at = $4::timestamptz WHERE id = $1",
+    tx.exec(std::format("UPDATE notification_rules SET recipients = {}, enabled = $3, updated_at = $4::timestamptz WHERE id = $1",
+                        db::text_array("$2")),
             pqxx::params{id, db::json_list(recipients), enabled, to_timestamptz(audit.now())})
         .no_rows();
     auto after = *get_rule(tx, id);
@@ -307,20 +305,6 @@ std::optional<model::NotificationDelivery> get_delivery(pqxx::transaction_base& 
 }
 
 // ---- a report's sends ------------------------------------------------------------
-
-std::vector<std::string> report_recipients(pqxx::transaction_base& tx, std::int64_t location_id) {
-    std::vector<std::string> out;
-    for (const auto& row : tx.exec("SELECT a.address FROM notification_rules n, jsonb_array_elements_text(n.recipients) a(address) "
-                                   "WHERE n.event_type = $1 AND n.channel = $2 AND n.enabled AND n.location_id = $3",
-                                   pqxx::params{kEventLocationReport, kEmailChannel, location_id})) {
-        out.push_back(row[0].as<std::string>());
-    }
-    // Sorted here, by bytes: the database's collation would not sort the punctuation of an address the same everywhere.
-    std::ranges::sort(out);
-    const auto repeats = std::ranges::unique(out);
-    out.erase(repeats.begin(), repeats.end());
-    return out;
-}
 
 void record_report_deliveries(pqxx::transaction_base& tx, std::int64_t report_id, std::int64_t location_id,
                               std::optional<std::int64_t> requested_by, std::string_view event_key, std::string_view subject,

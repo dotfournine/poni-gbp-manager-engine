@@ -1,7 +1,8 @@
-// A location's settings, as two flat bundles named for what reads them
-// (D-107): its content settings (what the business is, how it sounds, who its
-// customers are) and its reply settings (how a reply to a review is written
-// and when it is posted by itself). Each is the location's own and complete
+// A location's settings, as three flat bundles named for what reads them
+// (D-107, D-111): its content settings (what the business is, how it sounds,
+// who its customers are), its reply settings (how a reply to a review is
+// written and when it is posted by itself) and its report settings (the
+// format and sections of its reports). Each is the location's own and complete
 // row: nothing is merged in from a client or from the knowledge base when it
 // is read, and a row that lacks a field is an error.
 //
@@ -102,7 +103,18 @@ BOOST_DESCRIBE_STRUCT(ReplySettings, (),
                        auto_reply_window_start, auto_reply_window_end, auto_reply_enabled, auto_reply_daily_cap,
                        auto_reply_pause_after_failures))
 
-// What prompts, checks, the fingerprint and the goldens read: the two stored bundles together.
+// What a location's reports are built as (D-111). Read by the report build only: no reply or post prompt reads
+// it, and nothing in it is in the go-live fingerprint.
+struct ReportSettings {
+    static constexpr bool sent_whole = true;
+    // "html" or "pdf"; a save of "pdf" is refused until PDF reports exist.
+    std::string format;
+    // domain::kReportSections keys, at least one, each once; the order is kept, and the page keeps its own.
+    std::vector<std::string> sections;
+};
+BOOST_DESCRIBE_STRUCT(ReportSettings, (), (format, sections))
+
+// What prompts, checks, the fingerprint and the goldens read: the content and reply bundles together.
 struct ResolvedSettings {
     ContentSettings content;
     ReplySettings reply;
@@ -113,6 +125,7 @@ BOOST_DESCRIBE_STRUCT(ResolvedSettings, (), (content, reply))
 // can't verify, a pair that does not fit), as the API's 400 says it; nothing if they are fine.
 std::optional<std::string> check_content_settings(const ContentSettings& settings);
 std::optional<std::string> check_reply_settings(const ReplySettings& settings);
+std::optional<std::string> check_report_settings(const ReportSettings& settings);
 
 // The length a reply in `language` and reply `mode` must have: the writer is
 // told it and the check holds the reply to it. A language without limits

@@ -353,6 +353,33 @@ TEST_F(Notifications, RulesTakeOnlyRealAddressesAndOneRulePerEventAndLocation) {
     EXPECT_TRUE(repo::valid_email("host@xvisionmediaus.com"));
 }
 
+TEST_F(Notifications, ARulesRecipientsKeepTheirOrderAndAreEachOnce) {
+    const auto id = rule("system_problem", std::nullopt, {"B@Example.com", "a@example.com", "b@example.com"});
+    const auto read = [&] { return tx([&](pqxx::work& tx) { return repo::get_rule(tx, id).value().recipients; }); };
+    EXPECT_THAT(read(), testing::ElementsAre("b@example.com", "a@example.com"));
+    EXPECT_EQ(value<std::string>("SELECT recipients::text FROM notification_rules"), "{b@example.com,a@example.com}");
+
+    EXPECT_EQ(emit(problem("p1")), 2);
+    EXPECT_EQ(value<std::string>("SELECT string_agg(recipient, ' ' ORDER BY id) FROM notification_deliveries WHERE event_key = 'p1'"),
+              "b@example.com a@example.com");
+
+    // A change keeps the order it is given, too.
+    as_test([&](pqxx::work& tx, audit::Writer& audit) {
+        return repo::update_rule(tx, audit, id, {.recipients = std::vector<std::string>{"c@example.com", "A@example.com"}, .enabled = std::nullopt})
+            .value();
+    });
+    EXPECT_THAT(read(), testing::ElementsAre("c@example.com", "a@example.com"));
+    EXPECT_EQ(emit(problem("p2")), 2);
+    EXPECT_EQ(value<std::string>("SELECT string_agg(recipient, ' ' ORDER BY id) FROM notification_deliveries WHERE event_key = 'p2'"),
+              "c@example.com a@example.com");
+}
+
+TEST_F(Notifications, ARuleCannotHoldANullAddress) {
+    EXPECT_THROW(exec("INSERT INTO notification_rules (event_type, recipients, created_at, updated_at) "
+                      "VALUES ('escalation', ARRAY['a@example.com', NULL], now(), now())"),
+                 pqxx::check_violation);
+}
+
 // ---- system problems ------------------------------------------------------------------
 
 TEST_F(Notifications, LosingAccessToAnEnabledLocationIsReported) {

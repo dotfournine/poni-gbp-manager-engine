@@ -35,8 +35,8 @@ The user message holds a <report_data> element with a random nonce, containing a
 - Three to five sentences of plain English in one paragraph. No heading, no list, no markdown, no emoji.
 - Speak to the business as "you" and "your".
 - Every number you mention must appear in the data exactly as you write it. Do not add, subtract, average or work out percentages yourself. If a comparison is not given, do not make one.
-- Start with the reviews (how many, the rating, what people liked or disliked), then visibility if the data has it. When "visibility" says the numbers are not complete, say up to which day they go.
-- If there were no new reviews, say so plainly and move on to what the data does have.
+- Start with the reviews if the data has them (how many, the rating, what people liked or disliked), then visibility if the data has it. When "visibility" says the numbers are not complete, say up to which day they go.
+- If the data has review figures and there were no new reviews, say so plainly and move on to what the data does have. If it has no review figures, say nothing about how many reviews there were.
 - Be honest about bad news and do not dramatize it. No promises, no advice that guarantees a result.
 - No links, email addresses or phone numbers. Do not mention PONI, yourself, or that this was written by an AI.
 
@@ -76,21 +76,29 @@ std::vector<ChatMessage> summary_messages(const ReportData& report, std::string_
         if (numbers.response_rate) out["answered_percent"] = static_cast<std::int64_t>(*numbers.response_rate * 100 + 0.5);
         return out;
     };
+    // Only the figures of the sections the report has: the model writes about nothing the page leaves out.
+    const auto has = [&](std::string_view key) { return has_section(report.sections, key); };
     boost::json::object data{{"business", report.location_title},
                              // Dates in words: a model that copies "2026-10-28" into its summary would fail the phone check.
                              {"period", period_label(report.period_start, report.period_end)},
-                             {"period_before", period_label(report.previous_start, report.previous_end)},
-                             {"reviews", reviews(report.reviews)},
-                             {"reviews_period_before", reviews(report.previous)},
-                             {"overall_rating", rounded(report.running_average)},
-                             {"reviews_in_total", report.running_count},
-                             {"topics_praised", ranked_json(report.topics_praised, "topic")},
-                             {"topics_complained", ranked_json(report.topics_complained, "topic")},
-                             {"items_praised", ranked_json(report.items_praised, "item")},
-                             {"items_complained", ranked_json(report.items_complained, "item")},
-                             {"serious_issues_opened", report.escalations_opened},
-                             {"serious_issues_closed", report.escalations_closed}};
-    if (report.visibility.available) {
+                             {"period_before", period_label(report.previous_start, report.previous_end)}};
+    if (has("at_a_glance") || has("reviews")) {
+        data["reviews"] = reviews(report.reviews);
+        data["reviews_period_before"] = reviews(report.previous);
+        data["overall_rating"] = rounded(report.running_average);
+        data["reviews_in_total"] = report.running_count;
+    }
+    if (has("topics")) {
+        data["topics_praised"] = ranked_json(report.topics_praised, "topic");
+        data["topics_complained"] = ranked_json(report.topics_complained, "topic");
+        data["items_praised"] = ranked_json(report.items_praised, "item");
+        data["items_complained"] = ranked_json(report.items_complained, "item");
+    }
+    if (has("reviews")) {
+        data["serious_issues_opened"] = report.escalations_opened;
+        data["serious_issues_closed"] = report.escalations_closed;
+    }
+    if (has("visibility") && report.visibility.available) {
         boost::json::object visibility{{"numbers_go_up_to", period_label(*report.visibility.as_of, *report.visibility.as_of)},
                                        {"complete", report.visibility.complete},
                                        {"this_period", visibility_json(report.visibility.totals)}};

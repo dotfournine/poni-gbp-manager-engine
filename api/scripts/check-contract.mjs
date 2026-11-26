@@ -515,7 +515,7 @@ try {
   expectStatus("GET /api/knowledge/industries/no_such_industry/corpus", await call("GET", "/api/knowledge/industries/no_such_industry/corpus"), 404, "not_found");
   expectStatus("PATCH /api/knowledge", await call("PATCH", "/api/knowledge", { body: {} }), 405, "method_not_allowed");
 
-  // A location's content and reply settings (D-107): two complete bundles, each sent whole with If-Match (D-108).
+  // A location's content, reply and report settings (D-107, D-111): three complete bundles, each sent whole with If-Match (D-108).
   // Here each is read, saved back as it is, saved with a change, and put back. Every location has both from its
   // discovery (D-102), and only the seeded location's are saved: between the change and the putting back, a real
   // location's replies would be drafted under the check's words, and a go-live test running there would be
@@ -536,6 +536,16 @@ try {
       // Auto reply's minimum is 4 or 5 (D-110); three stars or fewer never auto reply.
       alsoOutside: (b) => ({ ...b, auto_reply_min_stars: 3 }),
       leftOut: "signature",
+    },
+    {
+      // Only html until PDF reports exist; the 400s carry a current If-Match, since the header and the tag are
+      // checked before the change's own limits (D-108 point 3).
+      name: "report-settings",
+      change: (b) => ({ ...b, sections: ["summary", "reviews"] }),
+      changed: (json) => json?.sections?.join(",") === "summary,reviews",
+      outside: (b) => ({ ...b, format: "pdf" }),
+      alsoOutside: (b) => ({ ...b, sections: [] }),
+      leftOut: "sections",
     },
   ];
   for (const bundle of bundles) {
@@ -569,9 +579,9 @@ try {
     if (bundle.alsoOutside) await save("another value outside its limits", bundle.alsoOutside(original), 400);
     await save("a member left out", { ...original, [bundle.leftOut]: undefined }, 400);
     await save("put back", original, 200);
-    if (bundle.name === "content-settings") await expectGuarded(settingsSpec, "PUT", path, original);
+    if (bundle.name !== "reply-settings") await expectGuarded(settingsSpec, "PUT", path, original);
   }
-  for (const name of ["content-settings", "reply-settings"]) {
+  for (const name of ["content-settings", "reply-settings", "report-settings"]) {
     expectStatus(`GET /api/locations/999999999/${name}`, await call("GET", `/api/locations/999999999/${name}`), 404, "not_found");
   }
   const aiTag = await etagOf("/api/ai/settings");
@@ -733,14 +743,15 @@ try {
   expectStatus("GET /api/reports?location_id=x", await call("GET", "/api/reports?location_id=x"), 400, "invalid_request");
   if (seededLocation) {
     const locationId = seededLocation.id;
-    const period = { period_start: "2026-01-01", period_end: "2026-01-31", time_zone: "America/New_York" };
+    const period = { period_start: "2026-01-01", period_end: "2026-01-31" };
     const made = await call("POST", `/api/locations/${locationId}/reports`, { body: period });
     check("POST /api/locations/{id}/reports", "/api/locations/{id}/reports", "POST", made);
     if (made.status === 409 && made.json?.error?.code === "no_public_bucket") {
       fail("POST /api/locations/{id}/reports", "the engine has no public bucket: give it a folder as PONI_PUBLIC_BUCKET, a report's page goes there");
     }
     check("POST /api/locations/{id}/reports (upside down)", "/api/locations/{id}/reports", "POST", await call("POST", `/api/locations/${locationId}/reports`, { body: { ...period, period_end: "2025-12-01" } }));
-    check("POST /api/locations/{id}/reports (bad zone)", "/api/locations/{id}/reports", "POST", await call("POST", `/api/locations/${locationId}/reports`, { body: { ...period, time_zone: "Mars/Base" } }));
+    // The period's days are the location's (D-109): a body that names a zone is refused.
+    await expectRefused("POST /api/locations/{id}/reports (a zone of its own)", "POST", `/api/locations/${locationId}/reports`, { ...period, time_zone: "America/New_York" }, "time_zone");
     if (made.status === 201) {
       const path = `/api/reports/${made.json.id}`;
       // Its job runs within a second or two.
@@ -785,25 +796,38 @@ try {
         if (refused.status !== 409 || refused.json?.error?.code !== code) fail(name, `expected the refusal ${code}, got ${refused.status}: ${refused.text.slice(0, 300)}`);
       }
     }
-    const schedule = await call("POST", "/api/report-schedules", { body: { location_id: locationId, frequency: "monthly", month_day: 5, time: "09:00", time_zone: "America/New_York" } });
-    check("POST /api/report-schedules", "/api/report-schedules", "POST", schedule);
-    check("POST /api/report-schedules (no weekday)", "/api/report-schedules", "POST", await call("POST", "/api/report-schedules", { body: { location_id: locationId, frequency: "weekly", time: "09:00", time_zone: "America/New_York" } }));
+    // The location's report schedules (D-111): made, read, replaced and deleted under the location, with If-Match.
+    const schedulesPath = `/api/locations/${locationId}/report-settings/schedules`;
+    const scheduleSpec = "/api/locations/{id}/report-settings/schedules/{sid}";
+    const monthly = { frequency: "monthly", weekday: null, month_day: 5, time: "09:00", enabled: true, auto_send: false, recipients: ["contract-check@example.com"], sections: null };
+    const schedule = await call("POST", schedulesPath, { body: monthly });
+    check(`POST ${schedulesPath}`, "/api/locations/{id}/report-settings/schedules", "POST", schedule);
+    const noWeekday = await call("POST", schedulesPath, { body: { ...monthly, frequency: "weekly", month_day: null } });
+    check(`POST ${schedulesPath} (no weekday)`, "/api/locations/{id}/report-settings/schedules", "POST", noWeekday);
+    expectStatus(`POST ${schedulesPath} (no weekday)`, noWeekday, 400, "invalid_request");
+    const nobody = await call("POST", schedulesPath, { body: { ...monthly, recipients: [] } });
+    check(`POST ${schedulesPath} (on, without recipients)`, "/api/locations/{id}/report-settings/schedules", "POST", nobody);
+    expectStatus(`POST ${schedulesPath} (on, without recipients)`, nobody, 400, "invalid_request");
     if (schedule.status === 201) {
-      const path = `/api/report-schedules/${schedule.json.id}`;
-      check(`PATCH ${path}`, "/api/report-schedules/{id}", "PATCH", await call("PATCH", path, { body: { frequency: "weekly", weekday: 1, enabled: false } }));
-      check(`PATCH ${path} (bad time)`, "/api/report-schedules/{id}", "PATCH", await call("PATCH", path, { body: { time: "noon" } }));
-      check("GET /api/report-schedules", "/api/report-schedules", "GET", await call("GET", "/api/report-schedules"));
-      check(`DELETE ${path}`, "/api/report-schedules/{id}", "DELETE", await call("DELETE", path));
-      check(`DELETE ${path} (again)`, "/api/report-schedules/{id}", "DELETE", await call("DELETE", path));
+      const path = `${schedulesPath}/${schedule.json.id}`;
+      check(`GET ${path}`, scheduleSpec, "GET", await call("GET", path));
+      const weekly = { ...monthly, frequency: "weekly", weekday: 1, month_day: null, enabled: false, sections: ["summary", "reviews"] };
+      await expectGuarded(scheduleSpec, "PUT", path, weekly);
+      const replaced = await call("PUT", path, { body: weekly, headers: ifMatch(await etagOf(path)) });
+      check(`PUT ${path}`, scheduleSpec, "PUT", replaced);
+      check(`PUT ${path} (bad time)`, scheduleSpec, "PUT", await call("PUT", path, { body: { ...weekly, time: "noon" }, headers: ifMatch(await etagOf(path)) }));
+      check(`GET ${schedulesPath}`, "/api/locations/{id}/report-settings/schedules", "GET", await call("GET", schedulesPath));
+      await expectGuarded(scheduleSpec, "DELETE", path);
+      const tag = await etagOf(path);
+      check(`DELETE ${path}`, scheduleSpec, "DELETE", await call("DELETE", path, { headers: ifMatch(tag) }));
+      const again = await call("DELETE", path, { headers: ifMatch(tag) });
+      check(`DELETE ${path} (again)`, scheduleSpec, "DELETE", again);
+      expectStatus(`DELETE ${path} (again)`, again, 404, "not_found");
     }
-    // A location's recipients are a rule; one for every location is refused.
-    const recipients = await call("POST", "/api/notification-rules", { body: { event_type: "location_report", location_id: locationId, recipients: ["contract-check@example.com"] } });
-    check("POST /api/notification-rules (location_report)", "/api/notification-rules", "POST", recipients);
-    if (recipients.status === 201) {
-      const rulePath = `/api/notification-rules/${recipients.json.id}`;
-      check("DELETE the location_report rule", "/api/notification-rules/{id}", "DELETE", await call("DELETE", rulePath, { headers: ifMatch(await etagOf(rulePath)) }));
-    }
-    expectStatus("POST /api/notification-rules (location_report, no location)", await call("POST", "/api/notification-rules", { body: { event_type: "location_report", recipients: ["contract-check@example.com"] } }), 400, "invalid_request");
+    // A location's recipients are its schedules' (D-111): no rule is for its reports.
+    const reportRule = await call("POST", "/api/notification-rules", { body: { event_type: "location_report", location_id: locationId, recipients: ["contract-check@example.com"] } });
+    check("POST /api/notification-rules (location_report)", "/api/notification-rules", "POST", reportRule);
+    expectStatus("POST /api/notification-rules (location_report)", reportRule, 400, "invalid_request");
   } else if (requireData) {
     fail("POST /api/locations/{id}/reports", "the seeded location is missing; was the seed applied?");
   }

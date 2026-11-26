@@ -4,6 +4,7 @@
 #include "core/log.hpp"
 #include "db/repo_settings.hpp"
 #include "domain/prompts.hpp"
+#include "domain/report.hpp"
 #include "domain/report_html.hpp"
 #include "jobs/search_keywords.hpp"
 
@@ -12,6 +13,7 @@
 #include <format>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -105,7 +107,13 @@ asio::awaitable<domain::LocationPerformance> Reporter::read_performance(const re
 }
 
 asio::awaitable<void> Reporter::summarize(domain::ReportData& data) {
-    if (data.reviews.new_reviews == 0 && !data.visibility.available) {
+    const auto has = [&](std::string_view key) { return domain::has_section(data.sections, key); };
+    // A report without the section asks no model and says nothing about it.
+    if (!has("summary")) co_return;
+    // The summary starts from the review figures or from visibility: topics and the rest come from the same reviews.
+    const bool has_figures = (has("at_a_glance") || has("reviews")) && data.reviews.new_reviews > 0;
+    const bool has_visibility = has("visibility") && data.visibility.available;
+    if (!has_figures && !has_visibility) {
         data.summary_note = "There was nothing to summarize.";
         co_return;
     }
@@ -151,7 +159,8 @@ asio::awaitable<void> Reporter::build_once(std::int64_t report_id, bool last_att
     auto work = co_await db_.tx([report_id, now = clock_.now()](pqxx::work& tx) { return repo::load_report_work(tx, report_id, now); });
     if (!work) co_return;  // built, failed or discarded already
 
-    work->input.performance = co_await read_performance(*work, last_attempt);
+    // Without the visibility section Google's Performance API is not asked at all.
+    if (domain::has_section(work->input.sections, "visibility")) work->input.performance = co_await read_performance(*work, last_attempt);
     auto data = domain::build_report(work->input);
     co_await summarize(data);
     auto html = domain::render_report(data);
@@ -193,7 +202,9 @@ asio::awaitable<repo::Result<model::Report>> Reporter::send(std::int64_t report_
                                                           audit::Actor actor) {
     // The row's lock ends with this transaction: none is open while the emails go out.
     auto mail = co_await db_.tx(
-        [report_id, &only, base = link_base()](pqxx::work& tx) { return repo::prepare_report_send(tx, report_id, only, base); });
+        [report_id, &only, base = link_base()](pqxx::work& tx) {
+            return repo::prepare_report_send(tx, report_id, only, base, repo::SendFor::person);
+        });
     if (!mail) co_return std::unexpected(mail.error());
     auto sent = co_await deliver(report_id, std::move(*mail), std::move(actor));
     co_return sent;
