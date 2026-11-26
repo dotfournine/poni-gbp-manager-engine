@@ -117,7 +117,7 @@ tags:
       its exact content, and Google publishes, schedules and repeats it. The
       list also shows posts made in Google's own interface.
   - name: settings
-    description: Voices, localization, reply policies and the pipeline's settings, per location.
+    description: A location's content and reply settings, and the pipeline's settings.
   - name: knowledge
     description: |
       The knowledge base (FR-13), read-only: supported industries with their
@@ -778,16 +778,17 @@ paths:
       summary: Change a location
       description: |
         Switches the location on or off (`enabled`), sets its industry, the
-        day its analysis starts from and its audience, groups it under a
+        day its analysis starts from, groups it under a
         client or clears that, changes how often its reviews are polled, or
         flips its posting switch. Everything else about a location comes
         from Google and can't be changed here.
 
         The engine works only on an enabled location (D-102); a discovered
         location starts switched off. Linking, unlinking and moving the
-        location to another client change only the grouping: its reply
-        settings, switches, tests and reports stay as they are. Its reply
-        settings are its own from discovery (D-093), and change only through
+        location to another client change only the grouping: its content
+        and reply settings, switches, tests and reports stay as they are.
+        Its settings are its own from discovery (D-107), and change only
+        through `PUT /api/locations/{id}/content-settings` and
         `PUT /api/locations/{id}/reply-settings`.
 
         The `ETag` covers the members this body can set (D-108): what the
@@ -1094,8 +1095,8 @@ paths:
       summary: Analyze a review again
       description: |
         Queues a fresh analysis of the review and, if it has no reply, a new
-        draft that replaces the current one. Use it after changing a voice,
-        a policy or an industry profile. Nothing is posted to Google.
+        draft that replaces the current one. Use it after changing the
+        content or reply settings or an industry profile. Nothing is posted to Google.
       tags: [analysis]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -1121,6 +1122,85 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/locations/{id}/content-settings:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getLocationContentSettings
+      summary: A location's content settings
+      description: |
+        What the business is, how it sounds and who its customers are, as the
+        reply writer and the help with local posts read it. They are the location's own and complete (D-107): nothing is merged
+        in from the knowledge base. A location gets them when it is
+        discovered, as a copy of the knowledge base's defaults, and keeps them
+        whatever client it is grouped under (D-102). The `ETag` covers every
+        member.
+      tags: [settings]
+      responses:
+        "200":
+          description: The settings, and their `ETag`.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContentSettings"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/SettingsConflict"
+    put:
+      operationId: replaceLocationContentSettings
+      summary: Replace a location's content settings
+      description: |
+        Every member is sent, and what is stored is replaced whole (D-107),
+        with the `ETag` of what was read in `If-Match` (D-108). Taking a voice
+        template is filling the form from `GET /api/knowledge` and saving;
+        copying the settings to another location is this call for that
+        location.
+        A change of what the reply writer is told means a new go-live test
+        before the location auto replies again (D-074); `audience` is read
+        by the help with local posts only, and changes no test.
+      tags: [settings]
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContentSettings"
+      responses:
+        "200":
+          description: |
+            The settings after the change, and their new `ETag`. A save that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContentSettings"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/SettingsConflict"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+
   /api/locations/{id}/reply-settings:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -1128,15 +1208,19 @@ paths:
       operationId: getLocationReplySettings
       summary: A location's reply settings
       description: |
-        The voice, localization preferences and policy the location's replies
-        are written with (FR-4, FR-5, D-093). They are the location's own and
-        complete: nothing is merged in from the knowledge base. A location
-        gets them when it is discovered, as a copy of the knowledge base's
-        defaults, and keeps them whatever client it is grouped under (D-102).
+        How the location's replies are written and checked, and when one is
+        posted by itself (FR-4, FR-5). They are the location's own and complete (D-107): nothing is merged
+        in from the knowledge base. A location gets them when it is
+        discovered, as a copy of the knowledge base's defaults, and keeps them
+        whatever client it is grouped under (D-102). The `ETag` covers every
+        member.
       tags: [settings]
       responses:
         "200":
-          description: The settings.
+          description: The settings, and their `ETag`.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -1146,28 +1230,36 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/ReplySettingsConflict"
+          $ref: "#/components/responses/SettingsConflict"
     put:
       operationId: replaceLocationReplySettings
       summary: Replace a location's reply settings
       description: |
-        Every field is sent, and what is stored is replaced whole (D-093).
-        Taking a voice template is filling the form from `GET /api/knowledge`
-        and saving; copying the settings to another location is this call
-        for that location. A change of what the models are asked means a new
+        Every member is sent, and what is stored is replaced whole (D-107),
+        with the `ETag` of what was read in `If-Match` (D-108). Taking a voice
+        template is filling the form from `GET /api/knowledge` and saving;
+        copying the settings to another location is this call for that
+        location.
+        A change of what the models are asked or the checks read means a new
         go-live test before the location auto replies again (D-074).
       tags: [settings]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ReplySettingsUpdate"
+              $ref: "#/components/schemas/ReplySettings"
       responses:
         "200":
-          description: The settings after the change.
+          description: |
+            The settings after the change, and their new `ETag`. A save that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -1181,7 +1273,11 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/ReplySettingsConflict"
+          $ref: "#/components/responses/SettingsConflict"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
 
   /api/knowledge:
     get:
@@ -1630,7 +1726,7 @@ paths:
         location's reviews without a person: drafts routed to `auto_reply`
         for the chosen star ratings, written from then on. It is refused
         (400) unless a star rating is chosen, the location is enabled and
-        accessible (D-102), and the reply policy's timing can be used (a posting
+        accessible (D-102), and the reply settings' timing can be used (a posting
         window needs `time_zone`). The global and the location's posting
         switch still apply on top, and nothing is posted by auto reply until the
         location's configuration has passed a go-live test (`go_live_state`,
@@ -2838,8 +2934,8 @@ paths:
       description: |
         Three to five ideas, from the location's reviews of the last 90
         days and their analysis, Google's performance figures and search
-        keywords, the recent posts, the industry profile, the voice and the
-        location's `audience`. A reviewer's name or photo is never given to
+        keywords, the recent posts, the industry profile, and the content
+        settings' `audience`. A reviewer's name or photo is never given to
         the model. Nothing is stored. The call waits for the model. Refused
         with fewer than 10 analysed reviews in the period.
       tags: [local-posts]
@@ -3732,10 +3828,14 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
-    ReplySettingsConflict:
+    SettingsConflict:
       description: |
-        `reply_settings_incomplete` (reading only): the stored settings lack
-        a field, which the message names; replacing them repairs it.
+        `settings_incomplete`: the stored content or reply settings can't be
+        read as they are; the message says which bundle and why. A `PUT`
+        answers the same, since a bundle that can't be read has no `ETag`.
+        The engine writes only complete rows (the defaults at discovery and
+        checked saves), so this is a fault to report, not a state to fix in
+        the form.
       content:
         application/json:
           schema:
@@ -4123,7 +4223,6 @@ components:
         - enabled
         - industry_key
         - analyze_from
-        - audience
         - title
         - store_code
         - primary_category
@@ -4193,12 +4292,6 @@ components:
             Only reviews written on or after this day (UTC) are analyzed and
             drafted on their own (D-102). Null, every review is. Staff can
             still ask for the analysis of an older review by hand.
-        audience:
-          type: string
-          description: |
-            Who the customers are, in a line written by staff (D-088). The
-            model reads it when it is asked for ideas and texts for local
-            posts. Empty when nobody has written one.
         title:
           type: string
         store_code:
@@ -4316,10 +4409,6 @@ components:
           type: [string, "null"]
           format: date
           description: As in `Location`; null for every review. Left out, it stays as it is.
-        audience:
-          type: string
-          maxLength: 500
-          description: As in `Location`.
         posting_enabled:
           type: boolean
           description: The location's kill switch. Off, no reply and no local post is sent to this location.
@@ -5144,7 +5233,7 @@ components:
           type: [object, "null"]
           description: |
             What shaped the prompt: the review as sent, the mode, the target
-            language, and the resolved voice, localization and policy. Null
+            language, and the location's content and reply settings. Null
             where drafts are embedded in reviews; `GET /api/reviews/{id}/drafts`
             has it.
           additionalProperties: true
@@ -5297,23 +5386,8 @@ components:
           type: boolean
           description: Off, the analyzer is not told about the flag and can't raise it.
 
-    # ---- voice, localization, policy ---------------------------------------------
+    # ---- a location's content and reply settings (D-107) ---------------------------
 
-    EmojiRule:
-      type: object
-      additionalProperties: false
-      required: [allowed, max, preferred]
-      properties:
-        allowed:
-          type: boolean
-        max:
-          type: integer
-          minimum: 0
-          maximum: 10
-        preferred:
-          type: array
-          items:
-            type: string
     LengthRange:
       type: object
       description: Characters.
@@ -5344,210 +5418,240 @@ components:
           $ref: "#/components/schemas/LengthRange"
         severity:
           $ref: "#/components/schemas/LengthRange"
-    Voice:
-      type: object
-      description: A complete brand voice (FR-4).
-      additionalProperties: false
-      required:
-        - reply_name
-        - business_facts
-        - sign_off
-        - owner_name
-        - emoji
-        - promos_allowed
-        - contact_allowed
-        - words_to_avoid
-        - length
-        - style_notes
-        - example_replies
-        - temperature
-        - base_style
-      properties:
-        reply_name:
-          type: string
-          description: How replies refer to the business. Empty, the location's title (D-102).
-        business_facts:
-          type: array
-          description: The only facts about the business the generator may rely on.
-          items:
-            type: string
-        sign_off:
-          type: string
-          description: May contain `{owner_name}`.
-        owner_name:
-          type: string
-        emoji:
-          $ref: "#/components/schemas/EmojiRule"
-        promos_allowed:
-          type: boolean
-          description: May a reply mention promotions, discounts or free items?
-        contact_allowed:
-          type: boolean
-          description: May a reply carry a phone number, an email address or a link?
-        words_to_avoid:
-          type: array
-          items:
-            type: string
-        length:
-          type: object
-          description: By reply language (`en`, `zh`, `es`).
-          additionalProperties:
-            $ref: "#/components/schemas/LengthLimits"
-        style_notes:
-          type: array
-          items:
-            type: string
-        example_replies:
-          type: array
-          description: Replies the business wrote itself. A tone reference, never copied.
-          items:
-            type: string
-        temperature:
-          type: number
-          minimum: 0
-          maximum: 2
-          description: |
-            The temperature the writer is asked with (D-074). Not part of
-            the prompt. A change needs a new go-live test.
-        base_style:
-          type: string
-          maxLength: 2000
-          description: |
-            One line the writer is given as the base of the style. Taking a
-            voice template fills it with the template's label and
-            description (D-080); empty, the writer is given none.
-    VoiceLayer:
+    ContentSettings:
       type: object
       description: |
-        The voice fields a voice template sets; a field that is absent is
-        left as it is by taking the template. `emoji` and `length` may be
-        partial too: `{"emoji": {"max": 1}}` changes only that number.
+        A location's content settings (D-107): what the business is, how it
+        sounds and who its customers are. Complete: the answer of a read and
+        the body of a save, sent whole. The reply writer reads every member
+        but `audience`; the help with local posts reads `base_style`, the
+        emoji members, `words_to_avoid`, `style_notes` and `audience`; the
+        report summary reads none.
       additionalProperties: false
+      required: [business_facts, base_style, emoji_allowed, emoji_max, emoji_preferred, words_to_avoid, style_notes, chinese_variant, english_variant, audience]
       properties:
-        reply_name:
-          type: string
         business_facts:
-          type: array
-          items:
-            type: string
-        sign_off:
           type: string
-        owner_name:
-          type: string
-        emoji:
-          type: object
-          additionalProperties: false
-          properties:
-            allowed:
-              type: boolean
-            max:
-              type: integer
-              minimum: 0
-              maximum: 10
-            preferred:
-              type: array
-              items:
-                type: string
-        promos_allowed:
-          type: boolean
-        contact_allowed:
-          type: boolean
-        words_to_avoid:
-          type: array
-          items:
-            type: string
-        length:
-          type: object
-          additionalProperties:
-            type: object
-            additionalProperties: false
-            properties:
-              rating_only:
-                $ref: "#/components/schemas/LengthRange"
-              positive:
-                $ref: "#/components/schemas/LengthRange"
-              complaint:
-                $ref: "#/components/schemas/LengthRange"
-              severity:
-                $ref: "#/components/schemas/LengthRange"
-        style_notes:
-          type: array
-          items:
-            type: string
-        example_replies:
-          type: array
-          items:
-            type: string
-        temperature:
-          type: number
-          minimum: 0
-          maximum: 2
+          maxLength: 2000
+          description: |
+            The only facts about the business the reply writer may rely on,
+            as typed (one line each, for example `- Open since 2019`).
+            Empty, there are none, and the writer is told so. Read by the
+            reply writer.
         base_style:
           type: string
           maxLength: 2000
+          description: |
+            One line the writers are given as the base of the style. Taking
+            a voice template fills it with the template's label and
+            description (D-080); empty, they are given none. Read by the
+            reply writer and the help with local posts.
+        emoji_allowed:
+          type: boolean
+          description: May a reply or a post use emoji? Read by the reply writer, its checks and the help with local posts.
+        emoji_max:
+          type: integer
+          minimum: 0
+          maximum: 10
+          description: At most this many emoji. Read by the reply writer, its checks and the help with local posts.
+        emoji_preferred:
+          type: array
+          maxItems: 50
+          description: The emoji to prefer. Read by the reply writer and the help with local posts.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2000
+        words_to_avoid:
+          type: array
+          maxItems: 50
+          description: Words and phrases never to use. Read by the reply writer and the help with local posts.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2000
+        style_notes:
+          type: array
+          maxItems: 50
+          description: Notes on the style, one per entry. Read by the reply writer and the help with local posts.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2000
+        chinese_variant:
+          type: [string, "null"]
+          enum: [zh-CN, zh-HK, zh-TW, null]
+          description: |
+            The Chinese a reply in Chinese is written in; null, not set: the
+            reply follows the script of the review. Read by the reply writer.
+        english_variant:
+          type: [string, "null"]
+          enum: [en-US, en-CA, null]
+          description: |
+            The spelling of a reply in English; null, not set (US spelling).
+            Read by the reply writer.
+        audience:
+          type: string
+          maxLength: 500
+          description: |
+            Who the customers are, in a line written by staff (D-088);
+            stored trimmed, empty when nobody wrote one. Read by the help
+            with local posts only.
+    ContentSettingsLayer:
+      type: object
+      description: The content settings a voice template sets; a member that is absent is left as it is by taking the template.
+      additionalProperties: false
+      properties:
+        business_facts:
+          type: string
+          maxLength: 2000
+          description: |
+            The only facts about the business the reply writer may rely on,
+            as typed (one line each, for example `- Open since 2019`).
+            Empty, there are none, and the writer is told so. Read by the
+            reply writer.
+        base_style:
+          type: string
+          maxLength: 2000
+          description: |
+            One line the writers are given as the base of the style. Taking
+            a voice template fills it with the template's label and
+            description (D-080); empty, they are given none. Read by the
+            reply writer and the help with local posts.
+        emoji_allowed:
+          type: boolean
+          description: May a reply or a post use emoji? Read by the reply writer, its checks and the help with local posts.
+        emoji_max:
+          type: integer
+          minimum: 0
+          maximum: 10
+          description: At most this many emoji. Read by the reply writer, its checks and the help with local posts.
+        emoji_preferred:
+          type: array
+          maxItems: 50
+          description: The emoji to prefer. Read by the reply writer and the help with local posts.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2000
+        words_to_avoid:
+          type: array
+          maxItems: 50
+          description: Words and phrases never to use. Read by the reply writer and the help with local posts.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2000
+        style_notes:
+          type: array
+          maxItems: 50
+          description: Notes on the style, one per entry. Read by the reply writer and the help with local posts.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2000
+        chinese_variant:
+          type: [string, "null"]
+          enum: [zh-CN, zh-HK, zh-TW, null]
+          description: |
+            The Chinese a reply in Chinese is written in; null, not set: the
+            reply follows the script of the review. Read by the reply writer.
+        english_variant:
+          type: [string, "null"]
+          enum: [en-US, en-CA, null]
+          description: |
+            The spelling of a reply in English; null, not set (US spelling).
+            Read by the reply writer.
+        audience:
+          type: string
+          maxLength: 500
+          description: |
+            Who the customers are, in a line written by staff (D-088);
+            stored trimmed, empty when nobody wrote one. Read by the help
+            with local posts only.
     ReplyLanguage:
       type: string
       enum: [en, zh, es]
       description: The languages the engine can check a reply in.
-    Localization:
+    ReplySettings:
       type: object
-      description: Complete localization preferences (FR-4, D-022).
+      description: |
+        A location's reply settings (D-107): how a reply to a review is
+        written and checked, and when it is posted by itself. Complete: the
+        answer of a read and the body of a save, sent whole.
       additionalProperties: false
-      required: [reply_languages, chinese_script, chinese_region, english_variant, fallback_language]
+      required: [reply_languages, fallback_language, signature, sign_off_name, length, example_replies, promos_allowed, contact_allowed, temperature, auto_reply_positive, auto_reply_rating_only, auto_reply_min_stars, auto_reply_delay_min_minutes, auto_reply_delay_max_minutes, auto_reply_window_start, auto_reply_window_end]
       properties:
         reply_languages:
           type: array
-          description: A review in one of these languages is answered in it; any other gets `fallback_language`.
+          description: |
+            A review in one of these languages is answered in it; any other
+            gets `fallback_language`. Read by the reply writer.
           minItems: 1
           items:
             $ref: "#/components/schemas/ReplyLanguage"
-        chinese_script:
-          type: string
-          enum: [match, simplified, traditional]
-          description: "`match`: the script the reviewer used."
-        chinese_region:
-          type: string
-          enum: [mainland, taiwan, hong_kong]
-          description: Phrasing of a Traditional reply.
-        english_variant:
-          type: string
-          enum: [us, ca]
         fallback_language:
           $ref: "#/components/schemas/ReplyLanguage"
-    PolicyRules:
-      type: object
-      description: The complete tiered reply policy (FR-5), with the timing of auto replies.
-      additionalProperties: false
-      required:
-        - auto_post_positive
-        - auto_post_rating_only
-        - auto_post_min_stars
-        - auto_post_delay_min_minutes
-        - auto_post_delay_max_minutes
-        - auto_post_window_start
-        - auto_post_window_end
-      properties:
-        auto_post_positive:
+        signature:
+          type: string
+          maxLength: 200
+          pattern: "^[^\\r\\n]*$"
+          description: |
+            The line a reply ends with, one line; empty, none. Read by the
+            reply writer.
+        sign_off_name:
+          type: string
+          maxLength: 200
+          description: |
+            Who signs the replies; empty, nobody. Stored for the sign-off
+            wording to come; no prompt reads it yet.
+        length:
+          type: object
+          description: Reply length by reply language (`en`, `zh`, `es`), each needed. Read by the reply writer and its checks.
+          additionalProperties:
+            $ref: "#/components/schemas/LengthLimits"
+        example_replies:
+          type: array
+          maxItems: 50
+          description: "Replies the business wrote itself: a tone reference for the reply writer, never copied."
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2000
+        promos_allowed:
+          type: boolean
+          description: May a reply mention promotions, discounts or free items? Read by the reply writer.
+        contact_allowed:
+          type: boolean
+          description: May a reply carry a phone number, an email address or a link? Read by the reply checks.
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+          description: |
+            The temperature the reply writer is asked with (D-074). Not part
+            of the prompt. A change needs a new go-live test.
+        auto_reply_positive:
           type: boolean
           description: A review with text, enough stars and no complaint goes to auto reply when every check passes.
-        auto_post_rating_only:
+        auto_reply_rating_only:
           type: boolean
           description: The same for a review without text.
-        auto_post_min_stars:
+        auto_reply_min_stars:
           type: integer
           minimum: 1
           maximum: 5
           description: Reviews below this many stars always wait for a person.
-        auto_post_delay_min_minutes:
+        auto_reply_delay_min_minutes:
           type: integer
           minimum: 0
           maximum: 1440
           description: An auto reply waits a random time between this and the maximum, so replies look human. 0 and 0, no delay.
-        auto_post_delay_max_minutes:
+        auto_reply_delay_max_minutes:
           type: integer
           minimum: 0
           maximum: 1440
-        auto_post_window_start:
+        auto_reply_window_start:
           type: string
           pattern: "^(([01][0-9]|2[0-3]):[0-5][0-9])?$"
           description: |
@@ -5555,50 +5659,94 @@ components:
             none. A reply due outside it moves into the next one. A start
             later than the end crosses midnight. A window needs the
             location's time zone (`AutoPosting.time_zone`).
-        auto_post_window_end:
+        auto_reply_window_end:
           type: string
           pattern: "^(([01][0-9]|2[0-3]):[0-5][0-9])?$"
-    ReplySettings:
+    ReplySettingsLayer:
       type: object
-      description: What a location's replies are written with (D-093).
+      description: The reply settings a voice template sets; a member that is absent is left as it is by taking the template.
       additionalProperties: false
-      required: [location_id, location_title, client_id, client_name, industry_key, voice, localization, policy, updated_at]
       properties:
-        location_id:
+        reply_languages:
+          type: array
+          description: |
+            A review in one of these languages is answered in it; any other
+            gets `fallback_language`. Read by the reply writer.
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ReplyLanguage"
+        fallback_language:
+          $ref: "#/components/schemas/ReplyLanguage"
+        signature:
+          type: string
+          maxLength: 200
+          pattern: "^[^\\r\\n]*$"
+          description: |
+            The line a reply ends with, one line; empty, none. Read by the
+            reply writer.
+        sign_off_name:
+          type: string
+          maxLength: 200
+          description: |
+            Who signs the replies; empty, nobody. Stored for the sign-off
+            wording to come; no prompt reads it yet.
+        length:
+          type: object
+          description: Reply length by reply language (`en`, `zh`, `es`), each needed. Read by the reply writer and its checks.
+          additionalProperties:
+            $ref: "#/components/schemas/LengthLimits"
+        example_replies:
+          type: array
+          maxItems: 50
+          description: "Replies the business wrote itself: a tone reference for the reply writer, never copied."
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2000
+        promos_allowed:
+          type: boolean
+          description: May a reply mention promotions, discounts or free items? Read by the reply writer.
+        contact_allowed:
+          type: boolean
+          description: May a reply carry a phone number, an email address or a link? Read by the reply checks.
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+          description: |
+            The temperature the reply writer is asked with (D-074). Not part
+            of the prompt. A change needs a new go-live test.
+        auto_reply_positive:
+          type: boolean
+          description: A review with text, enough stars and no complaint goes to auto reply when every check passes.
+        auto_reply_rating_only:
+          type: boolean
+          description: The same for a review without text.
+        auto_reply_min_stars:
           type: integer
-          format: int64
-        location_title:
+          minimum: 1
+          maximum: 5
+          description: Reviews below this many stars always wait for a person.
+        auto_reply_delay_min_minutes:
+          type: integer
+          minimum: 0
+          maximum: 1440
+          description: An auto reply waits a random time between this and the maximum, so replies look human. 0 and 0, no delay.
+        auto_reply_delay_max_minutes:
+          type: integer
+          minimum: 0
+          maximum: 1440
+        auto_reply_window_start:
           type: string
-        client_id:
-          type: [integer, "null"]
-          format: int64
-          description: The client the location is grouped under, for display only; null when it has none.
-        client_name:
-          type: [string, "null"]
-        industry_key:
-          type: [string, "null"]
-          description: The location's industry (`Location.industry_key`); null, the location's reviews are not analyzed.
-        voice:
-          $ref: "#/components/schemas/Voice"
-        localization:
-          $ref: "#/components/schemas/Localization"
-        policy:
-          $ref: "#/components/schemas/PolicyRules"
-        updated_at:
+          pattern: "^(([01][0-9]|2[0-3]):[0-5][0-9])?$"
+          description: |
+            The posting window in the location's local time, `HH:MM`; empty,
+            none. A reply due outside it moves into the next one. A start
+            later than the end crosses midnight. A window needs the
+            location's time zone (`AutoPosting.time_zone`).
+        auto_reply_window_end:
           type: string
-          format: date-time
-    ReplySettingsUpdate:
-      type: object
-      description: A location's complete reply settings; every field of every part is sent.
-      additionalProperties: false
-      required: [voice, localization, policy]
-      properties:
-        voice:
-          $ref: "#/components/schemas/Voice"
-        localization:
-          $ref: "#/components/schemas/Localization"
-        policy:
-          $ref: "#/components/schemas/PolicyRules"
+          pattern: "^(([01][0-9]|2[0-3]):[0-5][0-9])?$"
 
     # ---- pipeline settings and LLM usage -----------------------------------------
 
@@ -5707,7 +5855,7 @@ components:
     KnowledgeVoiceTemplate:
       type: object
       additionalProperties: false
-      required: [key, label, description, voice]
+      required: [key, label, description, content, reply]
       properties:
         key:
           type: string
@@ -5715,23 +5863,23 @@ components:
           type: string
         description:
           type: string
-          description: With the label, what `Voice.base_style` becomes when the template is taken.
-        voice:
-          $ref: "#/components/schemas/VoiceLayer"
+          description: With the label, what `ContentSettings.base_style` becomes when the template is taken.
+        content:
+          $ref: "#/components/schemas/ContentSettingsLayer"
+        reply:
+          $ref: "#/components/schemas/ReplySettingsLayer"
     KnowledgeDefaults:
       type: object
       description: |
-        What every location starts from when it is discovered (D-093, D-102), and the default of
-        every analysis setting.
+        What every location starts from when it is discovered (D-102, D-107): its content and
+        reply settings, and the default of every analysis setting.
       additionalProperties: false
-      required: [voice, localization, policy, analysis]
+      required: [content, reply, analysis]
       properties:
-        voice:
-          $ref: "#/components/schemas/Voice"
-        localization:
-          $ref: "#/components/schemas/Localization"
-        policy:
-          $ref: "#/components/schemas/PolicyRules"
+        content:
+          $ref: "#/components/schemas/ContentSettings"
+        reply:
+          $ref: "#/components/schemas/ReplySettings"
         analysis:
           type: object
           description: By the names of `AiSettings`' fields.
@@ -5851,7 +5999,7 @@ components:
           type: number
           minimum: 0
           maximum: 2
-          description: The writer's temperature is a field of the voice (`Voice.temperature`).
+          description: The writer's temperature is a reply setting (`ReplySettings.temperature`).
         analyzer_send_temperature:
           type: boolean
           description: Off, the analyzer's requests carry no temperature, for a model that refuses one.
@@ -6713,7 +6861,7 @@ components:
       description: |
         Auto reply at one location (D-069). `enabled` and the
         star ratings are a person's switches, off after installation. The
-        delay and the window come from the location's resolved reply policy
+        delay and the window come from the location's reply settings
         and are changed there. `paused` is set by the engine and lifted by a
         person.
       additionalProperties: false

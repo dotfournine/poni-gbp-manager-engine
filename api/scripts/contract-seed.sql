@@ -19,12 +19,25 @@ SELECT 'contract-location-1', 'contract-account-1', c.id, true, 'Contract Check 
  WHERE c.name = 'Contract Check Spa'
 ON CONFLICT (gbp_location_id) DO NOTHING;
 
--- The location's reply settings (D-093): what discovery gives every
--- location, a copy of the knowledge base's defaults (D-102). The knowledge
--- base is seeded by the time this file is applied.
-INSERT INTO reply_settings (location_id, voice, localization, policy, created_at, updated_at)
-SELECT l.id, d.voice, d.localization, d.policy, now(), now()
-  FROM locations l, kb_defaults d
+-- The location's content and reply settings (D-107): what discovery gives
+-- every location, copies of the knowledge base's defaults (D-102). The
+-- knowledge base is seeded by the time this file is applied.
+INSERT INTO content_settings (location_id, business_facts, base_style, emoji_allowed, emoji_max, emoji_preferred, words_to_avoid, style_notes, chinese_variant,
+                              english_variant, audience, created_at, updated_at)
+SELECT l.id, d.business_facts, d.base_style, d.emoji_allowed, d.emoji_max, d.emoji_preferred, d.words_to_avoid,
+       d.style_notes, d.chinese_variant, d.english_variant, d.audience, now(), now()
+  FROM locations l, kb_content_defaults d
+ WHERE l.gbp_location_id = 'contract-location-1'
+ON CONFLICT (location_id) DO NOTHING;
+
+INSERT INTO reply_settings (location_id, reply_languages, fallback_language, signature, sign_off_name, length, example_replies, promos_allowed, contact_allowed,
+                            temperature, auto_reply_positive, auto_reply_rating_only, auto_reply_min_stars, auto_reply_delay_min_minutes,
+                            auto_reply_delay_max_minutes, auto_reply_window_start, auto_reply_window_end, created_at, updated_at)
+SELECT l.id, d.reply_languages, d.fallback_language, d.signature, d.sign_off_name, d.length, d.example_replies,
+       d.promos_allowed, d.contact_allowed, d.temperature, d.auto_reply_positive, d.auto_reply_rating_only,
+       d.auto_reply_min_stars, d.auto_reply_delay_min_minutes, d.auto_reply_delay_max_minutes,
+       d.auto_reply_window_start, d.auto_reply_window_end, now(), now()
+  FROM locations l, kb_reply_defaults d
  WHERE l.gbp_location_id = 'contract-location-1'
 ON CONFLICT (location_id) DO NOTHING;
 
