@@ -190,8 +190,8 @@ def test_changed_content_under_the_same_version_is_refused(migrated, kb):
 
 def location(conn, title, industry, enabled=True):
     conn.execute(
-        "INSERT INTO locations (gbp_location_id, gbp_account_id, title, industry_key, enabled, raw, first_seen_at, "
-        "last_seen_at, updated_at) VALUES (%s, 'a1', %s, %s, %s, '{}', now(), now(), now())",
+        "INSERT INTO locations (gbp_location_id, gbp_account_id, title, industry_key, enabled, time_zone, raw, "
+        "first_seen_at, last_seen_at, updated_at) VALUES (%s, 'a1', %s, %s, %s, 'America/New_York', '{}', now(), now(), now())",
         (f"loc-{title}", title, industry, enabled),
     )
 
