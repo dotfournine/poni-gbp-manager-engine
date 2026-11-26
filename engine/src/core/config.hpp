@@ -128,8 +128,10 @@ struct Config {
     std::string gbp_oauth_client_id;
     std::string gbp_oauth_client_secret;
     std::chrono::seconds location_discovery_interval{900};
-    // How often the review poll job runs; each location has its own interval on top.
+    // How often the review poll job runs; it polls the locations whose poll is due.
     std::chrono::seconds review_poll_tick{60};
+    // How long after its last poll a location's reviews are polled again, for every location (D-112).
+    std::chrono::seconds review_poll_interval{120};
     std::chrono::seconds review_full_sync_interval{3600};
     // How often the staff check reads the Workspace directory's list (D-106 point 4).
     std::chrono::seconds staff_check_interval{300};

@@ -295,15 +295,16 @@ void mark_reviews_seen(pqxx::transaction_base& tx, std::int64_t location_id, con
         .no_rows();
 }
 
-void finish_poll(pqxx::transaction_base& tx, const std::vector<std::int64_t>& location_ids, core::TimePoint now) {
+void finish_poll(pqxx::transaction_base& tx, const std::vector<std::int64_t>& location_ids, core::TimePoint now,
+                 std::chrono::seconds poll_interval) {
     if (location_ids.empty()) return;
     tx.exec(R"sql(
         UPDATE locations
            SET reviews_polled_at = $2::timestamptz,
-               next_review_poll_at = $2::timestamptz + make_interval(secs => review_poll_interval_s),
+               next_review_poll_at = $2::timestamptz + make_interval(secs => $3),
                last_sync_error = NULL, last_sync_error_at = NULL
          WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb)::bigint))sql",
-            pqxx::params{db::json_list(location_ids), to_timestamptz(now)})
+            pqxx::params{db::json_list(location_ids), to_timestamptz(now), poll_interval.count()})
         .no_rows();
 }
 
@@ -320,15 +321,15 @@ void finish_full_sync(pqxx::transaction_base& tx, std::int64_t location_id, cons
 }
 
 void record_sync_error(pqxx::transaction_base& tx, const std::vector<std::int64_t>& location_ids, std::string_view error,
-                       core::TimePoint now, bool reschedule_poll) {
+                       core::TimePoint now, std::chrono::seconds poll_interval, bool reschedule_poll) {
     if (location_ids.empty()) return;
     tx.exec(R"sql(
         UPDATE locations
            SET last_sync_error = $2, last_sync_error_at = $3::timestamptz,
-               next_review_poll_at = CASE WHEN $4 THEN $3::timestamptz + make_interval(secs => review_poll_interval_s)
+               next_review_poll_at = CASE WHEN $4 THEN $3::timestamptz + make_interval(secs => $5)
                                           ELSE next_review_poll_at END
          WHERE id IN (SELECT jsonb_array_elements_text($1::jsonb)::bigint))sql",
-            pqxx::params{db::json_list(location_ids), std::string(error), to_timestamptz(now), reschedule_poll})
+            pqxx::params{db::json_list(location_ids), std::string(error), to_timestamptz(now), reschedule_poll, poll_interval.count()})
         .no_rows();
 }
 

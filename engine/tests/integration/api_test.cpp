@@ -256,24 +256,23 @@ TEST_F(Api, ARefusedLocationChangeChangesNothing) {
     patch(std::format("/api/clients/{}", archived), R"({"archived": true})");
     const auto entries_before = count("audit_log");
 
-    // The interval is fine but the client isn't: neither is applied.
-    const auto refused = patch("/api/locations/" + spa, R"({"review_poll_interval_s": 300, "client_id": 999})");
+    // The audience is fine but the client isn't: neither is applied.
+    const auto refused = patch("/api/locations/" + spa, R"({"audience": "Spa guests", "client_id": 999})");
     EXPECT_EQ(refused.status, 409u);
     EXPECT_EQ(error_code(refused), "client_not_found");
     EXPECT_EQ(patch("/api/locations/" + spa, std::format(R"({{"client_id": {}}})", archived)).status, 409u);
-    EXPECT_EQ(patch("/api/locations/" + spa, R"({"review_poll_interval_s": 5})").status, 400u);
     EXPECT_EQ(patch("/api/locations/" + spa, R"({"client_id": "one"})").status, 400u);
     EXPECT_EQ(patch("/api/locations/" + spa, R"({"enabled": true, "industry_key": "no_such_industry"})").status, 400u);
     EXPECT_EQ(patch("/api/locations/" + spa, R"({"enabled": true, "analyze_from": "2026-02-30"})").status, 400u);
     EXPECT_EQ(patch("/api/locations/" + spa, R"({"enabled": true, "audience": ")" + std::string(501, 'x') + R"("})").status, 400u);
     EXPECT_EQ(patch("/api/locations/12345", R"({"client_id": null})").status, 404u);
 
-    EXPECT_EQ(read("/api/locations/" + spa).at("review_poll_interval_s").as_int64(), 120);
+    EXPECT_EQ(read("/api/locations/" + spa).at("audience").as_string(), "");
     EXPECT_FALSE(read("/api/locations/" + spa).at("enabled").as_bool());
     EXPECT_EQ(count("audit_log"), entries_before);
 
-    ASSERT_EQ(patch("/api/locations/" + spa, R"({"review_poll_interval_s": 300})").status, 200u);
-    EXPECT_EQ(read("/api/audit-log?action=location.update").at("items").at(0).at("after").at("review_poll_interval_s").as_int64(), 300);
+    ASSERT_EQ(patch("/api/locations/" + spa, R"({"audience": "Spa guests"})").status, 200u);
+    EXPECT_EQ(read("/api/audit-log?action=location.update").at("items").at(0).at("after").at("audience").as_string(), "Spa guests");
 }
 
 TEST_F(Api, DiscoveryCanBeRequestedAndRunsAsAJob) {
@@ -435,7 +434,7 @@ TEST_F(Api, SystemStatusShowsTokenSyncAndFailedJobs) {
         pqxx::work tx{conn};
         repo::save_gbp_credentials(tx, box, {"id", "secret", "refresh"}, clock_.now());
         repo::mark_integration_error(tx, repo::kGbpTokenStatus, "HTTP 400 invalid_grant", clock_.now());
-        repo::record_sync_error(tx, {location_id("9002")}, "HTTP 403 PERMISSION_DENIED", clock_.now(), false);
+        repo::record_sync_error(tx, {location_id("9002")}, "HTTP 403 PERMISSION_DENIED", clock_.now(), 120s, false);
         tx.exec("INSERT INTO jobs (kind, status, run_at, attempts, last_error, created_at, updated_at, finished_at) "
                 "VALUES ('reviews.full_sync', 'failed', $1::timestamptz, 5, 'boom', $1::timestamptz, $1::timestamptz, $1::timestamptz)",
                 pqxx::params{db::to_timestamptz(clock_.now())});

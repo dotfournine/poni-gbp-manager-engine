@@ -78,12 +78,11 @@ struct LocationPatch {
     core::Nullable<std::string> analyze_from;
     // Who the customers are: at most 500 characters.
     std::optional<std::string> audience;
-    std::optional<int> review_poll_interval_s;
     // The location's kill switch for posting.
     std::optional<bool> posting_enabled;
 };
 BOOST_DESCRIBE_STRUCT(LocationPatch, (),
-                      (client_id, enabled, industry_key, analyze_from, audience, review_poll_interval_s, posting_enabled))
+                      (client_id, enabled, industry_key, analyze_from, audience, posting_enabled))
 
 model::LocationList list_locations(pqxx::transaction_base& tx, const LocationFilter& filter);
 std::optional<model::Location> get_location(pqxx::transaction_base& tx, std::int64_t id);

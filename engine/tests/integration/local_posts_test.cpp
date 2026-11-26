@@ -703,7 +703,7 @@ TEST_F(LocalPosts, ALocationSaysWhoItsCustomersAre) {
     const auto changed = patch(target, R"({"audience": "  Office workers nearby, many of them Mandarin speakers.  "})");
     ASSERT_EQ(changed.status, 200u) << changed.body;
     EXPECT_EQ(json(changed).at("audience").as_string(), "Office workers nearby, many of them Mandarin speakers.");
-    EXPECT_EQ(json(patch(target, R"({"review_poll_interval_s": 600})")).at("audience").as_string(),
+    EXPECT_EQ(json(patch(target, R"({"analyze_from": "2026-01-01"})")).at("audience").as_string(),
               "Office workers nearby, many of them Mandarin speakers.")
         << "a field that isn't sent stays";
 

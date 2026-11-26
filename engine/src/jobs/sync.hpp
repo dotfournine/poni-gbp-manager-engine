@@ -46,9 +46,11 @@ inline constexpr std::string_view kPullNotificationsKind = "notifications.pull";
 
 struct SyncOptions {
     std::chrono::seconds discovery_interval{900};
-    // How often the poll job runs. Each location has its own interval
-    // (locations.review_poll_interval_s); the job polls those that are due.
+    // How often the poll job runs; it polls the locations that are due
+    // (locations.next_review_poll_at).
     std::chrono::seconds poll_tick{60};
+    // How long after its last poll, or its last failed poll, a location is due again (D-112).
+    std::chrono::seconds review_poll_interval{120};
     std::chrono::seconds full_sync_interval{3600};
     std::chrono::seconds notification_pull_interval{30};
 };
