@@ -4730,10 +4730,15 @@ components:
           description: |
             The listing of the managing account's locations, and the read of
             each new location's time zone from Google Places (D-109). A
-            failure of either applies nothing and shows here. A new location
-            that is not on Google Maps yet is left out, everything else is
-            applied, and `last_error` names it: "<title> is not on Google
-            Maps yet, so its time zone is not known; it is added once it is".
+            failure of either applies nothing and shows here, with a
+            `last_error_at` later than `last_ok_at`. A new location that is
+            not on Google Maps yet is left out, everything else is applied,
+            and `last_error` names it beside the success, at the same moment
+            (`last_ok_at` equals `last_error_at`: applied, with a note):
+            "<title> is not on Google Maps yet, so its time zone is not known;
+            it is added once it is", or for several, "<title>, <title> are not
+            on Google Maps yet, so their time zones are not known; they are
+            added once they are".
         pubsub:
           $ref: "#/components/schemas/PubsubStatus"
         ai:
