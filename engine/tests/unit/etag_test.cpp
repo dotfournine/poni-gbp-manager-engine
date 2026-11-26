@@ -28,6 +28,8 @@ TEST(Etag, IsTheQuotedSha256OfTheMembersInTheirOrder) {
 TEST(Etag, IfMatchTakesTheOneStrongTagAndWhatCaddysCompressionMakesOfIt) {
     const auto tag = core::etag({{"name", "x"}});
     const auto hex = tag.substr(1, 64);
+    // The same hex with its last digit changed: 64 digits, so only the comparison of the digits refuses it.
+    const auto other_hex = hex.substr(0, 63) + (hex.back() == '0' ? "1" : "0");
     EXPECT_TRUE(if_match_accepts(tag, tag));
     EXPECT_TRUE(if_match_accepts("  " + tag + " \t", tag)) << "spaces around it";
     // Caddy's `encode zstd gzip` (v2.11.9) answers "<hex>-gzip" or "<hex>-zstd" for a response it compresses.
@@ -47,7 +49,8 @@ TEST(Etag, IfMatchTakesTheOneStrongTagAndWhatCaddysCompressionMakesOfIt) {
              "\"" + hex + "-br\"",                   // an encoding the site does not use
              "\"" + hex + "-gzip-gzip\"",            // twice
              "\"" + hex + "gzip\"",                  // without the dash
-             "\"" + hex.substr(1) + "-gzip\"",       // another hex of the same length
+             "\"" + other_hex + "-gzip\"",           // another tag's hex, compressed
+             "\"" + other_hex + "-zstd\"",
              "\"" + hex + "\"x",                     // something after it
          }) {
         EXPECT_FALSE(if_match_accepts(refused, tag)) << "[" << refused << "]";

@@ -202,7 +202,7 @@ TEST_F(Api, AClientIsChangedOnlyAgainstTheEtagItsReaderHad) {
     EXPECT_EQ(audited(), after_rename + 1);
 }
 
-TEST_F(Api, AClientsEtagIsNotChangedByWhatTheEngineWrites) {
+TEST_F(Api, AClientsEtagIsNotChangedByALinkMadeThroughTheLocation) {
     discover_spa_and_buffet();
     const auto id = json(post("/api/clients", R"({"name": "LU DREAM SPA"})")).at("id").as_int64();
     const auto path = std::format("/api/clients/{}", id);
