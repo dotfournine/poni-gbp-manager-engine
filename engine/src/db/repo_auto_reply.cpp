@@ -19,7 +19,7 @@ using OptString = std::optional<std::string>;
 
 // What a location's row does not hold: whether the reply settings' timing
 // can be used, and the state of the go-live test from its runs (complete).
-const db::FilledLater kFromSettingsAndGoLive{"timing_problem", "go_live_state"};
+db::FilledLater from_settings_and_go_live() { return db::FilledLater{"timing_problem", "go_live_state"}; }
 
 // $1: the start of the daily cap's window.
 std::string location_select() {
@@ -120,7 +120,7 @@ namespace {
 std::optional<model::AutoReplyLocation> get_location(pqxx::transaction_base& tx, std::int64_t location_id, core::TimePoint now) {
     auto row = db::row_as<model::AutoReplyLocation>(tx, location_select() + " WHERE l.id = $2",
                                                     pqxx::params{to_timestamptz(now - kAutoReplyCapWindow), location_id},
-                                                    kFromSettingsAndGoLive);
+                                                    from_settings_and_go_live());
     if (!row) return std::nullopt;
     return complete(tx, std::move(*row));
 }
@@ -138,7 +138,7 @@ model::AutoReplyStatus auto_reply_overview(pqxx::transaction_base& tx, core::Tim
         {}, db::FilledLater{"locations"});
     for (auto& row : db::rows_as<model::AutoReplyLocation>(tx, location_select() + " WHERE l.enabled ORDER BY lower(l.title), l.id",
                                                            pqxx::params{to_timestamptz(now - kAutoReplyCapWindow)},
-                                                           kFromSettingsAndGoLive)) {
+                                                           from_settings_and_go_live())) {
         out.locations.push_back(complete(tx, std::move(row)));
     }
     return out;
