@@ -3568,8 +3568,10 @@ components:
         that form is the same tag and may be sent back as it came.
 
         A thing that does not exist is a 404 whatever this header says,
-        and a body that is not valid is a 400 before the header is looked
-        at. A list carries no `ETag`: a client changes a thing from its
+        and a body the engine cannot read (a member the schema does not
+        list, a wrong type, a `null` where none is allowed) is a 400 before
+        the header is looked at. The body's limits (a length, a range) are
+        checked with the change, after the header. A list carries no `ETag`: a client changes a thing from its
         single `GET`. An endpoint that does not list this parameter
         ignores the header.
       schema:
