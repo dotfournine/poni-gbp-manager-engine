@@ -95,6 +95,33 @@ def corpus_version(corpus: dict) -> str:
     return hashlib.sha256(canonical(corpus["cases"]).encode()).hexdigest()[:12]
 
 
+def _insert_templates_and_defaults(conn: psycopg.Connection, kb: Knowledge) -> None:
+    """The voice templates and the defaults, each bundle a row of its own (D-107)."""
+    for position, (key, template) in enumerate(sorted(kb.voices.items())):
+        conn.execute(
+            "INSERT INTO kb_voice_templates (key, position, label, description, content, reply) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (
+                key,
+                position,
+                template["label"],
+                template["description"],
+                Jsonb(template["content"]),
+                Jsonb(template["reply"]),
+            ),
+        )
+    defaults = kb.defaults
+    conn.execute("INSERT INTO kb_defaults (analysis) VALUES (%s)", (Jsonb(defaults["analysis"]),))
+    # One typed column per member, as a location's own rows have them (D-107); a list is a text[].
+    for table, bundle in (("kb_content_defaults", defaults["content"]), ("kb_reply_defaults", defaults["reply"])):
+        columns = list(bundle)
+        values = [Jsonb(bundle[c]) if c == "length" else bundle[c] for c in columns]
+        conn.execute(
+            f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join(['%s'] * len(columns))})",
+            values,
+        )
+
+
 def seed(conn: psycopg.Connection, kb: Knowledge, now: datetime.datetime | None = None) -> Seeded:
     problems = check(kb)
     if problems:
@@ -175,29 +202,7 @@ def seed(conn: psycopg.Connection, kb: Knowledge, now: datetime.datetime | None 
                         Jsonb(case["expect"]),
                     ),
                 )
-        for position, (key, template) in enumerate(sorted(kb.voices.items())):
-            conn.execute(
-                "INSERT INTO kb_voice_templates (key, position, label, description, content, reply) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
-                (
-                    key,
-                    position,
-                    template["label"],
-                    template["description"],
-                    Jsonb(template["content"]),
-                    Jsonb(template["reply"]),
-                ),
-            )
-        defaults = kb.defaults
-        conn.execute("INSERT INTO kb_defaults (analysis) VALUES (%s)", (Jsonb(defaults["analysis"]),))
-        # One typed column per member, as a location's own rows have them (D-107); a list is a text[].
-        for table, bundle in (("kb_content_defaults", defaults["content"]), ("kb_reply_defaults", defaults["reply"])):
-            columns = list(bundle)
-            values = [Jsonb(bundle[c]) if c == "length" else bundle[c] for c in columns]
-            conn.execute(
-                f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join(['%s'] * len(columns))})",
-                values,
-            )
+        _insert_templates_and_defaults(conn, kb)
         for model, price in sorted(kb.models["prices"].items()):
             conn.execute(
                 "INSERT INTO kb_model_prices (model, input_per_mtok, output_per_mtok) VALUES (%s, %s, %s)",

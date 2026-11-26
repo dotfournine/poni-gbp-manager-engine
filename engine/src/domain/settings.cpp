@@ -58,7 +58,7 @@ std::optional<std::string> check_length(const std::map<std::string, LengthLimits
 
 std::optional<std::string> check_auto_reply(const ReplySettings& s) {
     if (s.auto_reply_min_stars < 1 || s.auto_reply_min_stars > 5) return "'auto_reply_min_stars' must be between 1 and 5";
-    constexpr std::int64_t day = 24 * 60;
+    constexpr std::int64_t day = std::int64_t{24} * 60;
     if (s.auto_reply_delay_min_minutes < 0 || s.auto_reply_delay_min_minutes > day || s.auto_reply_delay_max_minutes < 0 ||
         s.auto_reply_delay_max_minutes > day) {
         return "'auto_reply_delay_min_minutes' and 'auto_reply_delay_max_minutes' must be between 0 and 1440";
