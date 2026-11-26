@@ -236,6 +236,11 @@ TEST_F(SyncTest, ALocationNotOnMapsYetWaitsAndTheRestIsApplied) {
     EXPECT_EQ(count("locations WHERE gbp_location_id = '9003' AND missed_discoveries = 1"), 1) << "a missing one is counted";
     EXPECT_EQ(value<std::string>("SELECT last_error FROM integration_status WHERE name = 'location_discovery'"),
               "Waiting Buffet is not on Google Maps yet, so its time zone is not known; it is added once it is");
+    // Applied, with a note: the success moved, at the same moment as the note.
+    EXPECT_EQ(count(std::format("integration_status WHERE name = 'location_discovery' AND last_ok_at = '{}'::timestamptz "
+                                "AND last_error_at = last_ok_at AND (detail->>'locations')::int = 3",
+                                db::to_timestamptz(clock_.now()))),
+              1);
     EXPECT_EQ(std::ranges::count(places_.asked, std::string("place-9005")), 1);
 
     const auto entries = [&] { return count("audit_log WHERE action = 'location.discovery_deferred'"); };
@@ -249,9 +254,19 @@ TEST_F(SyncTest, ALocationNotOnMapsYetWaitsAndTheRestIsApplied) {
                                           {"title", "Waiting Buffet"},
                                           {"reason", "not on Google Maps yet: no place id"}}));
 
+    // A second one waits too, and the first is listed twice, as under two accounts: each is named once.
+    gbp_.add_location("9006", "Waiting Nails");
+    gbp_.locations.back().metadata->placeId.reset();
+    gbp_.locations.push_back(gbp_.locations[gbp_.locations.size() - 3]);
     clock_.advance(15min);
     await(sync_->discover_locations());
-    EXPECT_EQ(entries(), 1) << "once per location, not once per run";
+    EXPECT_EQ(value<std::string>("SELECT last_error FROM integration_status WHERE name = 'location_discovery'"),
+              "Waiting Buffet, Waiting Nails are not on Google Maps yet, so their time zones are not known; they are added once they are");
+    EXPECT_EQ(count("integration_status WHERE name = 'location_discovery' AND last_error_at = last_ok_at"), 1);
+    EXPECT_EQ(entries(), 2) << "once per location, not once per run";
+    EXPECT_EQ(count("audit_log WHERE action = 'location.discovery_deferred' AND object_id = '9004'"), 1);
+    gbp_.locations.pop_back();
+    gbp_.locations.pop_back();
 
     // Google gives it a place id: the next run adds it like any new location.
     gbp_.locations[gbp_.locations.size() - 2].metadata->placeId = "place-9004";
@@ -261,7 +276,7 @@ TEST_F(SyncTest, ALocationNotOnMapsYetWaitsAndTheRestIsApplied) {
     EXPECT_EQ(count("audit_log WHERE action = 'location.discovered' AND object_id = "
                     "(SELECT id::text FROM locations WHERE gbp_location_id = '9004')"),
               1);
-    EXPECT_EQ(entries(), 1);
+    EXPECT_EQ(entries(), 2);
     EXPECT_EQ(count("integration_status WHERE name = 'location_discovery' AND last_error IS NULL"), 1);
 }
 

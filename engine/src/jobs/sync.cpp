@@ -78,22 +78,29 @@ asio::awaitable<void> Sync::discover_locations() {
     }
 
     // What the status page shows while a location waits for Google Maps; everything else is applied.
-    const auto waiting_count = deferred.size();
-    std::string waiting;
+    // Each title once: a location Google lists under two accounts is one location.
+    std::vector<std::string> titles;
     for (const auto& location : deferred) {
-        waiting += std::format("{}{}", waiting.empty() ? "" : ", ", location.location.title.value_or(location.location.name));
+        auto title = location.location.title.value_or(location.location.name);
+        if (std::ranges::find(titles, title) == titles.end()) titles.push_back(std::move(title));
     }
-    if (!waiting.empty()) waiting += " is not on Google Maps yet, so its time zone is not known; it is added once it is";
+    const auto waiting_count = titles.size();
+    std::string waiting;
+    for (const auto& title : titles) waiting += std::format("{}{}", waiting.empty() ? "" : ", ", title);
+    if (titles.size() == 1) {
+        waiting += " is not on Google Maps yet, so its time zone is not known; it is added once it is";
+    } else if (titles.size() > 1) {
+        waiting += " are not on Google Maps yet, so their time zones are not known; they are added once they are";
+    }
 
     const auto account_count = accounts->size();
     const auto outcome =
         co_await db_.tx([seen = std::move(seen), deferred = std::move(deferred), waiting, now, account_count](pqxx::work& tx) {
             const auto result = repo::apply_discovery(tx, seen, deferred, now);
-            if (waiting.empty()) {
-                repo::mark_integration_ok(tx, repo::kDiscoveryStatus, now, {{"accounts", account_count}, {"locations", result.seen}});
-            } else {
-                repo::mark_integration_error(tx, repo::kDiscoveryStatus, waiting, now);
-            }
+            repo::mark_integration_ok(tx, repo::kDiscoveryStatus, now, {{"accounts", account_count}, {"locations", result.seen}});
+            // The listing was applied: the note goes beside the success at the same moment, so
+            // last_ok_at == last_error_at reads "applied, with a note" and a later error is a failure.
+            if (!waiting.empty()) repo::mark_integration_error(tx, repo::kDiscoveryStatus, waiting, now);
             return result;
         });
     log::info("locations discovered", {{"accounts", account_count},
