@@ -16,7 +16,7 @@
 #include "domain/go_live.hpp"
 #include "domain/industry.hpp"
 #include "domain/models.hpp"
-#include "domain/reply_settings.hpp"
+#include "domain/settings.hpp"
 
 #include <pqxx/pqxx>
 
@@ -63,8 +63,8 @@ struct GoLiveSetup {
 struct NoSetup {
     // As a sentence, for the page.
     std::string reason;
-    // Set when the location's stored reply settings can't be read (there is
-    // no row, or a part lacks a field), in the reader's own words. A save is
+    // Set when the location's stored settings can't be read (a bundle has
+    // no row, or a row lacks a member), in the reader's own words. A save is
     // checked and discovery writes complete settings, so it is a fault to raise
     // and not a state a location can be in.
     std::optional<std::string> settings_error;

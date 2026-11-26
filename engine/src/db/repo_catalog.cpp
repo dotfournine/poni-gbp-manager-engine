@@ -60,7 +60,7 @@ boost::json::object client_json(const std::string& name, const std::string& note
 std::string location_select() {
     return std::format(R"sql(
         SELECT l.id, l.gbp_location_id, l.gbp_account_id, l.client_id, c.name AS client_name, l.enabled, l.industry_key,
-               to_char(l.analyze_from, 'YYYY-MM-DD') AS analyze_from, l.audience, l.title, l.store_code,
+               to_char(l.analyze_from, 'YYYY-MM-DD') AS analyze_from, l.title, l.store_code,
                l.primary_category, l.address, l.locality, l.administrative_area, l.postal_code, l.region_code,
                l.phone, l.website_uri, l.maps_uri, l.access_status, {} AS access_lost_at, {} AS first_seen_at, {} AS last_seen_at,
                (SELECT count(*) FROM reviews r WHERE r.location_id = l.id AND r.removed_at IS NULL) AS review_count,
@@ -97,9 +97,6 @@ constexpr std::string_view kBadAnalyzeFrom = "\"analyze_from\" must be a date, Y
 bool is_day_or_none(const OptString& day) { return !day || domain::parse_report_day(*day); }
 
 OptString non_empty(std::string s) { return s.empty() ? std::nullopt : OptString(std::move(s)); }
-
-// Google's posts are short; a line is enough to say who reads them.
-constexpr std::size_t kMaxAudienceLength = 500;
 
 }  // namespace
 
@@ -199,7 +196,7 @@ std::optional<model::Location> get_location(pqxx::transaction_base& tx, std::int
 Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const LocationPatch& patch) {
     const auto rows = tx.exec(
         "SELECT l.client_id, c.name, l.posting_enabled, l.enabled, l.access_status, l.industry_key, "
-        "to_char(l.analyze_from, 'YYYY-MM-DD'), l.audience, l.auto_reply_enabled, l.auto_reply_five_star, l.auto_reply_four_star "
+        "to_char(l.analyze_from, 'YYYY-MM-DD'), l.auto_reply_enabled, l.auto_reply_five_star, l.auto_reply_four_star "
         "FROM locations l LEFT JOIN clients c ON c.id = l.client_id "
         "WHERE l.id = $1 FOR UPDATE OF l",
         pqxx::params{id});
@@ -211,8 +208,7 @@ Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Write
     const bool accessible = rows[0][4].as<std::string>() == "active";
     const auto old_industry = rows[0][5].as<OptString>();
     const auto old_from = rows[0][6].as<OptString>();
-    const auto old_audience = rows[0][7].as<std::string>();
-    const auto old_auto_reply = rows[0][8].as<bool>(), old_five_star = rows[0][9].as<bool>(), old_four_star = rows[0][10].as<bool>();
+    const auto old_auto_reply = rows[0][7].as<bool>(), old_five_star = rows[0][8].as<bool>(), old_four_star = rows[0][9].as<bool>();
     const auto now = to_timestamptz(audit.now());
 
     // Check everything before writing anything: a refused request changes nothing.
@@ -223,10 +219,6 @@ Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Write
     }
     const auto from = patch.analyze_from.over(old_from);
     if (!is_day_or_none(from)) return invalid(std::string(kBadAnalyzeFrom));
-    const auto audience = patch.audience ? trimmed(*patch.audience) : old_audience;
-    if (text::length(audience) > kMaxAudienceLength) {
-        return invalid(std::format("\"audience\" may be up to {} characters.", kMaxAudienceLength));
-    }
     const auto& client_id = patch.client_id.value();
     const bool new_client = patch.client_id.given() && client_id != old_client;
     OptString new_client_name;
@@ -249,12 +241,10 @@ Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Write
     };
     changed("industry_key", optional_json(old_industry), optional_json(industry));
     changed("analyze_from", optional_json(old_from), optional_json(from));
-    changed("audience", boost::json::value(old_audience), boost::json::value(audience));
     const bool new_fields = !after.empty();
     if (new_fields) {
-        tx.exec("UPDATE locations SET industry_key = $2, analyze_from = $3::date, audience = $4, "
-                "updated_at = $5::timestamptz WHERE id = $1",
-                pqxx::params{id, industry, from, audience, now})
+        tx.exec("UPDATE locations SET industry_key = $2, analyze_from = $3::date, updated_at = $4::timestamptz WHERE id = $1",
+                pqxx::params{id, industry, from, now})
             .no_rows();
         audit.record("location.update", "location", id, {.before = std::move(before), .after = std::move(after)});
     }
@@ -305,7 +295,6 @@ boost::json::object editable(const model::Location& location) {
             {"enabled", location.enabled},
             {"industry_key", optional_json(location.industry_key)},
             {"analyze_from", optional_json(location.analyze_from)},
-            {"audience", location.audience},
             {"posting_enabled", location.posting_enabled}};
 }
 
@@ -368,8 +357,8 @@ DiscoveryOutcome apply_discovery(pqxx::transaction_base& tx, const std::vector<S
                         $16::timestamptz, $16::timestamptz, $16::timestamptz)
                 RETURNING id)sql",
                 fields);
-            // Every location has its reply settings from the start, enabled or not (D-093, D-102).
-            write_default_reply_settings(tx, id, now);
+            // Every location has its content and reply settings from the start, enabled or not (D-102, D-107).
+            write_default_settings(tx, id, now);
             log.record("location.discovered", "location", id,
                        {.after = {{"title", title}, {"gbp_location_id", *location_id}, {"gbp_account_id", account_id}}});
             ++outcome.created;

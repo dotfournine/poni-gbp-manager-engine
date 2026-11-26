@@ -10,7 +10,7 @@
 #pragma once
 
 #include "domain/industry.hpp"
-#include "domain/reply_settings.hpp"
+#include "domain/settings.hpp"
 
 #include <boost/json/object.hpp>
 
@@ -43,7 +43,7 @@ struct ModelSetup {
 };
 
 struct FingerprintInput {
-    // How replies name the business: the voice's reply_name, or the location's title (D-102 point 10).
+    // How replies name the business: the location's title (D-107).
     std::string business_name;
     const IndustryRules& industry;
     const ResolvedSettings& settings;
@@ -75,7 +75,7 @@ struct AutoReplyScope {
     }
 };
 
-AutoReplyScope scope_of(const PolicyRules& policy);
+AutoReplyScope scope_of(const ReplySettings& reply);
 
 // ---- what a run adds up to ------------------------------------------------------------
 

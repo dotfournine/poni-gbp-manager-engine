@@ -12,6 +12,8 @@
 #include <boost/json/value_from.hpp>
 
 #include <algorithm>
+#include <ranges>
+#include <tuple>
 #include <format>
 #include <stdexcept>
 
@@ -24,85 +26,171 @@ namespace {
 
 boost::json::value json_column(const pqxx::field_ref& field) { return boost::json::parse(field.as<std::string>()); }
 
-// The three parts as one JSON object, for an audit entry.
-constexpr std::string_view kPartsAsJson = "jsonb_build_object('voice', voice, 'localization', localization, 'policy', policy)::text";
+// A list column written from one JSON parameter, in the list's order.
+std::string text_array(std::string_view parameter) {
+    return std::format("ARRAY(SELECT e FROM jsonb_array_elements_text({}::jsonb) WITH ORDINALITY AS t(e, ord) ORDER BY ord)", parameter);
+}
 
-constexpr std::string_view kNoRow = "the location has no reply settings";
+// Each bundle's columns, in member order: what a row is written with and the defaults are copied from.
+constexpr std::string_view kContentColumns =
+    "business_facts, base_style, emoji_allowed, emoji_max, emoji_preferred, words_to_avoid, style_notes, chinese_variant, "
+    "english_variant, audience";
+constexpr std::string_view kReplyColumns =
+    "reply_languages, fallback_language, signature, sign_off_name, length, example_replies, promos_allowed, contact_allowed, "
+    "temperature, auto_reply_positive, auto_reply_rating_only, auto_reply_min_stars, auto_reply_delay_min_minutes, "
+    "auto_reply_delay_max_minutes, auto_reply_window_start, auto_reply_window_end";
+
+struct Bundle {
+    std::string_view table;
+    std::string_view name;  // as a person reads it
+};
+constexpr Bundle kContent{"content_settings", "content settings"};
+constexpr Bundle kReply{"reply_settings", "reply settings"};
+
+// One bundle of the location as it is stored, read by column name; nothing if it has no row, and what is wrong
+// if the row does not read as the bundle.
+template <class T>
+std::expected<std::optional<T>, std::string> read_bundle(pqxx::transaction_base& tx, const Bundle& bundle, std::int64_t location_id) {
+    const auto rows =
+        tx.exec(std::format("SELECT to_jsonb(s)::text FROM {} s WHERE location_id = $1", bundle.table), pqxx::params{location_id});
+    if (rows.empty()) return std::optional<T>{};
+    // Precise: a float8 must come out as the same double the column holds.
+    boost::json::parse_options options;
+    options.numbers = boost::json::number_precision::precise;
+    auto parsed = core::from_json<T>(boost::json::parse(rows[0][0].view(), {}, options));
+    if (!parsed) return std::unexpected(std::format("{}: {}", bundle.name, parsed.error()));
+    return std::optional<T>(std::move(*parsed));
+}
+
+template <class T>
+Result<T> bundle_for_api(pqxx::transaction_base& tx, const Bundle& bundle, std::int64_t location_id) {
+    auto read = read_bundle<T>(tx, bundle, location_id);
+    if (!read) return conflict("settings_incomplete", unreadable_settings(read.error()));
+    if (!*read) return not_found("location");
+    return std::move(**read);
+}
+
+bool lock_location(pqxx::transaction_base& tx, std::int64_t location_id) {
+    return !tx.exec("SELECT 1 FROM locations WHERE id = $1 FOR UPDATE", pqxx::params{location_id}).empty();
+}
+
+template <class T>
+Result<std::string> current_etag(pqxx::transaction_base& tx, const Bundle& bundle, std::int64_t location_id) {
+    if (!lock_location(tx, location_id)) return not_found("location");
+    auto stored = bundle_for_api<T>(tx, bundle, location_id);
+    if (!stored) return std::unexpected(stored.error());
+    return core::etag(editable(*stored));
+}
+
+// Writes the bundle's row: `values` are the members' SQL values in member order, from $2 on.
+template <class T>
+Result<T> replace_bundle(pqxx::transaction_base& tx, audit::Writer& audit, const Bundle& bundle, std::string_view columns,
+                         std::string_view values, std::int64_t location_id, const T& settings, pqxx::params params) {
+    auto stored = read_bundle<T>(tx, bundle, location_id);
+    // An unreadable row is replaced: that is how a person repairs it.
+    const bool unchanged = stored && *stored && editable(**stored) == editable(settings);
+    if (unchanged) {
+        audit.nothing_changed();
+        return std::move(**stored);
+    }
+    const auto at = std::format("${}::timestamptz", params.size() + 1);
+    params.append(to_timestamptz(audit.now()));
+    std::string updates;
+    for (const auto column : std::views::split(columns, std::string_view(", "))) {
+        const std::string_view name(column.begin(), column.end());
+        updates += std::format("{} = EXCLUDED.{}, ", name, name);
+    }
+    tx.exec(std::format("INSERT INTO {0} (location_id, {1}, created_at, updated_at) VALUES ($1, {2}, {3}, {3}) "
+                        "ON CONFLICT (location_id) DO UPDATE SET {4}updated_at = EXCLUDED.updated_at",
+                        bundle.table, columns, values, at, updates),
+            params)
+        .no_rows();
+    const auto before = stored && *stored ? boost::json::value(editable(**stored)) : boost::json::value(nullptr);
+    audit.record(std::format("{}.update", bundle.table), "location", location_id, {.before = before, .after = editable(settings)});
+    auto written = read_bundle<T>(tx, bundle, location_id);
+    if (!written || !*written) throw std::logic_error(std::format("the {} just written can't be read back", bundle.name));
+    return std::move(**written);
+}
 
 }  // namespace
 
-// ---- reply settings ------------------------------------------------------------
+// ---- content and reply settings ------------------------------------------------
 
-std::expected<domain::ResolvedSettings, std::string> stored_reply_settings(pqxx::transaction_base& tx, std::int64_t location_id) {
-    const auto rows =
-        tx.exec("SELECT voice::text, localization::text, policy::text FROM reply_settings WHERE location_id = $1", pqxx::params{location_id});
-    if (rows.empty()) return std::unexpected(std::string(kNoRow));
-    return domain::read_settings(json_column(rows[0][0]), json_column(rows[0][1]), json_column(rows[0][2]));
+std::expected<domain::ResolvedSettings, std::string> stored_settings(pqxx::transaction_base& tx, std::int64_t location_id) {
+    auto content = read_bundle<domain::ContentSettings>(tx, kContent, location_id);
+    if (!content) return std::unexpected(content.error());
+    if (!*content) return std::unexpected(std::string("the location has no content settings"));
+    auto reply = read_bundle<domain::ReplySettings>(tx, kReply, location_id);
+    if (!reply) return std::unexpected(reply.error());
+    if (!*reply) return std::unexpected(std::string("the location has no reply settings"));
+    return domain::ResolvedSettings{.content = std::move(**content), .reply = std::move(**reply)};
 }
 
-std::string unreadable_reply_settings(std::string_view why) {
-    return std::format("The location's reply settings can't be read: {}.", why);
+std::string unreadable_settings(std::string_view why) { return std::format("The location's settings can't be read: {}.", why); }
+
+Result<domain::ContentSettings> content_settings(pqxx::transaction_base& tx, std::int64_t location_id) {
+    return bundle_for_api<domain::ContentSettings>(tx, kContent, location_id);
 }
 
-Result<model::ReplySettings> reply_settings(pqxx::transaction_base& tx, std::int64_t location_id) {
-    // Whose settings they are; the three parts are read and checked by the one reader.
-    auto answer = db::row_as<model::ReplySettings>(
-        tx,
-        std::format("SELECT l.id AS location_id, l.title AS location_title, l.client_id, c.name AS client_name, l.industry_key, "
-                    "{} AS updated_at FROM locations l LEFT JOIN clients c ON c.id = l.client_id "
-                    "JOIN reply_settings r ON r.location_id = l.id WHERE l.id = $1",
-                    iso("r.updated_at")),
-        pqxx::params{location_id}, db::FilledLater{"voice", "localization", "policy"});
-    if (!answer) {
-        // No such location, or one without a row.
-        if (tx.exec("SELECT 1 FROM locations WHERE id = $1", pqxx::params{location_id}).empty()) return not_found("location");
-        return conflict("reply_settings_incomplete", unreadable_reply_settings(kNoRow));
+Result<domain::ReplySettings> reply_settings(pqxx::transaction_base& tx, std::int64_t location_id) {
+    return bundle_for_api<domain::ReplySettings>(tx, kReply, location_id);
+}
+
+boost::json::object editable(const domain::ContentSettings& settings) { return boost::json::value_from(settings).as_object(); }
+
+boost::json::object editable(const domain::ReplySettings& settings) { return boost::json::value_from(settings).as_object(); }
+
+Result<std::string> current_content_settings_etag(pqxx::transaction_base& tx, std::int64_t location_id) {
+    return current_etag<domain::ContentSettings>(tx, kContent, location_id);
+}
+
+Result<std::string> current_reply_settings_etag(pqxx::transaction_base& tx, std::int64_t location_id) {
+    return current_etag<domain::ReplySettings>(tx, kReply, location_id);
+}
+
+Result<domain::ContentSettings> replace_content_settings(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
+                                                         const domain::ContentSettings& body) {
+    // The location's row is the lock, as auto_verdict's is: a save and a verdict don't interleave.
+    if (!lock_location(tx, location_id)) return not_found("location");
+    auto settings = body;
+    settings.audience = std::string(text::trim(settings.audience));
+    if (auto problem = domain::check_content_settings(settings)) return invalid(std::move(*problem));
+    const auto values = std::format("$2, $3, $4, $5, {}, {}, {}, $9, $10, $11", text_array("$6"), text_array("$7"), text_array("$8"));
+    return replace_bundle(tx, audit, kContent, kContentColumns, values, location_id, settings,
+                          pqxx::params{location_id, settings.business_facts, settings.base_style, settings.emoji_allowed, settings.emoji_max,
+                                       db::json_list(settings.emoji_preferred), db::json_list(settings.words_to_avoid),
+                                       db::json_list(settings.style_notes), settings.chinese_variant, settings.english_variant,
+                                       settings.audience});
+}
+
+Result<domain::ReplySettings> replace_reply_settings(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
+                                                     const domain::ReplySettings& settings) {
+    if (!lock_location(tx, location_id)) return not_found("location");
+    if (auto problem = domain::check_reply_settings(settings)) return invalid(std::move(*problem));
+    const auto values = std::format("{}, $3, $4, $5, $6::jsonb, {}, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17", text_array("$2"),
+                                    text_array("$7"));
+    return replace_bundle(tx, audit, kReply, kReplyColumns, values, location_id, settings,
+                          pqxx::params{location_id, db::json_list(settings.reply_languages), settings.fallback_language, settings.signature,
+                                       settings.sign_off_name, boost::json::serialize(boost::json::value_from(settings.length)),
+                                       db::json_list(settings.example_replies), settings.promos_allowed, settings.contact_allowed,
+                                       settings.temperature, settings.auto_reply_positive, settings.auto_reply_rating_only,
+                                       settings.auto_reply_min_stars, settings.auto_reply_delay_min_minutes,
+                                       settings.auto_reply_delay_max_minutes, settings.auto_reply_window_start,
+                                       settings.auto_reply_window_end});
+}
+
+void write_default_settings(pqxx::transaction_base& tx, std::int64_t location_id, core::TimePoint now) {
+    for (const auto& [bundle, columns, defaults] : {std::tuple{kContent, kContentColumns, std::string_view("kb_content_defaults")},
+                                                    std::tuple{kReply, kReplyColumns, std::string_view("kb_reply_defaults")}}) {
+        const auto written = tx.exec(std::format("INSERT INTO {0} (location_id, {1}, created_at, updated_at) "
+                                                 "SELECT $1, {1}, $2::timestamptz, $2::timestamptz FROM {2}",
+                                                 bundle.table, columns, defaults),
+                                     pqxx::params{location_id, to_timestamptz(now)});
+        // Never a location without settings.
+        if (written.affected_rows() != 1) {
+            throw std::runtime_error(std::format("no knowledge base is seeded: there are no default {} to copy", bundle.name));
+        }
     }
-    auto settings = stored_reply_settings(tx, location_id);
-    if (!settings) return conflict("reply_settings_incomplete", unreadable_reply_settings(settings.error()));
-    answer->voice = std::move(settings->voice);
-    answer->localization = std::move(settings->localization);
-    answer->policy = settings->policy;
-    return std::move(*answer);
-}
-
-Result<model::ReplySettings> replace_reply_settings(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
-                                                    const domain::ResolvedSettings& settings) {
-    if (tx.exec("SELECT 1 FROM locations WHERE id = $1 FOR UPDATE", pqxx::params{location_id}).empty()) return not_found("location");
-    if (auto problem = domain::check_settings(settings)) return invalid(std::move(*problem));
-
-    const auto after = boost::json::value_from(settings);
-    const pqxx::params parts{location_id, boost::json::serialize(after.at("voice")), boost::json::serialize(after.at("localization")),
-                             boost::json::serialize(after.at("policy"))};
-    // Compared as values, in the database: the same settings written another
-    // way are no change, and a member the code no longer knows is one, so a save removes it.
-    const auto stored = tx.exec(std::format("SELECT voice = $2::jsonb AND localization = $3::jsonb AND policy = $4::jsonb, {} "
-                                            "FROM reply_settings WHERE location_id = $1",
-                                            kPartsAsJson),
-                                parts);
-    if (!stored.empty() && stored[0][0].as<bool>()) {
-        audit.nothing_changed();
-        return reply_settings(tx, location_id);
-    }
-    auto written = parts;
-    written.append(to_timestamptz(audit.now()));
-    tx.exec("INSERT INTO reply_settings (location_id, voice, localization, policy, created_at, updated_at) "
-            "VALUES ($1, $2::jsonb, $3::jsonb, $4::jsonb, $5::timestamptz, $5::timestamptz) "
-            "ON CONFLICT (location_id) DO UPDATE SET voice = EXCLUDED.voice, localization = EXCLUDED.localization, "
-            "policy = EXCLUDED.policy, updated_at = EXCLUDED.updated_at",
-            written)
-        .no_rows();
-    audit.record("reply_settings.update", "location", location_id,
-                 {.before = stored.empty() ? boost::json::value(nullptr) : json_column(stored[0][1]), .after = after});
-    return reply_settings(tx, location_id);
-}
-
-void write_default_reply_settings(pqxx::transaction_base& tx, std::int64_t location_id, core::TimePoint now) {
-    const auto written = tx.exec("INSERT INTO reply_settings (location_id, voice, localization, policy, created_at, updated_at) "
-                                 "SELECT $1, voice, localization, policy, $2::timestamptz, $2::timestamptz FROM kb_defaults",
-                                 pqxx::params{location_id, to_timestamptz(now)});
-    // Never a location without settings.
-    if (written.affected_rows() != 1) throw std::runtime_error("no knowledge base is seeded: there are no default reply settings to copy");
 }
 
 // ---- pipeline settings ---------------------------------------------------------

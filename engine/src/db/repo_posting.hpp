@@ -134,7 +134,7 @@ struct Claim {
 //
 // A scheduled draft goes through the same checks and then through the
 // auto reply conditions again, as they are now: a switch flipped, a pause,
-// the cap or a changed voice since it was scheduled stops it, and it goes to
+// the cap or changed settings since it was scheduled stop it, and it goes to
 // the approval queue with the reason and an "approval needed" notification.
 Claim claim_post(pqxx::transaction_base& tx, std::int64_t draft_id, core::TimePoint now);
 

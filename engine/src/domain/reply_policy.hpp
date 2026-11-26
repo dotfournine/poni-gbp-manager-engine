@@ -5,7 +5,7 @@
 // without a person: whether it does is up to repo::schedule_auto_reply.
 #pragma once
 
-#include "domain/reply_settings.hpp"
+#include "domain/settings.hpp"
 
 #include <optional>
 #include <string>
@@ -34,8 +34,8 @@ struct TargetLanguage {
 
 // The language and script the reply is written in: the review's language if
 // the business replies in it, else the fallback; for Chinese, the script the
-// localization preference names, or the review's own.
-TargetLanguage target_language(std::string_view review_language, std::string_view review_script, const Localization& localization);
+// content settings' Chinese variant names, or the review's own when none is set.
+TargetLanguage target_language(std::string_view review_language, std::string_view review_script, const ResolvedSettings& settings);
 
 struct GateInput {
     int stars = 0;  // 0 when Google sent no rating
@@ -57,6 +57,6 @@ struct GateDecision {
     std::vector<std::string> reasons;
 };
 
-GateDecision gate(const GateInput& input, const PolicyRules& policy);
+GateDecision gate(const GateInput& input, const ReplySettings& reply);
 
 }  // namespace poni::domain

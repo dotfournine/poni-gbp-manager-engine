@@ -4,7 +4,7 @@
 // suite calls them with a scripted model that gives in to every attack.
 //
 //   build_analysis   the analyzer's answer -> Analysis
-//   plan_draft       Analysis + localization -> reply mode and target language
+//   plan_draft       Analysis + settings -> reply mode and target language
 //   finish_draft     the generator's answer -> checks, final text, route
 #pragma once
 
@@ -12,7 +12,7 @@
 #include "domain/prompts.hpp"
 #include "domain/reply_checks.hpp"
 #include "domain/reply_policy.hpp"
-#include "domain/reply_settings.hpp"
+#include "domain/settings.hpp"
 
 #include <array>
 #include <boost/describe/class.hpp>
@@ -89,7 +89,7 @@ struct DraftPlan {
     std::vector<std::string> items;
 };
 
-DraftPlan plan_draft(const Analysis& analysis, int stars, bool has_text, const Localization& localization);
+DraftPlan plan_draft(const Analysis& analysis, int stars, bool has_text, const ResolvedSettings& settings);
 
 // What the writer is asked for the review a plan was made for. Without recent
 // replies and staff instructions: a caller that has them adds them.

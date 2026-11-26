@@ -10,7 +10,7 @@
 #pragma once
 
 #include "domain/industry.hpp"
-#include "domain/reply_settings.hpp"
+#include "domain/settings.hpp"
 
 #include <boost/describe/class.hpp>
 #include <boost/json/object.hpp>
@@ -44,7 +44,7 @@ std::vector<ChatMessage> analyzer_messages(std::string_view business_name, const
                                            std::string_view review_text, std::string_view nonce);
 
 struct GeneratorInput {
-    std::string business_name;  // the voice's reply_name, or the location's title
+    std::string business_name;  // the location's title (D-107)
     const ResolvedSettings& settings;
     int stars = 0;
     std::string review_text;  // empty for a rating-only review

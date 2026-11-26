@@ -1,6 +1,6 @@
 // The dashboard's API for drafts and re-analysis of a
-// review, the knowledge base (read-only, D-078), a location's reply settings
-// (D-093), the pipeline settings, and LLM usage. Paths, parameters and bodies are
+// review, the knowledge base (read-only, D-078), a location's content and reply
+// settings (D-107), the pipeline settings, and LLM usage. Paths, parameters and bodies are
 // defined in api/openapi.yaml; change that file first.
 
 #include "core/etag.hpp"
@@ -41,23 +41,54 @@ void add_analysis_routes(Router& router, const Api& api) {
                    }), enqueued());
                });
 
-    router.add(verb::get, "/api/locations/{id}/reply-settings", {Access::user, "locations.read"},
-               [api](const Request& request) -> asio::awaitable<Response> {
+    // ---- a location's content and reply settings (D-107) --------------------------
+    // Each bundle is read and replaced whole, with its ETag (D-108).
+
+    const auto content_etag = [](const domain::ContentSettings& settings) { return core::etag(repo::editable(settings)); };
+    const auto reply_etag = [](const domain::ReplySettings& settings) { return core::etag(repo::editable(settings)); };
+
+    router.add(verb::get, "/api/locations/{id}/content-settings", {Access::user, "locations.read"},
+               [api, content_etag](const Request& request) -> asio::awaitable<Response> {
                    const auto id = path_id(request);
                    if (!id) co_return not_found("location");
-                   co_return respond(co_await api.query([id = *id](pqxx::work& tx) { return repo::reply_settings(tx, id); }));
+                   co_return respond_tagged(co_await api.query([id = *id](pqxx::work& tx) { return repo::content_settings(tx, id); }),
+                                            content_etag);
                });
 
-    // A save sends every field and replaces the settings whole (D-093).
-    router.add(verb::put, "/api/locations/{id}/reply-settings", {Access::user, "reply_settings.update"},
-               [api](const Request& request) -> asio::awaitable<Response> {
+    router.add(verb::put, "/api/locations/{id}/content-settings", {Access::user, "content_settings.update"},
+               [api, content_etag](const Request& request) -> asio::awaitable<Response> {
                    const auto id = path_id(request);
                    if (!id) co_return not_found("location");
-                   const auto body = body_as<domain::ResolvedSettings>(request);
+                   const auto body = body_as<domain::ContentSettings>(request);
                    if (!body) co_return body.error();
-                   co_return respond(co_await api.change(request, [id = *id, settings = *body](pqxx::work& tx, audit::Writer& audit) {
-                       return repo::replace_reply_settings(tx, audit, id, settings);
-                   }));
+                   co_return respond_tagged(co_await api.change_if_match(
+                                                request, [id = *id](pqxx::work& tx) { return repo::current_content_settings_etag(tx, id); },
+                                                [id = *id, settings = *body](pqxx::work& tx, audit::Writer& audit) {
+                                                    return repo::replace_content_settings(tx, audit, id, settings);
+                                                }),
+                                            content_etag);
+               });
+
+    router.add(verb::get, "/api/locations/{id}/reply-settings", {Access::user, "locations.read"},
+               [api, reply_etag](const Request& request) -> asio::awaitable<Response> {
+                   const auto id = path_id(request);
+                   if (!id) co_return not_found("location");
+                   co_return respond_tagged(co_await api.query([id = *id](pqxx::work& tx) { return repo::reply_settings(tx, id); }),
+                                            reply_etag);
+               });
+
+    router.add(verb::put, "/api/locations/{id}/reply-settings", {Access::user, "reply_settings.update"},
+               [api, reply_etag](const Request& request) -> asio::awaitable<Response> {
+                   const auto id = path_id(request);
+                   if (!id) co_return not_found("location");
+                   const auto body = body_as<domain::ReplySettings>(request);
+                   if (!body) co_return body.error();
+                   co_return respond_tagged(co_await api.change_if_match(
+                                                request, [id = *id](pqxx::work& tx) { return repo::current_reply_settings_etag(tx, id); },
+                                                [id = *id, settings = *body](pqxx::work& tx, audit::Writer& audit) {
+                                                    return repo::replace_reply_settings(tx, audit, id, settings);
+                                                }),
+                                            reply_etag);
                });
 
     // ---- the knowledge base, read-only (FR-13) ------------------------------------

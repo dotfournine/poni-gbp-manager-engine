@@ -1,5 +1,7 @@
 #include "domain/posting_schedule.hpp"
 
+#include "domain/dates.hpp"
+
 #include <cctz/civil_time.h>
 #include <cctz/time_zone.h>
 
@@ -29,19 +31,19 @@ bool inside(const PostingWindow& window, int minute_of_day) {
 
 }  // namespace
 
-std::expected<PostingTiming, std::string> posting_timing(const PolicyRules& policy) {
-    PostingTiming timing{.delay_min_minutes = policy.auto_post_delay_min_minutes,
-                         .delay_max_minutes = policy.auto_post_delay_max_minutes,
+std::expected<PostingTiming, std::string> posting_timing(const ReplySettings& settings) {
+    PostingTiming timing{.delay_min_minutes = settings.auto_reply_delay_min_minutes,
+                         .delay_max_minutes = settings.auto_reply_delay_max_minutes,
                          .window = std::nullopt};
     if (timing.delay_min_minutes < 0 || timing.delay_min_minutes > timing.delay_max_minutes) {
         return std::unexpected(std::string("the delay's minimum is greater than its maximum"));
     }
-    const bool has_start = !policy.auto_post_window_start.empty();
-    const bool has_end = !policy.auto_post_window_end.empty();
+    const bool has_start = !settings.auto_reply_window_start.empty();
+    const bool has_end = !settings.auto_reply_window_end.empty();
     if (has_start != has_end) return std::unexpected(std::string("the posting window has only one end"));
     if (has_start) {
-        const auto start = parse_clock_time(policy.auto_post_window_start);
-        const auto end = parse_clock_time(policy.auto_post_window_end);
+        const auto start = parse_clock_time(settings.auto_reply_window_start);
+        const auto end = parse_clock_time(settings.auto_reply_window_end);
         if (!start || !end || *start == *end) return std::unexpected(std::string("the posting window is not a span of time"));
         timing.window = PostingWindow{*start, *end};
     }

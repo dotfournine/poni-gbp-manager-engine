@@ -92,7 +92,7 @@ add_library(poni_engine STATIC
   src/domain/report_post_prompts.cpp
   src/domain/reply_checks.cpp
   src/domain/reply_policy.cpp
-  src/domain/reply_settings.cpp
+  src/domain/settings.cpp
   src/domain/report.cpp
   src/domain/report_html.cpp
   src/domain/report_schedule.cpp

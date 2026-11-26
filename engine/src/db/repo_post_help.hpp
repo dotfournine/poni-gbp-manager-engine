@@ -9,7 +9,7 @@
 #include "domain/industry.hpp"
 #include "domain/models.hpp"
 #include "domain/post_help.hpp"
-#include "domain/reply_settings.hpp"
+#include "domain/settings.hpp"
 
 #include <pqxx/pqxx>
 
@@ -31,11 +31,10 @@ struct PostHelp {
     bool enabled = false;
     // Access to the location is not lost, so Google's figures can be read.
     bool accessible = false;
-    // The location's own: who the customers are, and its industry.
-    std::string audience;
+    // The location's own industry.
     std::optional<domain::IndustryRules> industry;
-    // The location's reply settings, or why there are none to read.
-    std::expected<domain::ResolvedSettings, std::string> reply_settings = std::unexpected(std::string("not read"));
+    // The location's content and reply settings (who the customers are among them), or why there are none to read.
+    std::expected<domain::ResolvedSettings, std::string> location_settings = std::unexpected(std::string("not read"));
     // The period, in UTC: the last domain::kPostHelpDays days up to today.
     domain::Day period_start;
     domain::Day period_end;

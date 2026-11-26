@@ -10,7 +10,7 @@
 
 #include "domain/industry.hpp"
 #include "domain/report.hpp"
-#include "domain/reply_settings.hpp"
+#include "domain/settings.hpp"
 #include "domain/review_pipeline.hpp"
 
 #include <boost/describe/class.hpp>
@@ -80,12 +80,12 @@ struct PostHelpPerformance {
 };
 
 struct PostHelpInput {
-    std::string business_name;   // the voice's reply_name, or the location's title
+    std::string business_name;   // the location's title (D-107)
     std::string location_title;  // as the profile has it
     std::string industry_label;  // "" without an industry
     // The industry profile's topics, id to label: a review's topics are given to the model by their labels.
     std::map<std::string, std::string> topic_labels;
-    std::string audience;        // the location's setting; "" when not set
+    std::string audience;        // the location's content setting; "" when not set
     std::string today;           // in words
     ResolvedSettings settings;
     std::vector<HelpReview> reviews;  // from reviews_for_model

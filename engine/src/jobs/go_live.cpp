@@ -96,7 +96,7 @@ asio::awaitable<void> GoLiveTester::run(const repo::GoLiveCaseWork& work) {
             }
         }
         const auto analysis = domain::build_analysis(setup.industry, work.text, answer);
-        auto plan = domain::plan_draft(analysis, work.stars, has_text, setup.settings.localization);
+        auto plan = domain::plan_draft(analysis, work.stars, has_text, setup.settings);
 
         // ---- the draft ----
         const auto input = domain::generator_input(setup.business_name, setup.settings, work.stars, work.text, plan);

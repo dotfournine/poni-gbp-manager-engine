@@ -9,7 +9,6 @@
 #include "domain/paged.hpp"
 #include "domain/post_help.hpp"
 #include "domain/reply_checks.hpp"
-#include "domain/reply_settings.hpp"
 #include "domain/review_pipeline.hpp"
 
 #include <boost/describe/class.hpp>
@@ -94,9 +93,6 @@ struct Location {
     // "YYYY-MM-DD" (UTC): only reviews written on or after this day are analyzed
     // and drafted on their own; none: every review.
     std::optional<std::string> analyze_from;
-    // Who the customers are, in a line written by staff. The model reads it when a person
-    // asks it for ideas and texts for local posts (D-088).
-    std::string audience;
     std::string title;
     std::optional<std::string> store_code;
     std::optional<std::string> primary_category;
@@ -129,7 +125,7 @@ struct Location {
     std::optional<std::string> time_zone;
 };
 BOOST_DESCRIBE_STRUCT(Location, (),
-                      (id, gbp_location_id, gbp_account_id, client_id, client_name, enabled, industry_key, analyze_from, audience,
+                      (id, gbp_location_id, gbp_account_id, client_id, client_name, enabled, industry_key, analyze_from,
                        title, store_code, primary_category,
                        address, locality, administrative_area, postal_code, region_code, phone, website_uri, maps_uri,
                        access_status, access_lost_at, first_seen_at, last_seen_at,
@@ -474,22 +470,6 @@ BOOST_DESCRIBE_STRUCT(SystemStatus, (),
 
 // ---- analysis settings -----------------------------------------------------------
 
-// What a location's replies are written with: its own complete settings (D-093).
-struct ReplySettings {
-    std::int64_t location_id = 0;
-    std::string location_title;
-    // The client the location is grouped under, for display only.
-    std::optional<std::int64_t> client_id;
-    std::optional<std::string> client_name;
-    std::optional<std::string> industry_key;
-    domain::Voice voice;
-    domain::Localization localization;
-    domain::PolicyRules policy;
-    std::string updated_at;
-};
-BOOST_DESCRIBE_STRUCT(ReplySettings, (),
-                      (location_id, location_title, client_id, client_name, industry_key, voice, localization, policy, updated_at))
-
 // USD per million tokens.
 struct ModelPrice {
     double input_per_mtok = 0;
@@ -529,19 +509,20 @@ struct KnowledgeVoiceTemplate {
     std::string key;
     std::string label;
     std::string description;
-    // The fields the template sets (a VoiceLayer).
-    boost::json::value voice;
+    // The members of each bundle the template sets (a ContentSettingsLayer and a ReplySettingsLayer).
+    boost::json::value content;
+    boost::json::value reply;
 };
-BOOST_DESCRIBE_STRUCT(KnowledgeVoiceTemplate, (), (key, label, description, voice))
+BOOST_DESCRIBE_STRUCT(KnowledgeVoiceTemplate, (), (key, label, description, content, reply))
 
-// What the first location of a client starts with, and the default of every analysis setting.
+// What every location starts with when it is discovered (its content and reply settings), and the default of
+// every analysis setting.
 struct KnowledgeDefaults {
-    boost::json::value voice;
-    boost::json::value localization;
-    boost::json::value policy;
+    boost::json::value content;
+    boost::json::value reply;
     boost::json::value analysis;
 };
-BOOST_DESCRIBE_STRUCT(KnowledgeDefaults, (), (voice, localization, policy, analysis))
+BOOST_DESCRIBE_STRUCT(KnowledgeDefaults, (), (content, reply, analysis))
 
 struct Knowledge {
     // A hash of the files' content, and when it was seeded.
@@ -596,7 +577,7 @@ struct AiSettings {
     // Ideas and texts for local posts (D-088): a fifth task, asked only when a person presses a button.
     std::string posts_provider;
     std::string posts_model;
-    // The writer's temperature is in a location's voice (Voice::temperature).
+    // The writer's temperature is a location's reply setting (ReplySettings::temperature).
     double analyzer_temperature = 0;
     // Off: requests of that task carry no temperature, for a model that refuses one.
     bool analyzer_send_temperature = true;

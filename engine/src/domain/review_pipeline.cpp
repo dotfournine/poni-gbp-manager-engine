@@ -137,14 +137,14 @@ Analysis build_analysis(const IndustryRules& industry, std::string_view review_t
     return analysis;
 }
 
-DraftPlan plan_draft(const Analysis& analysis, int stars, bool has_text, const Localization& localization) {
+DraftPlan plan_draft(const Analysis& analysis, int stars, bool has_text, const ResolvedSettings& settings) {
     DraftPlan plan;
     for (const auto& flag : analysis.severity_flags) {
         plan.severity_ids.push_back(flag.id);
         plan.severity_labels.push_back(flag.label);
     }
     plan.mode = std::string(reply_mode(stars, has_text, !analysis.severity_flags.empty(), analysis.contains_complaint));
-    plan.target = target_language(has_text ? analysis.language : "none", analysis.script, localization);
+    plan.target = target_language(has_text ? analysis.language : "none", analysis.script, settings);
     for (const auto& item : analysis.items) plan.items.push_back(item.name);
     return plan;
 }
@@ -180,7 +180,7 @@ DraftOutcome finish_draft(const Analysis& analysis, const DraftPlan& plan, int s
         outcome.text = answer->reply;
         outcome.generator_manipulation_suspected = answer->manipulation_suspected;
         outcome.notes_for_staff = answer->notes_for_staff;
-        const CheckContext context{.voice = settings.voice,
+        const CheckContext context{.settings = settings,
                                    .target_language = plan.target.language,
                                    .mode = plan.mode};
         auto report = run_reply_checks(answer->reply, context);
@@ -188,7 +188,7 @@ DraftOutcome finish_draft(const Analysis& analysis, const DraftPlan& plan, int s
         input.manipulation_suspected = input.manipulation_suspected || answer->manipulation_suspected;
         outcome.checks = std::move(report.results);
     }
-    auto decision = gate(input, settings.policy);
+    auto decision = gate(input, settings.reply);
     outcome.route = std::move(decision.route);
     outcome.route_reasons = std::move(decision.reasons);
     return outcome;
