@@ -19,14 +19,18 @@
       "type": "string",
       "maxLength": 1000
     },
-    "voice": {
-      "$ref": "settings.schema.json#/$defs/voiceLayer"
+    "content": {
+      "$ref": "settings.schema.json#/$defs/contentLayer"
+    },
+    "reply": {
+      "$ref": "settings.schema.json#/$defs/replyLayer"
     }
   },
   "required": [
+    "content",
     "description",
     "key",
     "label",
-    "voice"
+    "reply"
   ]
 }

@@ -16,20 +16,16 @@
       "maxLength": 60,
       "description": "A voice template to start from, as a client that adopts one does."
     },
-    "voice": {
-      "$ref": "settings.schema.json#/$defs/voiceLayer"
+    "content": {
+      "$ref": "settings.schema.json#/$defs/contentLayer"
     },
-    "localization": {
-      "$ref": "settings.schema.json#/$defs/localizationLayer"
-    },
-    "policy": {
-      "$ref": "settings.schema.json#/$defs/policyLayer"
+    "reply": {
+      "$ref": "settings.schema.json#/$defs/replyLayer"
     }
   },
   "required": [
     "name",
-    "voice",
-    "localization",
-    "policy"
+    "content",
+    "reply"
   ]
 }

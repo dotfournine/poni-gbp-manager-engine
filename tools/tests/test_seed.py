@@ -35,7 +35,7 @@ def test_seed_fills_every_table(migrated, kb):
     assert result.changed and result.previous is None and result.version == files.version()
 
     assert migrated.execute("SELECT version, format, seeded_at, content_hash FROM kb_meta").fetchall() == [
-        (files.version(), 1, T1, files.content_hash())
+        (files.version(), 2, T1, files.content_hash())
     ]
     assert [r[0] for r in migrated.execute("SELECT key FROM kb_industries ORDER BY position")] == [
         "food_beverage",
@@ -45,7 +45,14 @@ def test_seed_fills_every_table(migrated, kb):
     assert one(migrated, "SELECT count(*) FROM kb_voice_templates") == 3
     assert one(migrated, "SELECT count(*) FROM kb_model_prices") == 4
     assert one(migrated, "SELECT jsonb_array_length(severity_flags) FROM kb_common") == 4
-    assert one(migrated, "SELECT voice FROM kb_defaults") == files.defaults["voice"]
+    # The defaults are typed columns, one row per bundle (D-107); read back as JSON they are the file's objects.
+    assert one(migrated, "SELECT to_jsonb(d) - 'id' FROM kb_content_defaults d") == files.defaults["content"]
+    assert one(migrated, "SELECT to_jsonb(d) - 'id' FROM kb_reply_defaults d") == files.defaults["reply"]
+    assert (
+        one(migrated, "SELECT words_to_avoid FROM kb_content_defaults") == files.defaults["content"]["words_to_avoid"]
+    )
+    template = migrated.execute("SELECT content, reply FROM kb_voice_templates WHERE key = 'family_owned'").fetchone()
+    assert template == (files.voices["family_owned"]["content"], files.voices["family_owned"]["reply"])
     assert one(migrated, "SELECT analysis ->> 'judge_model' FROM kb_defaults") == "claude-opus-5-5"
     assert one(migrated, "SELECT analysis ->> 'summary_model' FROM kb_defaults") == "qwen3.7-plus"
     assert one(migrated, "SELECT analysis ->> 'posts_model' FROM kb_defaults") == "qwen3.7-plus"

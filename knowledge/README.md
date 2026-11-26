@@ -9,8 +9,8 @@ Everything the system knows that is the same for every client and that nobody ch
 | `industries/<key>/profile.json` | An industry's topics, item types and severity flags |
 | `industries/<key>/corpus.json` | The industry's test corpus: severity, manipulation and ordinary cases |
 | `industries/<key>/test_client.json` | A made-up business the test suites run as |
-| `voices/<key>.json` | Voice templates |
-| `defaults.json` | What a newly discovered location starts from (voice, localization, policy) and the default of every analysis setting |
+| `voices/<key>.json` | Voice templates: each sets some members of the content settings and of the reply settings (`content`, `reply`) |
+| `defaults.json` | What a newly discovered location starts from, its complete content settings and reply settings (`content`, `reply`, D-107), and the default of every analysis setting (`analysis`) |
 | `models.json` | Model prices in USD per million tokens |
 | `schema/` | A JSON Schema per kind of file. Unknown keys are refused |
 
