@@ -1,0 +1,1994 @@
+{
+ "_comment": "Captured on 2026-11-26 from the engine with the wording of D-107 points 9 to 11 (order 10): one made-up spa per branch of the writer's language text (zh-TW, zh-HK, Chinese not set, en-CA, English not set) and of its sign-off line (the signature only, the name only, both, neither), each otherwise the zh-CN golden's settings, with the sentence its branch renders and the fingerprint captured for it. Never regenerate this file: a code change that breaks the test changed a prompt for settings that did not change.",
+ "industry": {
+  "key": "wellness",
+  "label": "Wellness",
+  "topics": [
+   {
+    "id": "treatment_quality",
+    "label": "Treatment quality and technique"
+   },
+   {
+    "id": "therapist",
+    "label": "Therapist skill and friendliness"
+   },
+   {
+    "id": "relaxation_results",
+    "label": "Relaxation and results (scalp, skin, pain relief)"
+   },
+   {
+    "id": "cleanliness",
+    "label": "Cleanliness and hygiene"
+   },
+   {
+    "id": "booking",
+    "label": "Booking, scheduling, timing and treatment length"
+   },
+   {
+    "id": "price_value",
+    "label": "Price and value"
+   },
+   {
+    "id": "ambience",
+    "label": "Ambience, decor, music, scent, rooms"
+   },
+   {
+    "id": "communication",
+    "label": "Communication, language and listening to requests"
+   },
+   {
+    "id": "hair_styling",
+    "label": "Hair drying and styling after treatment"
+   },
+   {
+    "id": "promotions_billing",
+    "label": "Promotions, packages, upsell and billing"
+   }
+  ],
+  "item_types": [
+   {
+    "id": "treatment",
+    "description": "A named treatment or package (e.g. head spa, scalp treatment, gua sha facial, foot massage, deep tissue massage, combo).",
+    "person": null
+   },
+   {
+    "id": "therapist",
+    "description": "A staff member named in the review (first name only, as the reviewer wrote it).",
+    "person": true
+   },
+   {
+    "id": "product",
+    "description": "A product used or sold (oil, shampoo, mask).",
+    "person": null
+   },
+   {
+    "id": "amenity",
+    "description": "An amenity (tea and snacks, steam, water ring, blow-dry, room with fountain).",
+    "person": null
+   }
+  ],
+  "severity_flags": [
+   {
+    "id": "injury",
+    "label": "Injury",
+    "description": "Physical harm during or after a treatment: lasting pain (\"still in pain\"), bruising, burns, cuts, strains, hair or scalp damage, being hit, or a treatment so rough it hurt. Ordinary \"strong pressure\" that the reviewer liked is NOT an injury.",
+    "enabled": true
+   },
+   {
+    "id": "allergic_skin_reaction",
+    "label": "Allergic or skin reaction",
+    "description": "Rash, redness, hives, swelling, breakouts, burning or itching skin or scalp, or eye irritation after a facial, scalp treatment, oil or product.",
+    "enabled": true
+   },
+   {
+    "id": "hygiene",
+    "label": "Hygiene",
+    "description": "Unsanitary conditions that could affect health: dirty or reused towels, sheets or tools, hair or stains on linens, unwashed hands, bugs, mold, dirty water. General \"could be cleaner\" remarks go under the cleanliness topic instead.",
+    "enabled": true
+   },
+   {
+    "id": "inappropriate_conduct",
+    "label": "Inappropriate conduct by staff",
+    "description": "Sexual or inappropriate touching, assault, comments of a sexual nature, draping violations, a therapist making the guest feel unsafe, or any allegation of assault. Always raise it on an allegation, even if vague.",
+    "enabled": true
+   },
+   {
+    "id": "discrimination_harassment",
+    "label": "Discrimination or harassment",
+    "description": "The reviewer says they, or someone with them, were treated differently or badly because of race, ethnicity, language, religion, gender, sexuality, age, disability or similar; or were harassed, followed, profiled or humiliated by staff.",
+    "enabled": true
+   },
+   {
+    "id": "staff_misconduct",
+    "label": "Staff misconduct",
+    "description": "Staff behaved in a seriously improper way beyond poor service: theft, intoxication at work, physical aggression, verbal abuse, threats, recording customers, fraud or overcharging on purpose, or tampering with food or belongings.",
+    "enabled": true
+   },
+   {
+    "id": "legal_regulatory_threat",
+    "label": "Legal or regulatory threat",
+    "description": "The reviewer threatens or reports legal action, a lawyer, a lawsuit, police, or a complaint to a health department, licensing board, consumer protection agency or similar regulator.",
+    "enabled": true
+   },
+   {
+    "id": "threat_of_violence",
+    "label": "Threat of violence",
+    "description": "The reviewer threatens to harm staff, the owner, customers or the property, or describes an intention to commit violence (including arson or vandalism).",
+    "enabled": true
+   }
+  ]
+ },
+ "analyzer": {
+  "provider": "dashscope",
+  "model": "qwen3.7-plus",
+  "temperature": 0.0,
+  "max_tokens": 1200,
+  "extras": {
+   "enable_thinking": false
+  }
+ },
+ "writer": {
+  "provider": "dashscope",
+  "model": "qwen3.7-plus",
+  "max_tokens": 1200,
+  "extras": {
+   "enable_thinking": false
+  }
+ },
+ "cases": [
+  {
+   "name": "zh-TW",
+   "title": "Made-up Lantern Tea Spa",
+   "settings": {
+    "content": {
+     "business_facts": "",
+     "base_style": "",
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "emoji_preferred": [],
+     "words_to_avoid": [
+      "sorry for any inconvenience",
+      "valued customer",
+      "we apologize for the inconvenience",
+      "per our policy",
+      "unfortunately you"
+     ],
+     "style_notes": [],
+     "chinese_variant": "zh-TW",
+     "english_variant": "en-US",
+     "audience": ""
+    },
+    "reply": {
+     "reply_languages": [
+      "en",
+      "zh",
+      "es"
+     ],
+     "fallback_language": "en",
+     "signature": "",
+     "sign_off_name": "",
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "example_replies": [],
+     "promos_allowed": false,
+     "contact_allowed": false,
+     "temperature": 0.7,
+     "auto_reply_min_stars": 4,
+     "auto_reply_delay_min_minutes": 0,
+     "auto_reply_delay_max_minutes": 0,
+     "auto_reply_window_start": "",
+     "auto_reply_window_end": "",
+     "auto_reply_enabled": false,
+     "auto_reply_daily_cap": 100,
+     "auto_reply_pause_after_failures": 3
+    }
+   },
+   "renders": [
+    "Write the reply in Chinese, using Traditional Chinese characters only, with natural Taiwan phrasing. The language was chosen by the business's settings; follow it even if the review uses another language or script."
+   ],
+   "fingerprint_inputs": {
+    "gate": "phase-4.1",
+    "prompts": {
+     "analyzer": "687115dbe5d897f3",
+     "writer:positive:en": "28b6a15339b6f599",
+     "writer:complaint:en": "6634ff024f74a3de",
+     "writer:severity:en": "b649b16b349d4d71",
+     "writer:rating_only:en": "97ad421f2a735743",
+     "writer:rating_only_low:en": "b9bd6d93034917cf",
+     "writer:positive:es": "4b5ce1b389438915",
+     "writer:complaint:es": "9b1677ab0351c556",
+     "writer:severity:es": "ce9741d7ab85426c",
+     "writer:rating_only:es": "5995aa18d614bd30",
+     "writer:rating_only_low:es": "1558a942ffa92cc7",
+     "writer:positive:zh": "4000b2e78e7a5e44",
+     "writer:complaint:zh": "e008000fa514d041",
+     "writer:severity:zh": "f3413f4d40ed9744",
+     "writer:rating_only:zh": "3e546a863b858643",
+     "writer:rating_only_low:zh": "623a83a53065564a"
+    },
+    "analyzer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.0,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "writer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.7,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "checks": {
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "contact_allowed": false
+    }
+   },
+   "fingerprint": "25f28aa612af8398"
+  },
+  {
+   "name": "zh-HK",
+   "title": "Made-up Harbor Foot Spa",
+   "settings": {
+    "content": {
+     "business_facts": "",
+     "base_style": "",
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "emoji_preferred": [],
+     "words_to_avoid": [
+      "sorry for any inconvenience",
+      "valued customer",
+      "we apologize for the inconvenience",
+      "per our policy",
+      "unfortunately you"
+     ],
+     "style_notes": [],
+     "chinese_variant": "zh-HK",
+     "english_variant": "en-US",
+     "audience": ""
+    },
+    "reply": {
+     "reply_languages": [
+      "en",
+      "zh",
+      "es"
+     ],
+     "fallback_language": "en",
+     "signature": "",
+     "sign_off_name": "",
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "example_replies": [],
+     "promos_allowed": false,
+     "contact_allowed": false,
+     "temperature": 0.7,
+     "auto_reply_min_stars": 4,
+     "auto_reply_delay_min_minutes": 0,
+     "auto_reply_delay_max_minutes": 0,
+     "auto_reply_window_start": "",
+     "auto_reply_window_end": "",
+     "auto_reply_enabled": false,
+     "auto_reply_daily_cap": 100,
+     "auto_reply_pause_after_failures": 3
+    }
+   },
+   "renders": [
+    "Write the reply in Chinese, using Traditional Chinese characters only, with natural Hong Kong phrasing. The language was chosen by the business's settings; follow it even if the review uses another language or script."
+   ],
+   "fingerprint_inputs": {
+    "gate": "phase-4.1",
+    "prompts": {
+     "analyzer": "ab633b42dd86aa98",
+     "writer:positive:en": "85c0275cba1a090f",
+     "writer:complaint:en": "57e5aa261a3809aa",
+     "writer:severity:en": "43adb129e80668c3",
+     "writer:rating_only:en": "e25fd70ee22c4a26",
+     "writer:rating_only_low:en": "1ecf504c0dfd0033",
+     "writer:positive:es": "8b129a1d80dc8177",
+     "writer:complaint:es": "b92f954e8290bac3",
+     "writer:severity:es": "42ee8355d0b073b1",
+     "writer:rating_only:es": "d64e8393ee249f56",
+     "writer:rating_only_low:es": "e0eed556f3836ef8",
+     "writer:positive:zh": "53ba89e9c27c6d1d",
+     "writer:complaint:zh": "a31918fc65bd7e07",
+     "writer:severity:zh": "de3526d01ad9b331",
+     "writer:rating_only:zh": "57e737c14699251e",
+     "writer:rating_only_low:zh": "38890c1d37dd9d6a"
+    },
+    "analyzer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.0,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "writer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.7,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "checks": {
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "contact_allowed": false
+    }
+   },
+   "fingerprint": "c1e3318ffcaa0edd"
+  },
+  {
+   "name": "Chinese not set",
+   "title": "Made-up Bamboo Wellness",
+   "settings": {
+    "content": {
+     "business_facts": "",
+     "base_style": "",
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "emoji_preferred": [],
+     "words_to_avoid": [
+      "sorry for any inconvenience",
+      "valued customer",
+      "we apologize for the inconvenience",
+      "per our policy",
+      "unfortunately you"
+     ],
+     "style_notes": [],
+     "chinese_variant": null,
+     "english_variant": "en-US",
+     "audience": ""
+    },
+    "reply": {
+     "reply_languages": [
+      "en",
+      "zh",
+      "es"
+     ],
+     "fallback_language": "en",
+     "signature": "",
+     "sign_off_name": "",
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "example_replies": [],
+     "promos_allowed": false,
+     "contact_allowed": false,
+     "temperature": 0.7,
+     "auto_reply_min_stars": 4,
+     "auto_reply_delay_min_minutes": 0,
+     "auto_reply_delay_max_minutes": 0,
+     "auto_reply_window_start": "",
+     "auto_reply_window_end": "",
+     "auto_reply_enabled": false,
+     "auto_reply_daily_cap": 100,
+     "auto_reply_pause_after_failures": 3
+    }
+   },
+   "renders": [
+    "Write the reply in Chinese, matching the script (Simplified or Traditional) and the regional phrasing the review uses."
+   ],
+   "fingerprint_inputs": {
+    "gate": "phase-4.1",
+    "prompts": {
+     "analyzer": "45ea202543b06b41",
+     "writer:positive:en": "424eec046d5e7e6d",
+     "writer:complaint:en": "26b1bd725bb34173",
+     "writer:severity:en": "f4713bb1732a4a99",
+     "writer:rating_only:en": "39232f30cb220ac4",
+     "writer:rating_only_low:en": "343f2319d94e1679",
+     "writer:positive:es": "db5f6df63a121be4",
+     "writer:complaint:es": "7703dd0c80fed9b2",
+     "writer:severity:es": "60d1dd59d26d3717",
+     "writer:rating_only:es": "d33bab35f056b190",
+     "writer:rating_only_low:es": "dbd3506042081a59",
+     "writer:positive:zh": "78ed7260db76ddf6",
+     "writer:complaint:zh": "1d86bc5d721132b5",
+     "writer:severity:zh": "66b218ac765b8588",
+     "writer:rating_only:zh": "bcdd60961b21e30e",
+     "writer:rating_only_low:zh": "a7f5dd5de2dbcabd"
+    },
+    "analyzer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.0,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "writer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.7,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "checks": {
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "contact_allowed": false
+    }
+   },
+   "fingerprint": "295099bc17ebad87"
+  },
+  {
+   "name": "en-CA",
+   "title": "Made-up Maple Head Spa",
+   "settings": {
+    "content": {
+     "business_facts": "",
+     "base_style": "",
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "emoji_preferred": [],
+     "words_to_avoid": [
+      "sorry for any inconvenience",
+      "valued customer",
+      "we apologize for the inconvenience",
+      "per our policy",
+      "unfortunately you"
+     ],
+     "style_notes": [],
+     "chinese_variant": "zh-CN",
+     "english_variant": "en-CA",
+     "audience": ""
+    },
+    "reply": {
+     "reply_languages": [
+      "en",
+      "zh",
+      "es"
+     ],
+     "fallback_language": "en",
+     "signature": "",
+     "sign_off_name": "",
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "example_replies": [],
+     "promos_allowed": false,
+     "contact_allowed": false,
+     "temperature": 0.7,
+     "auto_reply_min_stars": 4,
+     "auto_reply_delay_min_minutes": 0,
+     "auto_reply_delay_max_minutes": 0,
+     "auto_reply_window_start": "",
+     "auto_reply_window_end": "",
+     "auto_reply_enabled": false,
+     "auto_reply_daily_cap": 100,
+     "auto_reply_pause_after_failures": 3
+    }
+   },
+   "renders": [
+    "Write the reply in English with Canadian spelling. The language was chosen by the business's settings; follow it even if the review uses another language."
+   ],
+   "fingerprint_inputs": {
+    "gate": "phase-4.1",
+    "prompts": {
+     "analyzer": "1efb61bb001ad502",
+     "writer:positive:en": "62d28ff0a4bf39b9",
+     "writer:complaint:en": "299c683017f493c3",
+     "writer:severity:en": "d566f6a21866b660",
+     "writer:rating_only:en": "f9b0fc18a5399e77",
+     "writer:rating_only_low:en": "3f3840a73c88db68",
+     "writer:positive:es": "070eb5e0067dbe6b",
+     "writer:complaint:es": "a95842fa9e433853",
+     "writer:severity:es": "14db0ced63434b50",
+     "writer:rating_only:es": "413cbe39081d228d",
+     "writer:rating_only_low:es": "2297f8ffa882561d",
+     "writer:positive:zh": "c711a469c6e759ba",
+     "writer:complaint:zh": "34953f572a4d228c",
+     "writer:severity:zh": "8c06e7dc32463e5d",
+     "writer:rating_only:zh": "c0af3a7db98f939f",
+     "writer:rating_only_low:zh": "fe4728554f2a427d"
+    },
+    "analyzer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.0,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "writer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.7,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "checks": {
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "contact_allowed": false
+    }
+   },
+   "fingerprint": "bd7ed542e5e9142d"
+  },
+  {
+   "name": "English not set",
+   "title": "Made-up Riverside Spa",
+   "settings": {
+    "content": {
+     "business_facts": "",
+     "base_style": "",
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "emoji_preferred": [],
+     "words_to_avoid": [
+      "sorry for any inconvenience",
+      "valued customer",
+      "we apologize for the inconvenience",
+      "per our policy",
+      "unfortunately you"
+     ],
+     "style_notes": [],
+     "chinese_variant": "zh-CN",
+     "english_variant": null,
+     "audience": ""
+    },
+    "reply": {
+     "reply_languages": [
+      "en",
+      "zh",
+      "es"
+     ],
+     "fallback_language": "en",
+     "signature": "",
+     "sign_off_name": "",
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "example_replies": [],
+     "promos_allowed": false,
+     "contact_allowed": false,
+     "temperature": 0.7,
+     "auto_reply_min_stars": 4,
+     "auto_reply_delay_min_minutes": 0,
+     "auto_reply_delay_max_minutes": 0,
+     "auto_reply_window_start": "",
+     "auto_reply_window_end": "",
+     "auto_reply_enabled": false,
+     "auto_reply_daily_cap": 100,
+     "auto_reply_pause_after_failures": 3
+    }
+   },
+   "renders": [
+    "Write the reply in English, matching the spelling and phrasing the review uses."
+   ],
+   "fingerprint_inputs": {
+    "gate": "phase-4.1",
+    "prompts": {
+     "analyzer": "1523962a7d3fac72",
+     "writer:positive:en": "2562267e434da539",
+     "writer:complaint:en": "c054c1a899e23265",
+     "writer:severity:en": "c5f6dcd728a4b2e4",
+     "writer:rating_only:en": "915b367526efd25d",
+     "writer:rating_only_low:en": "6fe11adaca478933",
+     "writer:positive:es": "7531395c200f68b8",
+     "writer:complaint:es": "183a34f16a6c9adc",
+     "writer:severity:es": "cc522f86960a297a",
+     "writer:rating_only:es": "38800c6253a88e61",
+     "writer:rating_only_low:es": "7798b45574e8edc5",
+     "writer:positive:zh": "bd902fe7e43a83a8",
+     "writer:complaint:zh": "11882acd5e6a2c0f",
+     "writer:severity:zh": "bb1f85362001cfd3",
+     "writer:rating_only:zh": "bff459799b3a34ce",
+     "writer:rating_only_low:zh": "6e0ca0ad2e11dcb3"
+    },
+    "analyzer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.0,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "writer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.7,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "checks": {
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "contact_allowed": false
+    }
+   },
+   "fingerprint": "bfe36eff3632d51f"
+  },
+  {
+   "name": "the signature only",
+   "title": "Made-up Cedar Spa Studio",
+   "settings": {
+    "content": {
+     "business_facts": "",
+     "base_style": "",
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "emoji_preferred": [],
+     "words_to_avoid": [
+      "sorry for any inconvenience",
+      "valued customer",
+      "we apologize for the inconvenience",
+      "per our policy",
+      "unfortunately you"
+     ],
+     "style_notes": [],
+     "chinese_variant": "zh-CN",
+     "english_variant": "en-US",
+     "audience": ""
+    },
+    "reply": {
+     "reply_languages": [
+      "en",
+      "zh",
+      "es"
+     ],
+     "fallback_language": "en",
+     "signature": "— the Cedar team",
+     "sign_off_name": "",
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "example_replies": [],
+     "promos_allowed": false,
+     "contact_allowed": false,
+     "temperature": 0.7,
+     "auto_reply_min_stars": 4,
+     "auto_reply_delay_min_minutes": 0,
+     "auto_reply_delay_max_minutes": 0,
+     "auto_reply_window_start": "",
+     "auto_reply_window_end": "",
+     "auto_reply_enabled": false,
+     "auto_reply_daily_cap": 100,
+     "auto_reply_pause_after_failures": 3
+    }
+   },
+   "renders": [
+    "Sign off with: \"— the Cedar team\""
+   ],
+   "fingerprint_inputs": {
+    "gate": "phase-4.1",
+    "prompts": {
+     "analyzer": "b11f4a277ec90eff",
+     "writer:positive:en": "b9cf91c4cb9a23fc",
+     "writer:complaint:en": "c5e2b3d58dc8f368",
+     "writer:severity:en": "81064ed3a18f9141",
+     "writer:rating_only:en": "c833de26c028a079",
+     "writer:rating_only_low:en": "ff11aab424dab353",
+     "writer:positive:es": "7831b73fee8ad701",
+     "writer:complaint:es": "746bac4a3a038dd9",
+     "writer:severity:es": "a7ac94b28da2583d",
+     "writer:rating_only:es": "ef55dc61653e6ab3",
+     "writer:rating_only_low:es": "cc0a33361885626d",
+     "writer:positive:zh": "a0480c0cf307d9a2",
+     "writer:complaint:zh": "ac42f5c76b65acbe",
+     "writer:severity:zh": "5a411344515158e8",
+     "writer:rating_only:zh": "833b8b7bb30ec31c",
+     "writer:rating_only_low:zh": "b5269402da812acb"
+    },
+    "analyzer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.0,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "writer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.7,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "checks": {
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "contact_allowed": false
+    }
+   },
+   "fingerprint": "6de11eab3b660d38"
+  },
+  {
+   "name": "the sign-off name only",
+   "title": "Made-up Willowbank Spa",
+   "settings": {
+    "content": {
+     "business_facts": "",
+     "base_style": "",
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "emoji_preferred": [],
+     "words_to_avoid": [
+      "sorry for any inconvenience",
+      "valued customer",
+      "we apologize for the inconvenience",
+      "per our policy",
+      "unfortunately you"
+     ],
+     "style_notes": [],
+     "chinese_variant": "zh-CN",
+     "english_variant": "en-US",
+     "audience": ""
+    },
+    "reply": {
+     "reply_languages": [
+      "en",
+      "zh",
+      "es"
+     ],
+     "fallback_language": "en",
+     "signature": "",
+     "sign_off_name": "Ana",
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "example_replies": [],
+     "promos_allowed": false,
+     "contact_allowed": false,
+     "temperature": 0.7,
+     "auto_reply_min_stars": 4,
+     "auto_reply_delay_min_minutes": 0,
+     "auto_reply_delay_max_minutes": 0,
+     "auto_reply_window_start": "",
+     "auto_reply_window_end": "",
+     "auto_reply_enabled": false,
+     "auto_reply_daily_cap": 100,
+     "auto_reply_pause_after_failures": 3
+    }
+   },
+   "renders": [
+    "Sign off with one short line that uses only this name: \"Ana\". Add no title, role or other detail about the person."
+   ],
+   "fingerprint_inputs": {
+    "gate": "phase-4.1",
+    "prompts": {
+     "analyzer": "d7ff7f0d9eae3a0e",
+     "writer:positive:en": "fa2cd43b721bff9d",
+     "writer:complaint:en": "b5878d3b4b26d01b",
+     "writer:severity:en": "5e977df80c23acbf",
+     "writer:rating_only:en": "944421e80dc80f5d",
+     "writer:rating_only_low:en": "3301520833d7f237",
+     "writer:positive:es": "c609ad7c575da02b",
+     "writer:complaint:es": "60e7663b3d2a0f95",
+     "writer:severity:es": "bedfc0d9e0f417d9",
+     "writer:rating_only:es": "622db93be7e8cf9b",
+     "writer:rating_only_low:es": "2a5225e50d364173",
+     "writer:positive:zh": "d0976efe0f8024a1",
+     "writer:complaint:zh": "fa19108a13509db8",
+     "writer:severity:zh": "32d3f8b0ab90124f",
+     "writer:rating_only:zh": "7e9f699f5ca1aa02",
+     "writer:rating_only_low:zh": "84b6c1a1f5c77bc9"
+    },
+    "analyzer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.0,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "writer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.7,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "checks": {
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "contact_allowed": false
+    }
+   },
+   "fingerprint": "36484b3f24d6ac65"
+  },
+  {
+   "name": "both the signature and the sign-off name",
+   "title": "Made-up Orchard Spa LLC",
+   "settings": {
+    "content": {
+     "business_facts": "",
+     "base_style": "",
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "emoji_preferred": [],
+     "words_to_avoid": [
+      "sorry for any inconvenience",
+      "valued customer",
+      "we apologize for the inconvenience",
+      "per our policy",
+      "unfortunately you"
+     ],
+     "style_notes": [],
+     "chinese_variant": "zh-CN",
+     "english_variant": "en-US",
+     "audience": ""
+    },
+    "reply": {
+     "reply_languages": [
+      "en",
+      "zh",
+      "es"
+     ],
+     "fallback_language": "en",
+     "signature": "— the owner and family",
+     "sign_off_name": "Ana",
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "example_replies": [],
+     "promos_allowed": false,
+     "contact_allowed": false,
+     "temperature": 0.7,
+     "auto_reply_min_stars": 4,
+     "auto_reply_delay_min_minutes": 0,
+     "auto_reply_delay_max_minutes": 0,
+     "auto_reply_window_start": "",
+     "auto_reply_window_end": "",
+     "auto_reply_enabled": false,
+     "auto_reply_daily_cap": 100,
+     "auto_reply_pause_after_failures": 3
+    }
+   },
+   "renders": [
+    "Sign off with the preferred signature: \"— the owner and family\". The person writing is named \"Ana\"; if the signature refers to the writer in a generic way (for example \"the owner\"), use the name in its place, otherwise keep the signature as it is."
+   ],
+   "fingerprint_inputs": {
+    "gate": "phase-4.1",
+    "prompts": {
+     "analyzer": "987cc0d71268c8d8",
+     "writer:positive:en": "eed52fb48e603819",
+     "writer:complaint:en": "13fe7a41108aa53e",
+     "writer:severity:en": "631b9f0e57775714",
+     "writer:rating_only:en": "b8d62bc459c00b3d",
+     "writer:rating_only_low:en": "a0aff85dcaab6a57",
+     "writer:positive:es": "832d631f848d1f35",
+     "writer:complaint:es": "3e997c3aea2ed749",
+     "writer:severity:es": "446eaa6caf6c8865",
+     "writer:rating_only:es": "c55accda58f10bdc",
+     "writer:rating_only_low:es": "9fa01b5cb0e04f00",
+     "writer:positive:zh": "eb519c360b971a35",
+     "writer:complaint:zh": "d7409c1e785ecdb6",
+     "writer:severity:zh": "25533c7a1755b8c9",
+     "writer:rating_only:zh": "23aa957317f91e47",
+     "writer:rating_only_low:zh": "7e9f227f252b00fe"
+    },
+    "analyzer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.0,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "writer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.7,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "checks": {
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "contact_allowed": false
+    }
+   },
+   "fingerprint": "aa5423ea7c8d60ae"
+  },
+  {
+   "name": "neither the signature nor the sign-off name",
+   "title": "Made-up Stone Path Spa",
+   "settings": {
+    "content": {
+     "business_facts": "",
+     "base_style": "",
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "emoji_preferred": [],
+     "words_to_avoid": [
+      "sorry for any inconvenience",
+      "valued customer",
+      "we apologize for the inconvenience",
+      "per our policy",
+      "unfortunately you"
+     ],
+     "style_notes": [],
+     "chinese_variant": "zh-CN",
+     "english_variant": "en-US",
+     "audience": ""
+    },
+    "reply": {
+     "reply_languages": [
+      "en",
+      "zh",
+      "es"
+     ],
+     "fallback_language": "en",
+     "signature": "",
+     "sign_off_name": "",
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "example_replies": [],
+     "promos_allowed": false,
+     "contact_allowed": false,
+     "temperature": 0.7,
+     "auto_reply_min_stars": 4,
+     "auto_reply_delay_min_minutes": 0,
+     "auto_reply_delay_max_minutes": 0,
+     "auto_reply_window_start": "",
+     "auto_reply_window_end": "",
+     "auto_reply_enabled": false,
+     "auto_reply_daily_cap": 100,
+     "auto_reply_pause_after_failures": 3
+    }
+   },
+   "renders": [
+    "No sign-off line."
+   ],
+   "fingerprint_inputs": {
+    "gate": "phase-4.1",
+    "prompts": {
+     "analyzer": "4521b9da470da000",
+     "writer:positive:en": "b5732aeb719d3744",
+     "writer:complaint:en": "4ae01f58b409cf33",
+     "writer:severity:en": "637c17a2576b620b",
+     "writer:rating_only:en": "d119b994bebe0241",
+     "writer:rating_only_low:en": "0b1b02c143d20cc6",
+     "writer:positive:es": "bb0193af8a0aa3fc",
+     "writer:complaint:es": "a73aac8a26b81004",
+     "writer:severity:es": "42a7d536849472cf",
+     "writer:rating_only:es": "dcb74b2976918bd8",
+     "writer:rating_only_low:es": "3c3248691441d15d",
+     "writer:positive:zh": "3e0b718900eb0179",
+     "writer:complaint:zh": "e1a23712f7a9b156",
+     "writer:severity:zh": "c10b0a9961ed446e",
+     "writer:rating_only:zh": "b135a9292136b847",
+     "writer:rating_only_low:zh": "0e93bf327db5b580"
+    },
+    "analyzer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.0,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "writer": {
+     "provider": "dashscope",
+     "model": "qwen3.7-plus",
+     "temperature": 0.7,
+     "max_tokens": 1200,
+     "extras": {
+      "enable_thinking": false
+     }
+    },
+    "checks": {
+     "length": {
+      "en": {
+       "rating_only": {
+        "min": 30,
+        "max": 160
+       },
+       "positive": {
+        "min": 60,
+        "max": 420
+       },
+       "complaint": {
+        "min": 120,
+        "max": 650
+       },
+       "severity": {
+        "min": 120,
+        "max": 650
+       }
+      },
+      "es": {
+       "rating_only": {
+        "min": 30,
+        "max": 180
+       },
+       "positive": {
+        "min": 60,
+        "max": 450
+       },
+       "complaint": {
+        "min": 120,
+        "max": 700
+       },
+       "severity": {
+        "min": 120,
+        "max": 700
+       }
+      },
+      "zh": {
+       "rating_only": {
+        "min": 8,
+        "max": 60
+       },
+       "positive": {
+        "min": 20,
+        "max": 160
+       },
+       "complaint": {
+        "min": 40,
+        "max": 260
+       },
+       "severity": {
+        "min": 40,
+        "max": 260
+       }
+      }
+     },
+     "emoji_allowed": false,
+     "emoji_max": 0,
+     "contact_allowed": false
+    }
+   },
+   "fingerprint": "553213d1597af439"
+  }
+ ]
+}
