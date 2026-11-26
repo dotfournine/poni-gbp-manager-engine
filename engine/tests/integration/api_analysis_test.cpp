@@ -43,7 +43,7 @@ protected:
     }
 
     void set_industry(std::int64_t location, const std::string& key) {
-        ASSERT_EQ(patch("/api/locations/" + std::to_string(location), R"({"industry_key": ")" + key + R"("})").status, 200u);
+        ASSERT_EQ(patch_current("/api/locations/" + std::to_string(location), R"({"industry_key": ")" + key + R"("})").status, 200u);
     }
 
     std::int64_t store(const std::string& review_id, std::string_view stars, std::optional<std::string> comment,
@@ -191,17 +191,17 @@ TEST_F(AnalysisApi, NoRouteWritesTheKnowledgeBase) {
 TEST_F(AnalysisApi, ALocationsIndustryIsSetAndChecked) {
     const auto target = "/api/locations/" + std::to_string(spa_);
     EXPECT_TRUE(read(target).at("industry_key").is_null());
-    const auto set = patch(target, R"({"industry_key": "wellness"})");
+    const auto set = patch_current(target, R"({"industry_key": "wellness"})");
     ASSERT_EQ(set.status, 200u) << set.body;
     EXPECT_EQ(json(set).at("industry_key").as_string(), "wellness");
     // Only an industry the knowledge base supports can be given.
-    const auto unknown = patch(target, R"({"industry_key": "no_such_industry"})");
+    const auto unknown = patch_current(target, R"({"industry_key": "no_such_industry"})");
     EXPECT_EQ(unknown.status, 400u);
     EXPECT_THAT(error_message(unknown), HasSubstr("knowledge base"));
-    EXPECT_EQ(patch(target, R"({"industry_key": "common"})").status, 400u) << "the shared flags are not an industry";
+    EXPECT_EQ(patch_current(target, R"({"industry_key": "common"})").status, 400u) << "the shared flags are not an industry";
     EXPECT_EQ(patch(target, R"({"industry_key": 5})").status, 400u);
-    EXPECT_EQ(json(patch(target, R"({"audience": "x"})")).at("industry_key").as_string(), "wellness") << "a field that isn't sent stays";
-    const auto none = json(patch(target, R"({"industry_key": null})"));
+    EXPECT_EQ(json(patch_current(target, R"({"audience": "x"})")).at("industry_key").as_string(), "wellness") << "a field that isn't sent stays";
+    const auto none = json(patch_current(target, R"({"industry_key": null})"));
     EXPECT_TRUE(none.at("industry_key").is_null());
 }
 
@@ -219,8 +219,8 @@ TEST_F(AnalysisApi, ALocationWhoseIndustryLeftTheKnowledgeBaseIsNotAnalyzedAndSa
     EXPECT_EQ(location.at("industry_key").as_string(), "wellness") << "the seed changes no location";
     EXPECT_FALSE(location.as_object().contains("industry_supported")) << "the dashboard compares the key with the industries of /api/knowledge";
     // Changing something else leaves the industry it has; it can't be given again while it is gone.
-    EXPECT_EQ(patch(target, R"({"audience": "x"})").status, 200u);
-    EXPECT_EQ(patch("/api/locations/" + std::to_string(buffet_), R"({"industry_key": "wellness"})").status, 400u);
+    EXPECT_EQ(patch_current(target, R"({"audience": "x"})").status, 200u);
+    EXPECT_EQ(patch_current("/api/locations/" + std::to_string(buffet_), R"({"industry_key": "wellness"})").status, 400u);
 
     EXPECT_EQ(await(pipeline_->enqueue_pending()), 0u) << "the pipeline does not pick up a review it has no profile for";
     await(pipeline_->process(id, false, false));
@@ -244,16 +244,16 @@ TEST_F(AnalysisApi, ALocationWhoseIndustryLeftTheKnowledgeBaseIsNotAnalyzedAndSa
 TEST_F(AnalysisApi, ALocationsAnalysisStartDateIsSetCheckedAndAudited) {
     const auto target = "/api/locations/" + std::to_string(spa_);
     EXPECT_TRUE(read(target).at("analyze_from").is_null()) << "without a date every review is analyzed";
-    const auto set = patch(target, R"({"analyze_from": "2026-11-01"})");
+    const auto set = patch_current(target, R"({"analyze_from": "2026-11-01"})");
     ASSERT_EQ(set.status, 200u) << set.body;
     EXPECT_EQ(json(set).at("analyze_from").as_string(), "2026-11-01");
     EXPECT_EQ(value<std::string>("SELECT after->>'analyze_from' FROM audit_log WHERE action = 'location.update' ORDER BY id DESC LIMIT 1"),
               "2026-11-01");
     for (const auto* bad : {R"({"analyze_from": "2026-02-30"})", R"({"analyze_from": "11/01/2026"})", R"({"analyze_from": 20261101})"}) {
-        EXPECT_EQ(patch(target, bad).status, 400u) << bad;
+        EXPECT_EQ(patch_current(target, bad).status, 400u) << bad;
     }
-    EXPECT_EQ(json(patch(target, R"({"audience": "x"})")).at("analyze_from").as_string(), "2026-11-01") << "a field that isn't sent stays";
-    EXPECT_TRUE(json(patch(target, R"({"analyze_from": null})")).at("analyze_from").is_null());
+    EXPECT_EQ(json(patch_current(target, R"({"audience": "x"})")).at("analyze_from").as_string(), "2026-11-01") << "a field that isn't sent stays";
+    EXPECT_TRUE(json(patch_current(target, R"({"analyze_from": null})")).at("analyze_from").is_null());
 }
 
 // ---- a location's reply settings (D-093) -----------------------------------------
@@ -417,7 +417,7 @@ TEST_F(AnalysisApi, TheModelPerTaskIsASetting) {
     EXPECT_FALSE(settings.as_object().contains("manipulation_patterns")) << "the keyword rules are gone (D-058)";
     EXPECT_THAT(std::string(settings.at("prompt_version").as_string()), HasSubstr("p2."));
 
-    const auto changed = patch("/api/ai/settings", R"({"analyzer_model": "qwen3.8-flash", "analyzer_temperature": 0.5, "batch_size": 3})");
+    const auto changed = patch_current("/api/ai/settings", R"({"analyzer_model": "qwen3.8-flash", "analyzer_temperature": 0.5, "batch_size": 3})");
     ASSERT_EQ(changed.status, 200u) << changed.body;
     EXPECT_EQ(json(changed).at("analyzer_model").as_string(), "qwen3.8-flash");
     EXPECT_EQ(json(changed).at("generator_model").as_string(), "qwen3.7-plus");
@@ -431,15 +431,15 @@ TEST_F(AnalysisApi, TheModelPerTaskIsASetting) {
     EXPECT_DOUBLE_EQ(llm_.requests[0].temperature.value(), 0.5);
     EXPECT_NEAR(llm_.requests[1].temperature.value(), 0.7, 1e-6) << "the writer's is the voice's, not a setting here (D-074)";
 
-    EXPECT_EQ(patch("/api/ai/settings", R"({"analyzer_temperature": 3})").status, 400u);
-    EXPECT_EQ(patch("/api/ai/settings", R"({"analyzer_model": ""})").status, 400u);
-    EXPECT_EQ(patch("/api/ai/settings", R"({"batch_size": 1000})").status, 400u);
+    EXPECT_EQ(patch_current("/api/ai/settings", R"({"analyzer_temperature": 3})").status, 400u);
+    EXPECT_EQ(patch_current("/api/ai/settings", R"({"analyzer_model": ""})").status, 400u);
+    EXPECT_EQ(patch_current("/api/ai/settings", R"({"batch_size": 1000})").status, 400u);
     EXPECT_EQ(patch("/api/ai/settings", R"({"max_output_tokens": "many"})").status, 400u);
     EXPECT_EQ(audited("ai_settings.update"), 1);
 
     // Every setting has its default in the knowledge base, which "reset" in the dashboard sets it back to.
     const auto defaults = read("/api/knowledge").at("defaults").at("analysis");
-    ASSERT_EQ(patch("/api/ai/settings", boost::json::serialize(boost::json::object{{"analyzer_model", defaults.at("analyzer_model")},
+    ASSERT_EQ(patch_current("/api/ai/settings", boost::json::serialize(boost::json::object{{"analyzer_model", defaults.at("analyzer_model")},
                                                                                 {"analyzer_temperature", defaults.at("analyzer_temperature")},
                                                                                 {"batch_size", defaults.at("batch_size")}}))
                   .status,
@@ -448,9 +448,26 @@ TEST_F(AnalysisApi, TheModelPerTaskIsASetting) {
     EXPECT_EQ(audited("ai_settings.update"), 2);
 }
 
+// D-108: the settings change only against the ETag of what the person read.
+TEST_F(AnalysisApi, TheSettingsChangeOnlyAgainstTheirCurrentEtag) {
+    const auto read_tag = etag("/api/ai/settings", browser_);
+    const auto without = patch("/api/ai/settings", R"({"batch_size": 7})");
+    EXPECT_EQ(without.status, 428u);
+    EXPECT_EQ(error_code(without), "precondition_required");
+    const auto changed = patch("/api/ai/settings", R"({"batch_size": 7})", if_match(read_tag));
+    ASSERT_EQ(changed.status, 200u) << changed.body;
+    EXPECT_NE(header(changed, "ETag"), read_tag);
+    EXPECT_EQ(header(changed, "ETag"), etag("/api/ai/settings", browser_)) << "with the providers filled in, as the GET has them";
+    const auto stale = patch("/api/ai/settings", R"({"batch_size": 8})", if_match(read_tag));
+    EXPECT_EQ(stale.status, 412u);
+    EXPECT_EQ(error_code(stale), "precondition_failed");
+    EXPECT_EQ(read("/api/ai/settings").at("batch_size").as_int64(), 7);
+    EXPECT_EQ(audited("ai_settings.update"), 1);
+}
+
 // D-059: each task names one of the configured providers, and the choice is a setting.
 TEST_F(AnalysisApi, TheProviderPerTaskIsASetting) {
-    const auto changed = patch("/api/ai/settings", R"({"generator_provider": "openai", "generator_model": "some-openai-model",
+    const auto changed = patch_current("/api/ai/settings", R"({"generator_provider": "openai", "generator_model": "some-openai-model",
                                                        "request_extras": {"dashscope": {"enable_thinking": false}, "openai": {"seed": 7}}})");
     ASSERT_EQ(changed.status, 200u) << changed.body;
     EXPECT_EQ(json(changed).at("analyzer_provider").as_string(), "dashscope");
@@ -469,10 +486,10 @@ TEST_F(AnalysisApi, TheProviderPerTaskIsASetting) {
     EXPECT_EQ(llm_.requests[1].extras.at("seed").as_int64(), 7);
 
     // Only a provider that has an address and a key can be chosen.
-    const auto unknown = patch("/api/ai/settings", R"({"analyzer_provider": "anthropic"})");
+    const auto unknown = patch_current("/api/ai/settings", R"({"analyzer_provider": "anthropic"})");
     EXPECT_EQ(unknown.status, 400u);
     EXPECT_THAT(error_message(unknown), HasSubstr("anthropic"));
-    EXPECT_EQ(patch("/api/ai/settings", R"({"request_extras": {"dashscope": 5}})").status, 400u);
+    EXPECT_EQ(patch_current("/api/ai/settings", R"({"request_extras": {"dashscope": 5}})").status, 400u);
     EXPECT_EQ(audited("ai_settings.update"), 1);
 
     // If a chosen provider loses its key, the status says so and the sweep waits.

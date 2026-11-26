@@ -537,10 +537,10 @@ TEST_F(Reports, TheSummaryTaskHasItsOwnProviderAndModel) {
     auto settings = read("/api/ai/settings");
     EXPECT_EQ(settings.at("summary_provider").as_string(), "dashscope");
     EXPECT_EQ(settings.at("summary_model").as_string(), settings.at("generator_model").as_string());
-    const auto changed = patch("/api/ai/settings", R"({"summary_provider": "anthropic", "summary_model": "claude-haiku-5-5"})");
+    const auto changed = patch_current("/api/ai/settings", R"({"summary_provider": "anthropic", "summary_model": "claude-haiku-5-5"})");
     ASSERT_EQ(changed.status, 200u) << changed.body;
-    EXPECT_EQ(patch("/api/ai/settings", R"({"summary_provider": "nobody"})").status, 400u);
-    EXPECT_EQ(patch("/api/ai/settings", R"({"summary_model": " "})").status, 400u);
+    EXPECT_EQ(patch_current("/api/ai/settings", R"({"summary_provider": "nobody"})").status, 400u);
+    EXPECT_EQ(patch_current("/api/ai/settings", R"({"summary_model": " "})").status, 400u);
     // The knowledge base has the default that is shown beside the setting.
     EXPECT_EQ(read("/api/knowledge").at("defaults").at("analysis").at("summary_model").as_string(), "qwen3.7-plus");
 
@@ -1095,11 +1095,11 @@ TEST_F(Reports, TheRecipientsFollowTheRuleAndAListCarriesNone) {
     EXPECT_EQ(boost::json::serialize(report(id).at("recipients")), R"(["manager@spa.example","owner@spa.example"])");
     const auto rule = std::format("/api/notification-rules/{}",
                                   value<std::int64_t>(std::format("SELECT id FROM notification_rules WHERE location_id = {}", chelsea_)));
-    ASSERT_EQ(patch(rule, R"({"recipients": ["owner@spa.example", "assistant@spa.example"]})").status, 200u);
+    ASSERT_EQ(patch_current(rule, R"({"recipients": ["owner@spa.example", "assistant@spa.example"]})").status, 200u);
     EXPECT_EQ(boost::json::serialize(report(id).at("recipients")), R"(["assistant@spa.example","owner@spa.example"])");
-    ASSERT_EQ(patch(rule, R"({"enabled": false})").status, 200u);
+    ASSERT_EQ(patch_current(rule, R"({"enabled": false})").status, 200u);
     EXPECT_TRUE(report(id).at("recipients").as_array().empty());
-    ASSERT_EQ(patch(rule, R"({"enabled": true})").status, 200u);
+    ASSERT_EQ(patch_current(rule, R"({"enabled": true})").status, 200u);
 
     sending_on();
     connect_mailbox();

@@ -81,7 +81,7 @@ protected:
     http::Response approve(std::int64_t draft_id) {
         return post("/api/drafts/" + std::to_string(draft_id) + "/approve", body_of("text", text_of(draft_id)));
     }
-    void posting(bool on) { ASSERT_EQ(patch("/api/system/settings", on ? R"({"posting_enabled": true})" : R"({"posting_enabled": false})").status, 200u); }
+    void posting(bool on) { ASSERT_EQ(patch_current("/api/system/settings", on ? R"({"posting_enabled": true})" : R"({"posting_enabled": false})").status, 200u); }
 
     // A location's auto-posting settings as the dashboard reads them: from the overview.
     boost::json::value auto_posting_of(std::int64_t location) {
@@ -130,7 +130,7 @@ TEST_F(RepliesApi, PostingAndSendingAreOffUntilAPersonSwitchesThemOn) {
 
     posting(true);
     EXPECT_EQ(audited("posting.enabled"), 1);
-    EXPECT_EQ(patch("/api/system/settings", R"({"posting_enabled": true})").status, 200u);
+    EXPECT_EQ(patch_current("/api/system/settings", R"({"posting_enabled": true})").status, 200u);
     EXPECT_EQ(audited("posting.enabled"), 1) << "no change, no entry";
     EXPECT_EQ(patch("/api/system/settings", R"({"posting_enabled": "yes"})").status, 400u);
     posting(false);
@@ -140,7 +140,7 @@ TEST_F(RepliesApi, PostingAndSendingAreOffUntilAPersonSwitchesThemOn) {
     posting(true);
     const auto location = "/api/locations/" + std::to_string(spa_);
     EXPECT_TRUE(read(location).at("posting_enabled").as_bool());
-    const auto paused = patch(location, R"({"posting_enabled": false})");
+    const auto paused = patch_current(location, R"({"posting_enabled": false})");
     ASSERT_EQ(paused.status, 200u);
     EXPECT_FALSE(json(paused).at("posting_enabled").as_bool());
     EXPECT_EQ(audited("location.posting_paused"), 1);
@@ -164,7 +164,7 @@ TEST_F(RepliesApi, ApprovingPostsTheExactTextOnceUnderTheApproversName) {
     EXPECT_EQ(json(approved).at("decided_by").as_string(), "staff@xvisionmediaus.com");
     EXPECT_EQ(audited("draft.approve"), 1);
     EXPECT_EQ(error_code(approve(draft_id)), "draft_not_open");
-    EXPECT_EQ(error_code(patch(path, body_of("text", "Too late to edit this."))), "draft_not_open");
+    EXPECT_EQ(error_code(patch_current(path, body_of("text", "Too late to edit this."))), "draft_not_open");
     EXPECT_EQ(error_code(post(path + "/reject", body_of("reason", "Too late."))), "draft_not_open");
 
     run_jobs();
@@ -191,17 +191,39 @@ TEST_F(RepliesApi, ApprovingPostsTheExactTextOnceUnderTheApproversName) {
     EXPECT_EQ(gbp_.puts.size(), 1u);
 }
 
+// D-108: a draft's text is changed only against the ETag of what the person read; the approval needs none.
+TEST_F(RepliesApi, ADraftsTextIsChangedOnlyAgainstItsCurrentEtag) {
+    posting(true);
+    const auto draft_id = draft_for();
+    const auto path = "/api/drafts/" + std::to_string(draft_id);
+    const auto original = text_of(draft_id);
+    const auto read_tag = etag(path, browser_);
+
+    const auto without = patch(path, body_of("text", "Thank you for coming in!"));
+    EXPECT_EQ(without.status, 428u);
+    EXPECT_EQ(error_code(without), "precondition_required");
+    const auto changed = patch(path, body_of("text", "Thank you so much for visiting us! Eva will be delighted, and we hope to see you again soon."), if_match(read_tag));
+    ASSERT_EQ(changed.status, 200u) << changed.body;
+    const auto stale = patch(path, body_of("text", "Thank you for coming in!"), if_match(read_tag));
+    EXPECT_EQ(stale.status, 412u);
+    EXPECT_EQ(error_code(stale), "precondition_failed");
+    EXPECT_EQ(patch(path, body_of("text", original), if_match(read_tag)).status, 412u) << "back to what was read is a change too";
+    EXPECT_EQ(text_of(draft_id), "Thank you so much for visiting us! Eva will be delighted, and we hope to see you again soon.");
+    EXPECT_EQ(audited("draft.edit"), 1);
+    ASSERT_EQ(approve(draft_id).status, 202u) << "the approval carries its text, and no If-Match";
+}
+
 TEST_F(RepliesApi, AnEditRunsTheChecksAgainAndAFailedCheckBlocksApproval) {
     posting(true);
     const auto draft_id = draft_for();
     const auto path = "/api/drafts/" + std::to_string(draft_id);
     const auto original = text_of(draft_id);
 
-    EXPECT_EQ(patch(path, R"({"text": "   "})").status, 400u);
+    EXPECT_EQ(patch_current(path, R"({"text": "   "})").status, 400u);
     EXPECT_EQ(patch(path, R"({"text": 5})").status, 400u);
     EXPECT_EQ(patch("/api/drafts/999999", body_of("text", "Hello there, thank you.")).status, 404u);
 
-    const auto edited = patch(path, body_of("text", "Thank you so much! Call us on 212-555-0143 to book your next head spa with Eva."));
+    const auto edited = patch_current(path, body_of("text", "Thank you so much! Call us on 212-555-0143 to book your next head spa with Eva."));
     ASSERT_EQ(edited.status, 200u) << edited.body;
     const auto draft = json(edited);
     EXPECT_EQ(draft.at("edited_by").as_string(), "staff@xvisionmediaus.com");
@@ -216,7 +238,7 @@ TEST_F(RepliesApi, AnEditRunsTheChecksAgainAndAFailedCheckBlocksApproval) {
     EXPECT_EQ(error_code(blocked), "checks_failed");
     EXPECT_EQ(audited("draft.edit"), 1);
 
-    ASSERT_EQ(patch(path, body_of("text", "Thank you so much for visiting us! Eva will be delighted, and we hope to see you again soon.")).status, 200u);
+    ASSERT_EQ(patch_current(path, body_of("text", "Thank you so much for visiting us! Eva will be delighted, and we hope to see you again soon.")).status, 200u);
     ASSERT_EQ(approve(draft_id).status, 202u);
     run_jobs();
     ASSERT_EQ(gbp_.puts.size(), 1u);
@@ -502,13 +524,13 @@ TEST_F(RepliesApi, NotificationRulesAreManagedAndTheLogShowsWhatHappened) {
     EXPECT_EQ(get("/api/notification-deliveries?escalation_id=first", browser_).status, 400u);
     EXPECT_TRUE(channel_.sent.empty());
 
-    const auto changed = patch(path, R"({"recipients": ["team@xvisionmediaus.com", "owner@xvisionmediaus.com"], "enabled": false})");
+    const auto changed = patch_current(path, R"({"recipients": ["team@xvisionmediaus.com", "owner@xvisionmediaus.com"], "enabled": false})");
     ASSERT_EQ(changed.status, 200u) << changed.body;
     EXPECT_FALSE(json(changed).at("enabled").as_bool());
-    EXPECT_EQ(patch(path, R"({"recipients": ["broken@"]})").status, 400u);
+    EXPECT_EQ(patch_current(path, R"({"recipients": ["broken@"]})").status, 400u);
 
     // Switched on: the test message goes out through the same channel and log.
-    ASSERT_EQ(patch("/api/system/settings", R"({"email_sending_enabled": true})").status, 200u);
+    ASSERT_EQ(patch_current("/api/system/settings", R"({"email_sending_enabled": true})").status, 200u);
     EXPECT_EQ(audited("email_sending.enabled"), 1);
     EXPECT_EQ(post("/api/notifications/test", R"({"recipient": "nope"})").status, 400u);
     const auto test_message = post("/api/notifications/test", R"({"recipient": "owner@xvisionmediaus.com"})");
@@ -526,11 +548,53 @@ TEST_F(RepliesApi, NotificationRulesAreManagedAndTheLogShowsWhatHappened) {
     EXPECT_TRUE(email.at("account_email").is_null());
     EXPECT_FALSE(email.at("last_ok_at").is_null());
 
-    EXPECT_EQ(del(path).status, 204u);
+    EXPECT_EQ(del_current(path).status, 204u);
     EXPECT_EQ(del(path).status, 404u);
     EXPECT_EQ(read("/api/notification-rules").at("total").as_int64(), 0);
     EXPECT_EQ(read("/api/notification-deliveries").at("total").as_int64(), 2) << "the log outlives the rule";
     EXPECT_EQ(audited("notification_rule.create") + audited("notification_rule.update") + audited("notification_rule.delete"), 3);
+}
+
+// D-108: a rule is changed and removed only against the ETag of what the person read.
+TEST_F(RepliesApi, ARuleIsChangedAndRemovedOnlyAgainstItsCurrentEtag) {
+    const auto created = post("/api/notification-rules", R"({"event_type": "escalation", "recipients": ["team@xvisionmediaus.com"]})");
+    ASSERT_EQ(created.status, 201u) << created.body;
+    const auto path = "/api/notification-rules/" + std::to_string(json(created).at("id").as_int64());
+    const auto read_tag = etag(path, browser_);
+
+    EXPECT_EQ(error_code(patch(path, R"({"enabled": false})")), "precondition_required");
+    EXPECT_EQ(error_code(del(path)), "precondition_required");
+    const auto changed = patch(path, R"({"enabled": false})", if_match(read_tag));
+    ASSERT_EQ(changed.status, 200u) << changed.body;
+    EXPECT_NE(header(changed, "ETag"), read_tag);
+    const auto stale = patch(path, R"({"recipients": ["owner@xvisionmediaus.com"]})", if_match(read_tag));
+    EXPECT_EQ(stale.status, 412u);
+    EXPECT_EQ(error_code(stale), "precondition_failed");
+    EXPECT_EQ(del(path, if_match(read_tag)).status, 412u) << "a removal by someone who has not seen the change";
+    EXPECT_EQ(read(path).at("recipients").as_array().at(0).as_string(), "team@xvisionmediaus.com");
+    EXPECT_EQ(del(path, if_match(header(changed, "ETag"))).status, 204u);
+    EXPECT_EQ(audited("notification_rule.update") + audited("notification_rule.delete"), 2);
+}
+
+// D-108: the switches change only against the ETag of what the person read, and a pause the engine puts on
+// itself, in the same row, does not make that read stale.
+TEST_F(RepliesApi, TheSwitchesChangeOnlyAgainstTheirCurrentEtagWhichAPauseLeavesAsItIs) {
+    const auto read_tag = etag("/api/system/settings", browser_);
+    EXPECT_EQ(error_code(patch("/api/system/settings", R"({"email_sending_enabled": true})")), "precondition_required");
+
+    tx([&](pqxx::work& tx) {
+        ASSERT_TRUE(repo::pause_auto_posting(tx, std::nullopt, repo::kPausePostRefused, "Google refused an automatic reply (HTTP 401).", clock_.now()));
+    });
+    EXPECT_EQ(etag("/api/system/settings", browser_), read_tag);
+
+    const auto changed = patch("/api/system/settings", R"({"email_sending_enabled": true})", if_match(read_tag));
+    ASSERT_EQ(changed.status, 200u) << changed.body;
+    const auto stale = patch("/api/system/settings", R"({"email_sending_enabled": false})", if_match(read_tag));
+    EXPECT_EQ(stale.status, 412u);
+    EXPECT_EQ(error_code(stale), "precondition_failed");
+    EXPECT_TRUE(read("/api/system/settings").at("email_sending_enabled").as_bool());
+    EXPECT_EQ(audited("email_sending.enabled"), 1);
+    EXPECT_EQ(audited("email_sending.disabled"), 0);
 }
 
 // ---- auto-posting ------------------------------------------------------
@@ -719,7 +783,7 @@ TEST_F(RepliesApi, AScheduledReplyCanBeTakenBackThroughTheApi) {
     ASSERT_EQ(read(target).at("status").as_string(), "scheduled");
     // A scheduled draft is not in the approval queue: it can't be edited, approved or rejected there.
     EXPECT_EQ(error_code(approve(draft_id)), "draft_not_open");
-    EXPECT_EQ(error_code(patch(target, body_of("text", "Thanks!"))), "draft_not_open");
+    EXPECT_EQ(error_code(patch_current(target, body_of("text", "Thanks!"))), "draft_not_open");
 
     const auto taken = post(target + "/unschedule");
     ASSERT_EQ(taken.status, 200u) << taken.body;
@@ -765,7 +829,7 @@ TEST_F(RepliesApi, APersonResumesAPausedLocationAndAPauseOnEverything) {
 TEST_F(RepliesApi, ADraftOfALocationThatIsSwitchedOffCannotBeApproved) {
     posting(true);
     const auto draft_id = draft_for("r1");
-    ASSERT_EQ(patch("/api/locations/" + std::to_string(spa_), R"({"enabled": false})").status, 200u);
+    ASSERT_EQ(patch_current("/api/locations/" + std::to_string(spa_), R"({"enabled": false})").status, 200u);
     const auto refused = approve(draft_id);
     EXPECT_EQ(refused.status, 409u);
     EXPECT_EQ(error_code(refused), "review_not_postable");

@@ -1,5 +1,6 @@
 #include "db/repo_notifications.hpp"
 
+#include "core/etag.hpp"
 #include "core/text.hpp"
 #include "db/database.hpp"
 #include "db/repo_auth.hpp"
@@ -268,11 +269,25 @@ Result<model::NotificationRule> update_rule(pqxx::transaction_base& tx, audit::W
     return after;
 }
 
+boost::json::object editable(const model::NotificationRule& rule) {
+    return {{"recipients", boost::json::value_from(rule.recipients)}, {"enabled", rule.enabled}};
+}
+
+Result<std::string> current_rule_etag(pqxx::transaction_base& tx, std::int64_t id) {
+    if (tx.exec("SELECT 1 FROM notification_rules WHERE id = $1 FOR UPDATE", pqxx::params{id}).empty()) {
+        return not_found("notification rule");
+    }
+    return core::etag(editable(*get_rule(tx, id)));
+}
+
 Result<void> delete_rule(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id) {
-    const auto before = get_rule(tx, id);
-    if (!before) return not_found("notification rule");
+    // Locked before it is read, so that a change made meanwhile is either in the entry or waits for the delete.
+    if (tx.exec("SELECT 1 FROM notification_rules WHERE id = $1 FOR UPDATE", pqxx::params{id}).empty()) {
+        return not_found("notification rule");
+    }
+    const auto before = *get_rule(tx, id);
     tx.exec("DELETE FROM notification_rules WHERE id = $1", pqxx::params{id}).no_rows();
-    audit.record("notification_rule.delete", "notification_rule", id, {.before = rule_json(*before), .location_id = before->location_id});  // the row is gone
+    audit.record("notification_rule.delete", "notification_rule", id, {.before = rule_json(before), .location_id = before.location_id});  // the row is gone
     return {};
 }
 
@@ -334,6 +349,15 @@ std::vector<model::NotificationDelivery> report_deliveries(pqxx::transaction_bas
 model::SystemSettings get_system_settings(pqxx::transaction_base& tx) {
     return db::one_as<model::SystemSettings>(
         tx, std::format("SELECT posting_enabled, email_sending_enabled, {} AS updated_at FROM system_settings", iso("updated_at")));
+}
+
+boost::json::object editable(const model::SystemSettings& settings) {
+    return {{"posting_enabled", settings.posting_enabled}, {"email_sending_enabled", settings.email_sending_enabled}};
+}
+
+Result<std::string> current_system_settings_etag(pqxx::transaction_base& tx) {
+    tx.exec("SELECT 1 FROM system_settings FOR UPDATE").one_row();
+    return core::etag(editable(get_system_settings(tx)));
 }
 
 model::SystemSettings update_system_settings(pqxx::transaction_base& tx, audit::Writer& audit, const SystemSettingsPatch& patch) {

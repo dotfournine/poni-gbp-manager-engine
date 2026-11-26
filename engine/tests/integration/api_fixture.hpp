@@ -114,6 +114,15 @@ protected:
     }
     // The headers of a change made against `tag`.
     static Headers if_match(std::string tag) { return {{"if-match", std::move(tag)}}; }
+    // A change of `target` made against the ETag its GET answers with now: what a person who has just read the
+    // thing sends. `target` is the thing's single GET as well as its change.
+    http::Response put_current(const std::string& target, std::string body) {
+        return put(target, std::move(body), if_match(etag(target, browser_)));
+    }
+    http::Response patch_current(const std::string& target, std::string body) {
+        return patch(target, std::move(body), if_match(etag(target, browser_)));
+    }
+    http::Response del_current(const std::string& target) { return del(target, if_match(etag(target, browser_))); }
     // A GET as browser_ that must answer 200, and its JSON.
     boost::json::value read(const std::string& target) {
         const auto response = get(target, browser_);

@@ -83,5 +83,10 @@ boost::json::object extras_for(const model::AiSettings& settings, std::string_vi
 // `configured_providers`: the providers that have an address and a key, which is what a provider may be changed to.
 Result<model::AiSettings> update_ai_settings(pqxx::transaction_base& tx, audit::Writer& audit, const AiSettingsPatch& patch,
                                              const std::vector<std::string>& configured_providers);
+// What PATCH /api/ai/settings can set, in AiSettingsPatch's order, with the stored values: what their ETag covers
+// (D-108). Not `providers` (the engine's configuration), `prompt_version` or `updated_at`.
+boost::json::object editable(const model::AiSettings& settings);
+// Locks the row (FOR UPDATE, the lock update_ai_settings takes) and gives the ETag of what it holds.
+Result<std::string> current_ai_settings_etag(pqxx::transaction_base& tx);
 
 }  // namespace poni::repo

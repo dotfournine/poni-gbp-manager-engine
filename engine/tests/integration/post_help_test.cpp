@@ -434,12 +434,12 @@ TEST_F(PostHelp, TheTaskHasItsOwnProviderAndModel) {
     const auto settings = read("/api/ai/settings");
     EXPECT_EQ(settings.at("posts_provider").as_string(), "dashscope");
     EXPECT_EQ(settings.at("posts_model").as_string(), settings.at("generator_model").as_string());
-    const auto changed = patch("/api/ai/settings", R"({"posts_provider": "anthropic", "posts_model": "claude-sonnet-5-5"})");
+    const auto changed = patch_current("/api/ai/settings", R"({"posts_provider": "anthropic", "posts_model": "claude-sonnet-5-5"})");
     ASSERT_EQ(changed.status, 200u) << changed.body;
     EXPECT_EQ(json(changed).at("posts_model").as_string(), "claude-sonnet-5-5");
     EXPECT_EQ(json(changed).at("generator_model").as_string(), settings.at("generator_model").as_string()) << "the writer of replies keeps its own";
-    EXPECT_EQ(patch("/api/ai/settings", R"({"posts_provider": "nobody"})").status, 400u);
-    EXPECT_EQ(patch("/api/ai/settings", R"({"posts_model": " "})").status, 400u);
+    EXPECT_EQ(patch_current("/api/ai/settings", R"({"posts_provider": "nobody"})").status, 400u);
+    EXPECT_EQ(patch_current("/api/ai/settings", R"({"posts_model": " "})").status, 400u);
     // The knowledge base has the default that is shown beside the setting.
     EXPECT_EQ(read("/api/knowledge").at("defaults").at("analysis").at("posts_model").as_string(), "qwen3.7-plus");
 

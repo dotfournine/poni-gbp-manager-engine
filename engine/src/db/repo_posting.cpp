@@ -4,6 +4,7 @@
 #include "domain/go_live.hpp"
 
 #include "core/crypto.hpp"
+#include "core/etag.hpp"
 #include "core/text.hpp"
 #include "db/database.hpp"
 #include "db/repo_analysis.hpp"
@@ -185,6 +186,13 @@ Result<model::ReplyDraft> edit_draft(pqxx::transaction_base& tx, audit::Writer& 
                  {.before = {{"text", state->text}},
                   .after = {{"text", cleaned}, {"review_id", state->review_id}, {"failed_checks", boost::json::value_from(report.failed())}}});
     return *get_draft(tx, draft_id);
+}
+
+boost::json::object editable(const model::ReplyDraft& draft) { return {{"text", draft.text}}; }
+
+Result<std::string> current_draft_etag(pqxx::transaction_base& tx, std::int64_t draft_id) {
+    if (!lock_draft(tx, draft_id)) return not_found("draft");
+    return core::etag(editable(*get_draft(tx, draft_id)));
 }
 
 Result<model::ReplyDraft> approve_draft(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t draft_id, const std::string& text) {

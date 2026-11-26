@@ -96,6 +96,11 @@ std::optional<model::Location> get_location(pqxx::transaction_base& tx, std::int
 // location on needs access to it and makes its reviews due for a full sync
 // at once; switching it off switches its auto-posting off (D-070).
 Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const LocationPatch& patch);
+// What PATCH /api/locations/{id} can set, in LocationPatch's order, with the location's values: what its ETag
+// covers (D-108). Nothing a discovery, a poll or a pause writes is in it.
+boost::json::object editable(const model::Location& location);
+// Locks the location's row (FOR UPDATE, the lock update_location takes) and gives the ETag of what it holds.
+Result<std::string> current_location_etag(pqxx::transaction_base& tx, std::int64_t id);
 
 // ---- location discovery --------------------------------------------------------
 

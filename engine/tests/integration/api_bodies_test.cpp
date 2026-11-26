@@ -158,11 +158,11 @@ TEST_F(Bodies, NullClearsWhatCanBeEmptyAndAMemberLeftOutStays) {
     EXPECT_TRUE(json(patch(target, R"({"time_zone": null})")).at("time_zone").is_null());
 
     // A location's industry and the day its analysis starts from.
-    ASSERT_EQ(patch(spa_path(), R"({"industry_key": "wellness", "analyze_from": "2026-06-01"})").status, 200u);
-    const auto kept = json(patch(spa_path(), R"({"audience": "x"})"));
+    ASSERT_EQ(patch_current(spa_path(), R"({"industry_key": "wellness", "analyze_from": "2026-06-01"})").status, 200u);
+    const auto kept = json(patch_current(spa_path(), R"({"audience": "x"})"));
     EXPECT_EQ(kept.at("industry_key").as_string(), "wellness");
     EXPECT_EQ(kept.at("analyze_from").as_string(), "2026-06-01");
-    const auto cleared = json(patch(spa_path(), R"({"industry_key": null, "analyze_from": null})"));
+    const auto cleared = json(patch_current(spa_path(), R"({"industry_key": null, "analyze_from": null})"));
     EXPECT_TRUE(cleared.at("industry_key").is_null());
     EXPECT_TRUE(cleared.at("analyze_from").is_null());
     // What can't be empty can't be cleared.
@@ -171,22 +171,22 @@ TEST_F(Bodies, NullClearsWhatCanBeEmptyAndAMemberLeftOutStays) {
     expect_refused(patch(client_path(), R"({"notes": null})"), "notes", "a client's notes");
     expect_refused(patch(client_path(), R"({"archived": null})"), "archived", "a client's archived");
     // A day the calendar lacks is no day.
-    EXPECT_EQ(patch(spa_path(), R"({"analyze_from": "2026-02-30"})").status, 400u);
-    EXPECT_EQ(patch(spa_path(), R"({"analyze_from": "June"})").status, 400u);
+    EXPECT_EQ(patch_current(spa_path(), R"({"analyze_from": "2026-02-30"})").status, 400u);
+    EXPECT_EQ(patch_current(spa_path(), R"({"analyze_from": "June"})").status, 400u);
     // A client has none of these any more (D-102).
     expect_refused(patch(client_path(), R"({"industry_key": "wellness"})"), "industry_key", "a client's industry");
     expect_refused(post("/api/clients", R"({"name": "Another", "analyze_from": null})"), "analyze_from", "a client's start day");
 
     // A location's client.
-    EXPECT_EQ(json(patch(spa_path(), R"({"audience": "Spa guests"})")).at("client_id").as_int64(), spa_client_);
-    EXPECT_TRUE(json(patch(spa_path(), R"({"client_id": null})")).at("client_id").is_null());
+    EXPECT_EQ(json(patch_current(spa_path(), R"({"audience": "Spa guests"})")).at("client_id").as_int64(), spa_client_);
+    EXPECT_TRUE(json(patch_current(spa_path(), R"({"client_id": null})")).at("client_id").is_null());
     expect_refused(patch(spa_path(), R"({"posting_enabled": null})"), "posting_enabled", "the kill switch");
     // How often reviews are polled is the engine's setting, not the location's (D-112).
     expect_refused(patch(spa_path(), R"({"review_poll_interval_s": 600})"), "review_poll_interval_s", "the old poll interval");
 }
 
 TEST_F(Bodies, AWholeNumberMayBeWrittenWithAFractionOfZero) {
-    const auto linked = patch(spa_path(), std::format(R"({{"client_id": {}.0}})", buffet_client_));
+    const auto linked = patch_current(spa_path(), std::format(R"({{"client_id": {}.0}})", buffet_client_));
     ASSERT_EQ(linked.status, 200u) << linked.body;
     EXPECT_EQ(json(linked).at("client_id").as_int64(), buffet_client_);
     expect_refused(patch(spa_path(), std::format(R"({{"client_id": {}.5}})", spa_client_)), "client_id", "a fraction");

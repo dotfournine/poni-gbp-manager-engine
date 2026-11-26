@@ -15,6 +15,7 @@
 #include "domain/models.hpp"
 
 #include <boost/describe/class.hpp>
+#include <boost/json/object.hpp>
 #include <pqxx/pqxx>
 
 #include <array>
@@ -157,6 +158,10 @@ std::optional<model::NotificationRule> get_rule(pqxx::transaction_base& tx, std:
 Result<model::NotificationRule> create_rule(pqxx::transaction_base& tx, audit::Writer& audit, const NewRule& rule, bool push_configured);
 Result<model::NotificationRule> update_rule(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const RulePatch& patch);
 Result<void> delete_rule(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id);
+// What PATCH /api/notification-rules/{id} can set, in RulePatch's order, with the rule's values: what its ETag covers (D-108).
+boost::json::object editable(const model::NotificationRule& rule);
+// Locks the rule's row (FOR UPDATE, the lock update_rule and delete_rule take) and gives the ETag of what it holds.
+Result<std::string> current_rule_etag(pqxx::transaction_base& tx, std::int64_t id);
 
 struct DeliveryFilter {
     std::string event_type;  // one of kEventTypes; empty: any
@@ -198,6 +203,11 @@ struct SystemSettingsPatch {
 };
 BOOST_DESCRIBE_STRUCT(SystemSettingsPatch, (), (posting_enabled, email_sending_enabled))
 model::SystemSettings update_system_settings(pqxx::transaction_base& tx, audit::Writer& audit, const SystemSettingsPatch& patch);
+// The two switches, in SystemSettingsPatch's order: what the ETag covers (D-108). The row's pause columns and
+// google_target are the engine's, and not in it.
+boost::json::object editable(const model::SystemSettings& settings);
+// Locks the row (FOR UPDATE, the lock update_system_settings takes) and gives the ETag of what it holds.
+Result<std::string> current_system_settings_etag(pqxx::transaction_base& tx);
 
 // Everything on the status page's email block except `sender`.
 model::EmailStatus email_status(pqxx::transaction_base& tx, core::TimePoint now);

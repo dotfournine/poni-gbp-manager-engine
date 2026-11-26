@@ -3,6 +3,7 @@
 // (D-093), the pipeline settings, and LLM usage. Paths, parameters and bodies are
 // defined in api/openapi.yaml; change that file first.
 
+#include "core/etag.hpp"
 #include "core/json.hpp"
 #include "db/audit.hpp"
 #include "db/repo_analysis.hpp"
@@ -14,6 +15,7 @@
 #include "http/api_support.hpp"
 
 #include <chrono>
+#include <utility>
 
 namespace poni::http {
 
@@ -74,23 +76,27 @@ void add_analysis_routes(Router& router, const Api& api) {
 
     // ---- pipeline settings -------------------------------------------------------
 
+    // The ETag covers what the PATCH can set, not the providers the engine is configured with (D-108).
+    const auto ai_etag = [](const model::AiSettings& settings) { return core::etag(repo::editable(settings)); };
+
     router.add(verb::get, "/api/ai/settings", {Access::user, "ai_settings.read"},
-               [api](const Request&) -> asio::awaitable<Response> {
+               [api, ai_etag](const Request&) -> asio::awaitable<Response> {
                    auto settings = co_await api.query([](pqxx::work& tx) { return repo::get_ai_settings(tx); });
                    settings.providers = api.options.llm_providers;
-                   co_return ok(settings);
+                   co_return respond_tagged(repo::Result<model::AiSettings>(std::move(settings)), ai_etag);
                });
 
     router.add(verb::patch, "/api/ai/settings", {Access::user, "ai_settings.update"},
-               [api](const Request& request) -> asio::awaitable<Response> {
+               [api, ai_etag](const Request& request) -> asio::awaitable<Response> {
                    const auto patch = body_as<repo::AiSettingsPatch>(request);
                    if (!patch) co_return patch.error();
-                   auto result = co_await api.change(
-                       request, [patch = *patch, providers = api.options.llm_providers](pqxx::work& tx, audit::Writer& audit) {
+                   auto result = co_await api.change_if_match(
+                       request, [](pqxx::work& tx) { return repo::current_ai_settings_etag(tx); },
+                       [patch = *patch, providers = api.options.llm_providers](pqxx::work& tx, audit::Writer& audit) {
                            return repo::update_ai_settings(tx, audit, patch, providers);
                        });
                    if (result) result->providers = api.options.llm_providers;
-                   co_return respond(result);
+                   co_return respond_tagged(result, ai_etag);
                });
 
     // ---- LLM usage ---------------------------------------------------------------

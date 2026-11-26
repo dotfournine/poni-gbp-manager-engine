@@ -1,5 +1,6 @@
 #include "db/repo_settings.hpp"
 
+#include "core/etag.hpp"
 #include "core/json.hpp"
 #include "core/text.hpp"
 #include "db/database.hpp"
@@ -141,6 +142,31 @@ model::AiSettings get_ai_settings(pqxx::transaction_base& tx) {
             .prompt_version = std::string(domain::prompt_version()),
             .providers = {},
             .updated_at = row[8].as<std::string>()};
+}
+
+boost::json::object editable(const model::AiSettings& settings) {
+    return {{"enabled", settings.enabled},
+            {"analyzer_model", settings.analyzer_model},
+            {"generator_model", settings.generator_model},
+            {"analyzer_provider", settings.analyzer_provider},
+            {"generator_provider", settings.generator_provider},
+            {"judge_provider", settings.judge_provider},
+            {"judge_model", settings.judge_model},
+            {"summary_provider", settings.summary_provider},
+            {"summary_model", settings.summary_model},
+            {"posts_provider", settings.posts_provider},
+            {"posts_model", settings.posts_model},
+            {"analyzer_temperature", settings.analyzer_temperature},
+            {"analyzer_send_temperature", settings.analyzer_send_temperature},
+            {"generator_send_temperature", settings.generator_send_temperature},
+            {"max_output_tokens", settings.max_output_tokens},
+            {"request_extras", settings.request_extras},
+            {"batch_size", settings.batch_size}};
+}
+
+Result<std::string> current_ai_settings_etag(pqxx::transaction_base& tx) {
+    tx.exec("SELECT 1 FROM ai_settings FOR UPDATE").one_row();
+    return core::etag(editable(get_ai_settings(tx)));
 }
 
 Result<model::AiSettings> update_ai_settings(pqxx::transaction_base& tx, audit::Writer& audit, const AiSettingsPatch& patch,
