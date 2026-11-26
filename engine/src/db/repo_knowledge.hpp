@@ -39,7 +39,8 @@ std::optional<KnowledgeMeta> knowledge_meta(pqxx::transaction_base& tx);
 
 // Why the engine cannot work with this database's knowledge base, as a
 // sentence; nothing when it can. Checked once at start: the engine refuses
-// to serve without a seeded knowledge base or with a format it doesn't know.
+// to serve without a seeded knowledge base, with a format it doesn't know, or
+// with a defaults table a migration rebuilt and no seed has filled yet.
 std::optional<std::string> knowledge_problem(pqxx::transaction_base& tx);
 
 // ---- industries ------------------------------------------------------------------------
