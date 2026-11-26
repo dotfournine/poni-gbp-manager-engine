@@ -94,6 +94,26 @@ protected:
     http::Response put(const std::string& target, std::string body) { return call(verb::put, target, browser_, std::move(body)); }
     http::Response patch(const std::string& target, std::string body) { return call(verb::patch, target, browser_, std::move(body)); }
     http::Response del(const std::string& target) { return call(verb::delete_, target, browser_); }
+    // The same with headers of their own: if_match(tag) for a change guarded by If-Match (D-108).
+    using Headers = std::map<std::string, std::string>;
+    http::Response put(const std::string& target, std::string body, Headers headers) {
+        return call(verb::put, target, browser_, std::move(body), std::move(headers));
+    }
+    http::Response patch(const std::string& target, std::string body, Headers headers) {
+        return call(verb::patch, target, browser_, std::move(body), std::move(headers));
+    }
+    http::Response del(const std::string& target, Headers headers) { return call(verb::delete_, target, browser_, {}, std::move(headers)); }
+
+    // The ETag a GET of `get_target` answers with; the test fails if the GET is not a 200 or has none (D-108).
+    std::string etag(const std::string& get_target, const Browser& browser) {
+        const auto response = get(get_target, browser);
+        EXPECT_EQ(response.status, 200u) << get_target << ": " << response.body;
+        auto tag = header(response, "ETag");
+        EXPECT_FALSE(tag.empty()) << get_target << " answers without an ETag";
+        return tag;
+    }
+    // The headers of a change made against `tag`.
+    static Headers if_match(std::string tag) { return {{"if-match", std::move(tag)}}; }
     // A GET as browser_ that must answer 200, and its JSON.
     boost::json::value read(const std::string& target) {
         const auto response = get(target, browser_);

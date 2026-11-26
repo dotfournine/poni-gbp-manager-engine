@@ -8,7 +8,16 @@
 #include "db/repo_reviews.hpp"
 #include "jobs/sync.hpp"
 
+#include <boost/asio/co_spawn.hpp>
+#include <boost/asio/detached.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <boost/asio/this_coro.hpp>
+#include <boost/asio/use_awaitable.hpp>
 #include <gmock/gmock.h>
+#include <pqxx/pqxx>
+
+#include <exception>
+#include <vector>
 
 using namespace poni;
 using namespace std::chrono_literals;
@@ -49,11 +58,12 @@ TEST_F(Api, ClientsAreCreatedChangedArchivedAndAudited) {
     EXPECT_EQ(json(created).at("name").as_string(), "LU DREAM SPA");
     EXPECT_EQ(json(created).at("location_count").as_int64(), 0);
 
-    const auto renamed = patch("/api/clients/" + std::to_string(id), R"({"name": "LU DREAM SPA 路梦养生馆"})");
+    const auto path = "/api/clients/" + std::to_string(id);
+    const auto renamed = patch(path, R"({"name": "LU DREAM SPA 路梦养生馆"})", if_match(etag(path, browser_)));
     ASSERT_EQ(renamed.status, 200u);
     EXPECT_EQ(json(renamed).at("notes").as_string(), "Two locations") << "fields that aren't sent stay";
-    EXPECT_EQ(patch("/api/clients/" + std::to_string(id), R"({"archived": true})").status, 200u);
-    EXPECT_EQ(patch("/api/clients/" + std::to_string(id), R"({"archived": true})").status, 200u) << "no change, no error";
+    EXPECT_EQ(patch(path, R"({"archived": true})", if_match(header(renamed, "ETag"))).status, 200u);
+    EXPECT_EQ(patch(path, R"({"archived": true})", if_match(etag(path, browser_))).status, 200u) << "no change, no error";
 
     EXPECT_TRUE(read("/api/clients/" + std::to_string(id)).at("archived").as_bool());
     EXPECT_EQ(read("/api/clients?archived=false").at("total").as_int64(), 0);
@@ -124,7 +134,7 @@ TEST_F(Api, DeletingAClientUnlinksItsLocationsAndChangesNothingElse) {
     const auto target = std::format("/api/clients/{}", client);
     EXPECT_EQ(call(verb::delete_, target, {.cookie = browser_.cookie, .csrf = ""}).status, 403u) << "a change needs the CSRF token";
 
-    const auto deleted = del(target);
+    const auto deleted = del(target, if_match(etag(target, browser_)));
     EXPECT_EQ(deleted.status, 204u);
     EXPECT_TRUE(deleted.body.empty());
     EXPECT_EQ(count("clients"), 0);
@@ -143,6 +153,160 @@ TEST_F(Api, DeletingAClientUnlinksItsLocationsAndChangesNothingElse) {
 
     EXPECT_EQ(get(target, browser_).status, 404u);
     EXPECT_EQ(del(target).status, 404u);
+}
+
+// ---- a client's ETag (D-108) -------------------------------------------------------
+
+TEST_F(Api, AClientIsChangedOnlyAgainstTheEtagItsReaderHad) {
+    const auto id = json(post("/api/clients", R"({"name": "Willow Moon", "notes": "One shop"})")).at("id").as_int64();
+    const auto path = std::format("/api/clients/{}", id);
+    const auto read_tag = etag(path, browser_);
+    const auto audited = [&] { return count("audit_log WHERE object_type = 'client'"); };
+
+    const auto renamed = patch(path, R"({"name": "Willow Moon Head Spa"})", if_match(read_tag));
+    ASSERT_EQ(renamed.status, 200u) << renamed.body;
+    const auto new_tag = header(renamed, "ETag");
+    EXPECT_NE(new_tag, read_tag);
+    EXPECT_EQ(new_tag, etag(path, browser_)) << "the change answers with the tag a GET gives";
+    const auto after_rename = audited();
+
+    // The same change again from the view that is now stale: refused, and nothing is written.
+    const auto stale = patch(path, R"({"name": "Willow Moon Spa"})", if_match(read_tag));
+    EXPECT_EQ(stale.status, 412u);
+    EXPECT_EQ(error_code(stale), "precondition_failed");
+    EXPECT_TRUE(header(stale, "ETag").empty());
+    EXPECT_EQ(read(path).at("name").as_string(), "Willow Moon Head Spa");
+    EXPECT_EQ(audited(), after_rename);
+
+    const auto without = patch(path, R"({"name": "Willow Moon Spa"})");
+    EXPECT_EQ(without.status, 428u);
+    EXPECT_EQ(error_code(without), "precondition_required");
+    for (const auto& refused : {std::string("*"), new_tag + ", " + new_tag, read_tag + ", " + new_tag, std::string(""), "W/" + new_tag}) {
+        const auto response = patch(path, R"({"name": "Willow Moon Spa"})", if_match(refused));
+        EXPECT_EQ(response.status, 412u) << "[" << refused << "]";
+        EXPECT_EQ(error_code(response), "precondition_failed") << "[" << refused << "]";
+    }
+    EXPECT_EQ(read(path).at("name").as_string(), "Willow Moon Head Spa");
+    EXPECT_EQ(audited(), after_rename);
+
+    // A save that changes nothing: stale, it is refused like any other; up to date, it is a 200 that records nothing.
+    EXPECT_EQ(patch(path, R"({"name": "Willow Moon Head Spa"})", if_match(read_tag)).status, 412u) << "a stale equal save";
+    const auto equal = patch(path, R"({"name": "Willow Moon Head Spa", "notes": "One shop"})", if_match(new_tag));
+    ASSERT_EQ(equal.status, 200u) << equal.body;
+    EXPECT_EQ(header(equal, "ETag"), new_tag);
+    EXPECT_EQ(audited(), after_rename);
+
+    // What a compressing proxy in front of the engine makes of the tag is the same tag.
+    const auto gzip = "\"" + new_tag.substr(1, 64) + "-gzip\"";
+    EXPECT_EQ(patch(path, R"({"archived": true})", if_match(gzip)).status, 200u);
+    EXPECT_EQ(audited(), after_rename + 1);
+}
+
+TEST_F(Api, AClientsEtagIsNotChangedByWhatTheEngineWrites) {
+    discover_spa_and_buffet();
+    const auto id = json(post("/api/clients", R"({"name": "LU DREAM SPA"})")).at("id").as_int64();
+    const auto path = std::format("/api/clients/{}", id);
+    const auto before = etag(path, browser_);
+    // Linking a location changes the client's count, its list of locations and nothing a PATCH of it sets.
+    ASSERT_EQ(patch(std::format("/api/locations/{}", location_id("9001")), std::format(R"({{"client_id": {}}})", id)).status, 200u);
+    EXPECT_EQ(read(path).at("location_count").as_int64(), 1);
+    EXPECT_EQ(etag(path, browser_), before);
+    EXPECT_EQ(patch(path, R"({"notes": "Two shops"})", if_match(before)).status, 200u);
+}
+
+TEST_F(Api, AClientIsDeletedOnlyAgainstItsEtag) {
+    const auto id = json(post("/api/clients", R"({"name": "Willow Moon"})")).at("id").as_int64();
+    const auto path = std::format("/api/clients/{}", id);
+    const auto read_tag = etag(path, browser_);
+    ASSERT_EQ(patch(path, R"({"notes": "Closing"})", if_match(read_tag)).status, 200u);
+
+    EXPECT_EQ(del(path).status, 428u);
+    EXPECT_EQ(del(path, if_match(read_tag)).status, 412u) << "a stale tag";
+    EXPECT_EQ(del(path, if_match("*")).status, 412u);
+    EXPECT_EQ(count(std::format("clients WHERE id = {}", id)), 1);
+
+    const auto deleted = del(path, if_match(etag(path, browser_)));
+    EXPECT_EQ(deleted.status, 204u);
+    EXPECT_TRUE(header(deleted, "ETag").empty());
+    EXPECT_EQ(count(std::format("clients WHERE id = {}", id)), 0);
+    // Gone is a 404, whatever the tag, and never a 428.
+    EXPECT_EQ(del(path, if_match(read_tag)).status, 404u);
+    EXPECT_EQ(del(path).status, 404u);
+}
+
+TEST_F(Api, AClientChangeIsCheckedForItsBodyThenItsClientThenItsTag) {
+    const auto id = json(post("/api/clients", R"({"name": "Willow Moon"})")).at("id").as_int64();
+    const auto path = std::format("/api/clients/{}", id);
+    const auto audited = count("audit_log");
+
+    // The body first: a member the schema does not have is a 400, with or without a tag.
+    for (const auto& headers : {Headers{}, if_match("\"stale\"")}) {
+        const auto refused = patch(path, R"({"not_in_the_spec": true})", headers);
+        EXPECT_EQ(refused.status, 400u);
+        EXPECT_EQ(error_code(refused), "invalid_request");
+    }
+    // Then the client: one that does not exist is a 404, not a 428.
+    const auto missing = patch("/api/clients/999999", R"({"name": "x"})");
+    EXPECT_EQ(missing.status, 404u);
+    EXPECT_EQ(error_code(missing), "not_found");
+    EXPECT_EQ(patch("/api/clients/999999", R"({"name": "x"})", if_match("\"stale\"")).status, 404u);
+    EXPECT_EQ(del("/api/clients/999999").status, 404u);
+    // An If-Match on a route it does not guard is a header like any other.
+    EXPECT_EQ(post("/api/clients", R"({"name": "Gangnam AYCE Buffet"})").status, 201u);
+    EXPECT_EQ(call(verb::post, "/api/clients", browser_, R"({"name": "Another"})", if_match("\"stale\"")).status, 201u);
+    EXPECT_EQ(count("audit_log"), audited + 2);
+}
+
+namespace {
+
+// Keeps `lock` (a transaction that holds a row lock) until two other backends wait on a lock, or five seconds have
+// passed, then commits it; `seen` is how many waited.
+boost::asio::awaitable<void> release_when_two_wait(pqxx::work& lock, pqxx::connection& watcher, long& seen) {
+    boost::asio::steady_timer timer(co_await boost::asio::this_coro::executor);
+    const auto waiting = [&watcher] {
+        pqxx::nontransaction tx{watcher};
+        return tx.query_value<long>("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'");
+    };
+    for (int i = 0; i < 500 && (seen = waiting()) < 2; ++i) {
+        timer.expires_after(10ms);
+        co_await timer.async_wait(boost::asio::use_awaitable);
+    }
+    lock.commit();
+}
+
+}  // namespace
+
+TEST_F(Api, OfTwoChangesAgainstTheSameEtagOneIsRefused) {
+    const auto id = json(post("/api/clients", R"({"name": "Willow Moon"})")).at("id").as_int64();
+    const auto path = std::format("/api/clients/{}", id);
+    const auto tag = etag(path, browser_);
+
+    // The row is held while both are sent, so that both have read the tag's client and wait for it at once.
+    pqxx::connection holder{url()};
+    pqxx::connection watcher{url()};
+    pqxx::work lock{holder};
+    lock.exec("SELECT 1 FROM clients WHERE id = $1 FOR UPDATE", pqxx::params{id}).one_row();
+    std::vector<unsigned> statuses;
+    for (const auto* name : {"Willow Moon Head Spa", "Willow Moon Day Spa"}) {
+        http::Request request;
+        request.method = verb::patch;
+        request.path = path;
+        request.remote_ip = "203.0.113.10";
+        request.headers = {{"cookie", browser_.cookie}, {"x-csrf-token", browser_.csrf}, {"if-match", tag}};
+        request.body = boost::json::serialize(boost::json::object{{"name", name}});
+        boost::asio::co_spawn(io_, router_->dispatch(std::move(request)), [&statuses](std::exception_ptr error, http::Response response) {
+            EXPECT_FALSE(error);
+            statuses.push_back(response.status);
+        });
+    }
+    long seen = 0;
+    boost::asio::co_spawn(io_, release_when_two_wait(lock, watcher, seen), boost::asio::detached);
+    io_.run();
+    io_.restart();
+    EXPECT_EQ(seen, 2) << "both changes waited on the row";
+    EXPECT_THAT(statuses, testing::UnorderedElementsAre(200u, 412u));
+    EXPECT_EQ(count("audit_log WHERE action = 'client.update'"), 1);
+    EXPECT_THAT(std::string(read(path).at("name").as_string()), testing::AnyOf("Willow Moon Head Spa", "Willow Moon Day Spa"));
 }
 
 // ---- locations -------------------------------------------------------------------
@@ -194,7 +358,8 @@ TEST_F(Api, LocationsAreGroupedUnderClientsAndTheLinkChangesNothingElse) {
     // A move to another client, archiving the client, and unlinking: the grouping alone changes (D-102).
     ASSERT_EQ(patch(target, std::format(R"({{"client_id": {}}})", other)).status, 200u);
     EXPECT_EQ(all_but_the_client(), before);
-    ASSERT_EQ(patch(std::format("/api/clients/{}", other), R"({"archived": true})").status, 200u);
+    const auto other_path = std::format("/api/clients/{}", other);
+    ASSERT_EQ(patch(other_path, R"({"archived": true})", if_match(etag(other_path, browser_))).status, 200u);
     EXPECT_EQ(all_but_the_client(), before);
     ASSERT_EQ(patch(target, R"({"client_id": null})").status, 200u);
     EXPECT_TRUE(read(target).at("client_id").is_null());
@@ -253,7 +418,8 @@ TEST_F(Api, ARefusedLocationChangeChangesNothing) {
     discover_spa_and_buffet();
     const auto spa = std::to_string(location_id("9001"));
     const auto archived = json(post("/api/clients", R"({"name": "Old client"})")).at("id").as_int64();
-    patch(std::format("/api/clients/{}", archived), R"({"archived": true})");
+    const auto archived_path = std::format("/api/clients/{}", archived);
+    ASSERT_EQ(patch(archived_path, R"({"archived": true})", if_match(etag(archived_path, browser_))).status, 200u);
     const auto entries_before = count("audit_log");
 
     // The audience is fine but the client isn't: neither is applied.

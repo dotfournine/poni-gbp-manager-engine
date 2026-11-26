@@ -10,6 +10,9 @@
 //     co_return respond(co_await api.change(request, [id = *id, patch](pqxx::work& tx, audit::Writer& audit) {
 //         return repo::update_client(tx, audit, id, patch);
 //     }));
+//
+// A change of one existing thing that a person read first goes through
+// api.change_if_match instead, and answers with respond_tagged (D-108).
 #pragma once
 
 #include "core/body.hpp"
@@ -26,15 +29,44 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
 #include <format>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace poni::http {
+
+namespace api_support {
+
+// Whether an If-Match header names `etag`, the strong tag of what is stored (D-108). After the spaces around it
+// it must be that one tag: "*", a list, an empty value and a weak tag are refused, so that a change is only ever
+// made against what its author read.
+//
+// The one other form taken is what the site's compression makes of the tag. Caddy's `encode zstd gzip`
+// (deploy/Caddyfile; seen with Caddy v2.11.9) answers a compressed response with the encoding inside the
+// quotes, "<hex>-gzip" or "<hex>-zstd", and keeps the tag as it is for a response it does not compress; it
+// passes an If-Match on to the engine unchanged. So a client behind it may send either suffix back, and those
+// two forms of the same tag are taken, and nothing else.
+inline bool if_match_accepts(std::string_view header, std::string_view etag) {
+    constexpr std::string_view kSpace = " \t";
+    const auto first = header.find_first_not_of(kSpace);
+    if (first == std::string_view::npos) return false;
+    header = header.substr(first, header.find_last_not_of(kSpace) - first + 1);
+    if (header == etag) return true;
+    if (etag.size() < 2 || !etag.ends_with('"')) return false;
+    const auto inner = etag.substr(0, etag.size() - 1);
+    for (const std::string_view coding : {"-gzip\"", "-zstd\""}) {
+        if (header.size() == inner.size() + coding.size() && header.starts_with(inner) && header.ends_with(coding)) return true;
+    }
+    return false;
+}
+
+}  // namespace api_support
 
 // The database, the clock and the options, as every handler gets them.
 // Handlers hold a copy; `db` and `clock` outlive the router.
@@ -63,6 +95,26 @@ struct Api {
     auto change(const Request& request, F f) const {
         return db.audited(actor(request), clock.now(), std::move(f));
     }
+
+    // A change to one existing thing, guarded by If-Match (D-108). In one transaction:
+    // `current(tx)` locks the thing's row (FOR UPDATE) and returns its ETag, or a Failure
+    // (not_found for a missing thing); then the request's If-Match is compared with it;
+    // only then f(tx, audit) runs. Missing header: 428. "*", a list, or another value: 412.
+    // The comparison sits after the lock, so of two people who read the same tag one waits
+    // for the other and then sees another tag. A refusal commits nothing (audit::transact).
+    template <class Current, class F>
+    auto change_if_match(const Request& request, Current current, F f) const {
+        std::optional<std::string> sent;
+        if (const auto it = request.headers.find("if-match"); it != request.headers.end()) sent = it->second;
+        return change(request, [sent = std::move(sent), current = std::move(current), f = std::move(f)](pqxx::work& tx, audit::Writer& audit) {
+            using Out = std::invoke_result_t<const F&, pqxx::work&, audit::Writer&>;
+            const repo::Result<std::string> stored = current(tx);
+            if (!stored) return Out(std::unexpected(stored.error()));
+            if (!sent) return Out(repo::precondition_required());
+            if (!api_support::if_match_accepts(*sent, *stored)) return Out(repo::precondition_failed());
+            return f(tx, audit);
+        });
+    }
 };
 
 namespace api_support {
@@ -84,6 +136,8 @@ inline Response respond(const repo::Failure& failure) {
         case Kind::invalid: status = 400; break;
         case Kind::conflict: status = 409; break;
         case Kind::unavailable: status = 502; break;
+        case Kind::precondition_required: status = 428; break;
+        case Kind::precondition_failed: status = 412; break;
     }
     return Response::error(status, failure.code, failure.message);
 }
@@ -98,6 +152,15 @@ template <class T>
 Response respond(const repo::Result<T>& result, unsigned status = 200) {
     if (!result) return respond(result.error());
     return ok(*result, status);
+}
+
+// The same with the header ETag: etag_of(*result), for a GET of one thing or a guarded change (D-108).
+template <class T, class EtagOf>
+Response respond_tagged(const repo::Result<T>& result, EtagOf etag_of, unsigned status = 200) {
+    if (!result) return respond(result.error());
+    auto response = ok(*result, status);
+    response.headers.emplace_back("ETag", etag_of(*result));
+    return response;
 }
 
 // The same for a change that has nothing to return: `done` if it was carried out.
@@ -125,13 +188,23 @@ inline std::optional<std::int64_t> path_id(const Request& request) {
 }
 
 // A GET of one thing by its "{id}": `find(tx, id)` gives it or nothing, and `what` names it in the 404.
-template <class Find>
-void add_get_by_id(Router& router, const Api& api, std::string path, std::string action, std::string what, Find find) {
+// With `etag_of`, the answer carries the header ETag: etag_of(thing) (D-108).
+template <class Find, class EtagOf = std::nullptr_t>
+void add_get_by_id(Router& router, const Api& api, std::string path, std::string action, std::string what, Find find,
+                   EtagOf etag_of = nullptr) {
     router.add(boost::beast::http::verb::get, std::move(path), {Access::user, std::move(action)},
-               [api, what = std::move(what), find = std::move(find)](const Request& request) -> boost::asio::awaitable<Response> {
+               [api, what = std::move(what), find = std::move(find), etag_of = std::move(etag_of)](
+                   const Request& request) -> boost::asio::awaitable<Response> {
                    const auto id = path_id(request);
                    if (!id) co_return not_found(what);
-                   co_return respond(co_await api.query([id = *id, find](pqxx::work& tx) { return find(tx, id); }), what);
+                   auto found = co_await api.query([id = *id, find](pqxx::work& tx) { return find(tx, id); });
+                   if constexpr (std::is_null_pointer_v<EtagOf>) {
+                       static_cast<void>(etag_of);  // a thing without an ETag
+                       co_return respond(found, what);
+                   } else {
+                       if (!found) co_return not_found(what);
+                       co_return respond_tagged(repo::Result<typename decltype(found)::value_type>(std::move(*found)), etag_of);
+                   }
                });
 }
 

@@ -8,6 +8,7 @@ add_executable(poni_unit_tests
   unit/config_test.cpp
   unit/connectors_test.cpp
   unit/core_test.cpp
+  unit/etag_test.cpp
   unit/directory_connector_test.cpp
   unit/h2_test.cpp
   unit/http_client_test.cpp
