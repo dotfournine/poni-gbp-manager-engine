@@ -1062,17 +1062,17 @@
     }
    },
    "renders": [
-    "Write the reply in English, matching the spelling and phrasing the review uses."
+    "Write the reply in English, matching the spelling and phrasing the review uses. Write in English even if the review uses another language."
    ],
    "fingerprint_inputs": {
     "gate": "phase-4.1",
     "prompts": {
      "analyzer": "1523962a7d3fac72",
-     "writer:positive:en": "2562267e434da539",
-     "writer:complaint:en": "c054c1a899e23265",
-     "writer:severity:en": "c5f6dcd728a4b2e4",
-     "writer:rating_only:en": "915b367526efd25d",
-     "writer:rating_only_low:en": "6fe11adaca478933",
+     "writer:positive:en": "f9c8c7437083fb66",
+     "writer:complaint:en": "4553ced31455e38e",
+     "writer:severity:en": "e7e1ff38dbd33c89",
+     "writer:rating_only:en": "a41dbdf11d8dd114",
+     "writer:rating_only_low:en": "91439c13a7aa5226",
      "writer:positive:es": "7531395c200f68b8",
      "writer:complaint:es": "183a34f16a6c9adc",
      "writer:severity:es": "cc522f86960a297a",
@@ -1164,7 +1164,7 @@
      "contact_allowed": false
     }
    },
-   "fingerprint": "bfe36eff3632d51f"
+   "fingerprint": "226fb6addf4fa01e"
   },
   {
    "name": "the signature only",

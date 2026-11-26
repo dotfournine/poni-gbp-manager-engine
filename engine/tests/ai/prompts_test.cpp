@@ -199,7 +199,8 @@ TEST_F(Prompts, EachVariantNamesItsScriptAndRegionAndNotSetFollowsTheReview) {
     EXPECT_THAT(english("en-CA"), HasSubstr(std::format("Write the reply in English with Canadian spelling. {}", chosen_en)));
     EXPECT_THAT(english("en-US"), HasSubstr(std::format("Write the reply in English with US spelling. {}", chosen_en)));
     const auto english_not_set = english(std::nullopt);
-    EXPECT_THAT(english_not_set, HasSubstr("Write the reply in English, matching the spelling and phrasing the review uses.\n"));
+    EXPECT_THAT(english_not_set, HasSubstr("Write the reply in English, matching the spelling and phrasing the review uses. Write in "
+                                           "English even if the review uses another language.\n"));
     EXPECT_THAT(english_not_set, Not(HasSubstr("The language was chosen")));
 }
 

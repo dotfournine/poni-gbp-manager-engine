@@ -139,7 +139,10 @@ constexpr std::string_view kChosenLanguage =
 constexpr std::string_view kChineseNotSet =
     "Write the reply in Chinese, matching the script (Simplified or Traditional) and the regional phrasing the review uses. If the "
     "review is not written in Chinese, use Simplified Chinese characters.";
-constexpr std::string_view kEnglishNotSet = "Write the reply in English, matching the spelling and phrasing the review uses.";
+// The variant decides only the spelling: the language is still the business's.
+constexpr std::string_view kEnglishNotSet =
+    "Write the reply in English, matching the spelling and phrasing the review uses. Write in English even if the review uses another "
+    "language.";
 
 // The Chinese variant names the script and the phrasing both, so the writer
 // reads neither from anywhere else (D-107 point 11).

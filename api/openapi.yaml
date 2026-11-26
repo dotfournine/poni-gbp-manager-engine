@@ -5452,14 +5452,15 @@ components:
           description: |
             The Chinese a reply in Chinese is written in: its script and
             regional phrasing. Null, not set: the reply matches the script and
-            phrasing of the review. Read by the reply writer.
+            phrasing of the review, and is in Simplified characters when the
+            review is not written in Chinese. Read by the reply writer.
         english_variant:
           type: [string, "null"]
           enum: [en-US, en-CA, null]
           description: |
             The spelling of a reply in English. Null, not set: the reply
-            matches the spelling and phrasing of the review. Read by the reply
-            writer.
+            matches the spelling and phrasing of the review, and is in English
+            whatever language the review is in. Read by the reply writer.
         audience:
           type: string
           maxLength: 500
@@ -5526,14 +5527,15 @@ components:
           description: |
             The Chinese a reply in Chinese is written in: its script and
             regional phrasing. Null, not set: the reply matches the script and
-            phrasing of the review. Read by the reply writer.
+            phrasing of the review, and is in Simplified characters when the
+            review is not written in Chinese. Read by the reply writer.
         english_variant:
           type: [string, "null"]
           enum: [en-US, en-CA, null]
           description: |
             The spelling of a reply in English. Null, not set: the reply
-            matches the spelling and phrasing of the review. Read by the reply
-            writer.
+            matches the spelling and phrasing of the review, and is in English
+            whatever language the review is in. Read by the reply writer.
         audience:
           type: string
           maxLength: 500
