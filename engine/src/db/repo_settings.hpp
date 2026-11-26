@@ -1,6 +1,6 @@
 // What the analysis pipeline is configured with, as the dashboard reads and
-// edits it: a location's reply settings (its voice, localization and policy,
-// D-093) and the pipeline's own settings. What these start from (industry
+// edits it: a location's content settings and reply settings (D-107) and the
+// pipeline's own settings. What these start from (industry
 // profiles, voice templates, the defaults, model prices) is the knowledge
 // base, which nobody edits (db/repo_knowledge.hpp, D-078). Blocking calls on
 // a transaction the caller owns: run them through Database::run.
@@ -10,7 +10,7 @@
 #include "db/audit.hpp"
 #include "db/failure.hpp"
 #include "domain/models.hpp"
-#include "domain/reply_settings.hpp"
+#include "domain/settings.hpp"
 
 #include <boost/describe/class.hpp>
 #include <boost/json/object.hpp>
@@ -24,30 +24,43 @@
 
 namespace poni::repo {
 
-// ---- reply settings (D-093) ---------------------------------------------------
+// ---- content and reply settings (D-107) ----------------------------------------
 //
-// One row per location, complete: what the location's replies are written
-// with is that row and nothing else. A row is written from the knowledge
-// base's defaults when the location is discovered, enabled or not (D-102),
-// and replaced whole by a person's save. Nothing copies settings between
-// locations, and a location's client has nothing to do with them.
+// Two rows per location, one per bundle, each complete: what the location's
+// replies and posts are written with is those rows and nothing else. Both
+// are written from the knowledge base's defaults when the location is
+// discovered, enabled or not (D-102), and each is replaced whole by a
+// person's save. Nothing copies settings between locations, and a location's
+// client has nothing to do with them.
 
-// The location's settings as they are stored. Nothing is merged in and
-// nothing is filled in: the error says that there is no row, or which part
-// lacks which field.
-std::expected<domain::ResolvedSettings, std::string> stored_reply_settings(pqxx::transaction_base& tx, std::int64_t location_id);
+// The location's two bundles as they are stored. Nothing is merged in and
+// nothing is filled in: the error says which bundle the location has no row
+// of, or which member a row lacks.
+std::expected<domain::ResolvedSettings, std::string> stored_settings(pqxx::transaction_base& tx, std::int64_t location_id);
 // That error as a sentence for a person.
-std::string unreadable_reply_settings(std::string_view why);
+std::string unreadable_settings(std::string_view why);
 
-// The same for the API; settings that can't be read are `reply_settings_incomplete`, with the reason.
-Result<model::ReplySettings> reply_settings(pqxx::transaction_base& tx, std::int64_t location_id);
+// One bundle for the API: no such location (or no row) is not_found("location"), a row that
+// can't be read is `settings_incomplete`, with the reason.
+Result<domain::ContentSettings> content_settings(pqxx::transaction_base& tx, std::int64_t location_id);
+Result<domain::ReplySettings> reply_settings(pqxx::transaction_base& tx, std::int64_t location_id);
 
-// Replaces the location's settings with these, whole. Settings equal to the stored ones change nothing.
-Result<model::ReplySettings> replace_reply_settings(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
-                                                    const domain::ResolvedSettings& settings);
+// Replaces one bundle of the location with this, whole. A bundle equal to the stored one changes nothing.
+Result<domain::ContentSettings> replace_content_settings(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
+                                                         const domain::ContentSettings& settings);
+Result<domain::ReplySettings> replace_reply_settings(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t location_id,
+                                                     const domain::ReplySettings& settings);
 
-// Part of discovering a location: it starts with the knowledge base's defaults, which the engine does not start without.
-void write_default_reply_settings(pqxx::transaction_base& tx, std::int64_t location_id, core::TimePoint now);
+// What a bundle's ETag covers (D-108): every member, in member order.
+boost::json::object editable(const domain::ContentSettings& settings);
+boost::json::object editable(const domain::ReplySettings& settings);
+// Lock the location (FOR UPDATE, the lock the replace_* functions take) and give the ETag of the bundle it holds.
+Result<std::string> current_content_settings_etag(pqxx::transaction_base& tx, std::int64_t location_id);
+Result<std::string> current_reply_settings_etag(pqxx::transaction_base& tx, std::int64_t location_id);
+
+// Part of discovering a location: it starts with the knowledge base's defaults of both bundles, which the
+// engine does not start without.
+void write_default_settings(pqxx::transaction_base& tx, std::int64_t location_id, core::TimePoint now);
 
 // ---- pipeline settings ---------------------------------------------------------
 
@@ -83,5 +96,10 @@ boost::json::object extras_for(const model::AiSettings& settings, std::string_vi
 // `configured_providers`: the providers that have an address and a key, which is what a provider may be changed to.
 Result<model::AiSettings> update_ai_settings(pqxx::transaction_base& tx, audit::Writer& audit, const AiSettingsPatch& patch,
                                              const std::vector<std::string>& configured_providers);
+// What PATCH /api/ai/settings can set, in AiSettingsPatch's order, with the stored values: what their ETag covers
+// (D-108). Not `providers` (the engine's configuration), `prompt_version` or `updated_at`.
+boost::json::object editable(const model::AiSettings& settings);
+// Locks the row (FOR UPDATE, the lock update_ai_settings takes) and gives the ETag of what it holds.
+Result<std::string> current_ai_settings_etag(pqxx::transaction_base& tx);
 
 }  // namespace poni::repo

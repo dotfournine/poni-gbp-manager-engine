@@ -4,7 +4,7 @@
 //                 often as the run says: analyzer call, writer call, reply
 //                 checks and policy gate, exactly the decisions of the
 //                 pipeline (domain/review_pipeline.hpp). Then one judge call
-//                 rates the replies that were routed to auto-post, and the
+//                 rates the replies that were routed to auto reply, and the
 //                 verdict is stored. Storing it queues the next case or
 //                 settles the run (repo::finish_go_live_case).
 //

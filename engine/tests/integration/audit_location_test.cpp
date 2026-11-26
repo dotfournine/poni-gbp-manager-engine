@@ -17,7 +17,6 @@ protected:
         ApiTest::SetUp();
         browser_ = sign_in();
         spa_and_buffet();
-        exec("UPDATE locations SET time_zone = 'America/New_York'");
         user_ = value<std::int64_t>("SELECT id FROM users WHERE email = 'staff@xvisionmediaus.com'");
     }
 
@@ -122,7 +121,7 @@ TEST_F(AuditLocation, TheEnginesOwnEntriesNameTheirLocation) {
 
 TEST_F(AuditLocation, AnEntryOfADeleteKeepsTheLocationOfWhatWasDeleted) {
     const auto post_id = local_post(buffet_);
-    ASSERT_EQ(del(std::format("/api/local-posts/{}", post_id)).status, 204u);
+    ASSERT_EQ(del_current(std::format("/api/local-posts/{}", post_id)).status, 204u);
     EXPECT_EQ(location_of("local_post.delete"), buffet_);
 
     const auto schedule_id = schedule(spa_);
@@ -130,7 +129,7 @@ TEST_F(AuditLocation, AnEntryOfADeleteKeepsTheLocationOfWhatWasDeleted) {
     EXPECT_EQ(location_of("report_schedule.delete"), spa_);
 
     const auto rule_id = rule(std::to_string(buffet_));
-    ASSERT_EQ(del(std::format("/api/notification-rules/{}", rule_id)).status, 204u);
+    ASSERT_EQ(del_current(std::format("/api/notification-rules/{}", rule_id)).status, 204u);
     EXPECT_EQ(location_of("notification_rule.delete"), buffet_);
 }
 

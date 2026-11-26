@@ -9,7 +9,6 @@
 #include "domain/paged.hpp"
 #include "domain/post_help.hpp"
 #include "domain/reply_checks.hpp"
-#include "domain/reply_settings.hpp"
 #include "domain/review_pipeline.hpp"
 
 #include <boost/describe/class.hpp>
@@ -94,9 +93,6 @@ struct Location {
     // "YYYY-MM-DD" (UTC): only reviews written on or after this day are analyzed
     // and drafted on their own; none: every review.
     std::optional<std::string> analyze_from;
-    // Who the customers are, in a line written by staff. The model reads it when a person
-    // asks it for ideas and texts for local posts (D-088).
-    std::string audience;
     std::string title;
     std::optional<std::string> store_code;
     std::optional<std::string> primary_category;
@@ -112,7 +108,6 @@ struct Location {
     std::optional<std::string> access_lost_at;
     std::string first_seen_at;
     std::string last_seen_at;
-    std::int64_t review_poll_interval_s = 0;
     // The location's kill switch for posting; the global one must be on too.
     bool posting_enabled = true;
     std::int64_t review_count = 0;
@@ -126,14 +121,14 @@ struct Location {
     std::optional<std::string> local_posts_synced_at;
     std::optional<std::string> local_posts_sync_error;
     std::optional<std::string> local_posts_sync_error_at;
-    // The one time zone of the location, for every purpose (D-071, D-098); nothing until a person entered it.
-    std::optional<std::string> time_zone;
+    // The one time zone of the location, for every purpose, read from Google Places at discovery and never changed (D-109).
+    std::string time_zone;
 };
 BOOST_DESCRIBE_STRUCT(Location, (),
-                      (id, gbp_location_id, gbp_account_id, client_id, client_name, enabled, industry_key, analyze_from, audience,
+                      (id, gbp_location_id, gbp_account_id, client_id, client_name, enabled, industry_key, analyze_from,
                        title, store_code, primary_category,
                        address, locality, administrative_area, postal_code, region_code, phone, website_uri, maps_uri,
-                       access_status, access_lost_at, first_seen_at, last_seen_at, review_poll_interval_s,
+                       access_status, access_lost_at, first_seen_at, last_seen_at,
                        posting_enabled, review_count,
                        unreplied_count, average_rating, reviews_polled_at, reviews_full_synced_at, last_sync_error,
                        last_sync_error_at, local_posts_synced_at, local_posts_sync_error, local_posts_sync_error_at,
@@ -202,7 +197,7 @@ struct ReplyDraft {
     // "draft", "scheduled", "approved", "posting", "posted", "published", "rejected", "cancelled" or "superseded"
     std::string status;
     std::optional<std::string> status_reason;
-    std::string route;  // "auto_post", "approval_queue" or "escalate"
+    std::string route;  // "auto_reply", "approval_queue" or "escalate"
     std::vector<std::string> route_reasons;
     std::string mode;
     std::string text;
@@ -224,7 +219,7 @@ struct ReplyDraft {
     std::optional<std::string> edited_at;
     std::optional<std::string> decided_by;
     std::optional<std::string> decided_at;
-    // The newest attempt to post it, if it was approved or auto-posted.
+    // The newest attempt to post it, if it was approved or posted by auto reply.
     std::optional<ReplyPost> post;
     // A draft the policy scheduled for posting without a person (D-069):
     // when it goes out, and the version of the rules that decided it.
@@ -475,22 +470,6 @@ BOOST_DESCRIBE_STRUCT(SystemStatus, (),
 
 // ---- analysis settings -----------------------------------------------------------
 
-// What a location's replies are written with: its own complete settings (D-093).
-struct ReplySettings {
-    std::int64_t location_id = 0;
-    std::string location_title;
-    // The client the location is grouped under, for display only.
-    std::optional<std::int64_t> client_id;
-    std::optional<std::string> client_name;
-    std::optional<std::string> industry_key;
-    domain::Voice voice;
-    domain::Localization localization;
-    domain::PolicyRules policy;
-    std::string updated_at;
-};
-BOOST_DESCRIBE_STRUCT(ReplySettings, (),
-                      (location_id, location_title, client_id, client_name, industry_key, voice, localization, policy, updated_at))
-
 // USD per million tokens.
 struct ModelPrice {
     double input_per_mtok = 0;
@@ -530,19 +509,20 @@ struct KnowledgeVoiceTemplate {
     std::string key;
     std::string label;
     std::string description;
-    // The fields the template sets (a VoiceLayer).
-    boost::json::value voice;
+    // The members of each bundle the template sets (a ContentSettingsLayer and a ReplySettingsLayer).
+    boost::json::value content;
+    boost::json::value reply;
 };
-BOOST_DESCRIBE_STRUCT(KnowledgeVoiceTemplate, (), (key, label, description, voice))
+BOOST_DESCRIBE_STRUCT(KnowledgeVoiceTemplate, (), (key, label, description, content, reply))
 
-// What the first location of a client starts with, and the default of every analysis setting.
+// What every location starts with when it is discovered (its content and reply settings), and the default of
+// every analysis setting.
 struct KnowledgeDefaults {
-    boost::json::value voice;
-    boost::json::value localization;
-    boost::json::value policy;
+    boost::json::value content;
+    boost::json::value reply;
     boost::json::value analysis;
 };
-BOOST_DESCRIBE_STRUCT(KnowledgeDefaults, (), (voice, localization, policy, analysis))
+BOOST_DESCRIBE_STRUCT(KnowledgeDefaults, (), (content, reply, analysis))
 
 struct Knowledge {
     // A hash of the files' content, and when it was seeded.
@@ -597,7 +577,7 @@ struct AiSettings {
     // Ideas and texts for local posts (D-088): a fifth task, asked only when a person presses a button.
     std::string posts_provider;
     std::string posts_model;
-    // The writer's temperature is in a location's voice (Voice::temperature).
+    // The writer's temperature is a location's reply setting (ReplySettings::temperature).
     double analyzer_temperature = 0;
     // Off: requests of that task carry no temperature, for a model that refuses one.
     bool analyzer_send_temperature = true;
@@ -777,49 +757,38 @@ struct SystemSettings {
 };
 BOOST_DESCRIBE_STRUCT(SystemSettings, (), (posting_enabled, email_sending_enabled, updated_at))
 
-// Auto-posting at one location (D-070 to D-072): the switches a person
-// flips, the timing its reply policy asks for, and the pause the engine
-// may have put on it.
-struct AutoPosting {
+// Auto reply at one location as the engine keeps it (D-072, D-110): its
+// pause, what it posted and has scheduled, and whether its settings can be
+// used. All of it is the engine's state, read-only; the settings themselves
+// are the location's reply settings.
+struct AutoReplyLocation {
     std::int64_t location_id = 0;
     std::string location_title;
-    std::optional<std::int64_t> client_id;
-    std::optional<std::string> client_name;
-    bool enabled = false;
-    bool five_star = false;
-    bool four_star = false;
-    std::int64_t daily_cap = 0;
-    std::optional<std::string> time_zone;
-    // From the location's reply policy; changed there.
-    std::int64_t delay_min_minutes = 0;
-    std::int64_t delay_max_minutes = 0;
-    std::string window_start;
-    std::string window_end;
-    // Why the timing can't be used (a window without a time zone, a range
-    // that is upside down). While this is set nothing is auto-posted here.
-    std::optional<std::string> timing_problem;
-    // The location's posting switch (D-063), which auto-posting needs too.
+    // The location's posting switch (D-063), which auto reply needs too.
     bool posting_enabled = false;
     bool paused = false;
     std::optional<std::string> paused_at;
     // "checks_failing", "post_unconfirmed" or "post_refused"
     std::optional<std::string> pause_reason;
     std::optional<std::string> pause_detail;
+    // When a person last lifted the location's pause.
+    std::optional<std::string> resumed_at;
     std::int64_t posted_last_24h = 0;
     std::int64_t scheduled = 0;
-    // This many drafts in a row that fail a reply check pause auto-posting here (D-076).
-    std::int64_t pause_after_failures = 0;
+    // Why the reply settings' timing can't be used (a window without a time
+    // zone, a zone this server does not know). While this is set nothing is
+    // posted by auto reply here.
+    std::optional<std::string> timing_problem;
     // The go-live test of the location's configuration as it is now (D-074):
     // "passed", "not_tested", "running", "failed", "inconclusive" or
-    // "cancelled". Nothing is auto-posted here unless it is "passed".
+    // "cancelled". Nothing is posted by auto reply here unless it is "passed".
     std::string go_live_state;
 };
-BOOST_DESCRIBE_STRUCT(AutoPosting, (),
-                      (location_id, location_title, client_id, client_name, enabled, five_star, four_star, daily_cap, time_zone,
-                       delay_min_minutes, delay_max_minutes, window_start, window_end, timing_problem, posting_enabled, paused,
-                       paused_at, pause_reason, pause_detail, posted_last_24h, scheduled, pause_after_failures, go_live_state))
+BOOST_DESCRIBE_STRUCT(AutoReplyLocation, (),
+                      (location_id, location_title, posting_enabled, paused, paused_at, pause_reason, pause_detail, resumed_at,
+                       posted_last_24h, scheduled, timing_problem, go_live_state))
 
-struct AutoPostingOverview {
+struct AutoReplyStatus {
     // The global posting switch (D-063).
     bool posting_enabled = false;
     // The pause on every location at once.
@@ -827,13 +796,14 @@ struct AutoPostingOverview {
     std::optional<std::string> paused_at;
     std::optional<std::string> pause_reason;
     std::optional<std::string> pause_detail;
-    std::vector<AutoPosting> locations;
+    std::optional<std::string> resumed_at;
+    // Every location that is switched on.
+    std::vector<AutoReplyLocation> locations;
 };
-BOOST_DESCRIBE_STRUCT(AutoPostingOverview, (),
-                      (posting_enabled, paused, paused_at, pause_reason, pause_detail, locations))
+BOOST_DESCRIBE_STRUCT(AutoReplyStatus, (), (posting_enabled, paused, paused_at, pause_reason, pause_detail, resumed_at, locations))
 
 // One reply the engine posted without a person.
-struct AutoPost {
+struct AutoReply {
     std::int64_t id = 0;
     std::int64_t review_id = 0;
     std::int64_t location_id = 0;
@@ -849,17 +819,17 @@ struct AutoPost {
     // From Google returning the review to Google accepting the reply.
     std::optional<std::int64_t> seconds_to_post;
 };
-BOOST_DESCRIBE_STRUCT(AutoPost, (),
+BOOST_DESCRIBE_STRUCT(AutoReply, (),
                       (id, review_id, location_id, location_title, rating, review_text, reply_text, status, policy_version,
                        started_at, posted_at, published_at, seconds_to_post))
 
-using AutoPostList = Paged<AutoPost>;
+using AutoReplyList = Paged<AutoReply>;
 
 // ---- the go-live test (D-074, D-075) ---------------------------------------------
 
 // One of the repeats of a case: what the pipeline's decisions made of it.
 struct GoLiveAttempt {
-    // "auto_post", "approval_queue" or "escalate".
+    // "auto_reply", "approval_queue" or "escalate".
     std::string route;
     std::vector<std::string> reasons;
     // As the model wrote it; empty when it wrote none.
@@ -901,10 +871,8 @@ struct GoLiveRun {
     // "running", "passed", "failed", "inconclusive" or "cancelled".
     std::string status;
     std::optional<std::string> summary;
-    // How wide the policy was that the cases were routed with.
-    bool auto_post_positive = false;
-    bool auto_post_rating_only = false;
-    std::int64_t auto_post_min_stars = 0;
+    // How wide the policy was that the cases were routed with: its minimum of stars (D-110).
+    std::int64_t auto_reply_min_stars = 0;
     // The industry's corpus the run used, and whether it is the one seeded now.
     std::string corpus_version;
     bool corpus_current = false;
@@ -925,9 +893,8 @@ struct GoLiveRun {
     std::optional<std::vector<GoLiveCase>> cases;
 };
 BOOST_DESCRIBE_STRUCT(GoLiveRun, (),
-                      (id, location_id, location_title, fingerprint, status, summary, auto_post_positive, auto_post_rating_only,
-                       auto_post_min_stars, corpus_version, corpus_current, kb_version, repeats, real_reviews, cases_total, cases_done,
-                       model_calls, spent_usd, started_by, started_at, finished_at, cases))
+                      (id, location_id, location_title, fingerprint, status, summary, auto_reply_min_stars, corpus_version, corpus_current,
+                       kb_version, repeats, real_reviews, cases_total, cases_done, model_calls, spent_usd, started_by, started_at, finished_at, cases))
 
 // What a test of one configuration would take, from the number of cases and
 // repeats, the price settings and the recent model calls.
@@ -959,9 +926,9 @@ struct GoLiveLocation {
     std::optional<std::string> fingerprint;
     // "not_tested", "running", "passed", "failed", "inconclusive" or "cancelled".
     std::string state;
-    // Why, where the state alone doesn't say ("the policy auto-posts more than the last pass covered").
+    // Why, where the state alone doesn't say ("the policy auto replies more than the last pass covered").
     std::optional<std::string> state_detail;
-    // The pass that lets this location auto-post, if there is one.
+    // The pass that lets this location auto reply, if there is one.
     std::optional<GoLiveRun> pass;
     // The newest run of its fingerprint.
     std::optional<GoLiveRun> latest_run;

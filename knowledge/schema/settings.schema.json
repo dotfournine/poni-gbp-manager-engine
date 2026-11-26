@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://poni-gbp.invalid/knowledge/settings.schema.json",
-  "title": "Voice, localization and policy: a layer holds any of the fields, a complete set holds all",
+  "title": "Content and reply settings: a layer holds any of the fields, a complete set holds all",
   "$defs": {
     "lengthRange": {
       "type": "object",
@@ -47,60 +47,35 @@
         "severity"
       ]
     },
-    "voiceLayer": {
+    "contentLayer": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "reply_name": {
-          "type": "string",
-          "maxLength": 200
-        },
         "business_facts": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "base_style": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "emoji_allowed": {
+          "type": "boolean"
+        },
+        "emoji_max": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10
+        },
+        "emoji_preferred": {
           "type": "array",
           "maxItems": 50,
           "items": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 2000
+            "maxLength": 2000,
+            "pattern": "\\S"
           }
-        },
-        "sign_off": {
-          "type": "string",
-          "maxLength": 200
-        },
-        "owner_name": {
-          "type": "string",
-          "maxLength": 200
-        },
-        "emoji": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "allowed": {
-              "type": "boolean"
-            },
-            "max": {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 10
-            },
-            "preferred": {
-              "type": "array",
-              "maxItems": 50,
-              "items": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 2000
-              }
-            }
-          },
-          "required": []
-        },
-        "promos_allowed": {
-          "type": "boolean"
-        },
-        "contact_allowed": {
-          "type": "boolean"
         },
         "words_to_avoid": {
           "type": "array",
@@ -108,8 +83,94 @@
           "items": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 2000
+            "maxLength": 2000,
+            "pattern": "\\S"
           }
+        },
+        "style_notes": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2000,
+            "pattern": "\\S"
+          }
+        },
+        "chinese_variant": {
+          "enum": [
+            "zh-CN",
+            "zh-HK",
+            "zh-TW",
+            null
+          ]
+        },
+        "english_variant": {
+          "enum": [
+            "en-US",
+            "en-CA",
+            null
+          ]
+        },
+        "audience": {
+          "type": "string",
+          "maxLength": 500
+        }
+      },
+      "required": []
+    },
+    "content": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/contentLayer"
+        },
+        {
+          "required": [
+            "audience",
+            "base_style",
+            "business_facts",
+            "chinese_variant",
+            "emoji_allowed",
+            "emoji_max",
+            "emoji_preferred",
+            "english_variant",
+            "style_notes",
+            "words_to_avoid"
+          ]
+        }
+      ]
+    },
+    "replyLayer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reply_languages": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "en",
+              "zh",
+              "es"
+            ]
+          }
+        },
+        "fallback_language": {
+          "enum": [
+            "en",
+            "zh",
+            "es"
+          ]
+        },
+        "signature": {
+          "type": "string",
+          "maxLength": 200,
+          "pattern": "^[^\\r\\n]*$"
+        },
+        "sign_off_name": {
+          "type": "string",
+          "maxLength": 200
         },
         "length": {
           "type": "object",
@@ -126,172 +187,92 @@
             }
           }
         },
-        "style_notes": {
-          "type": "array",
-          "maxItems": 50,
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 2000
-          }
-        },
         "example_replies": {
           "type": "array",
           "maxItems": 50,
           "items": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 2000
+            "maxLength": 2000,
+            "pattern": "\\S"
           }
+        },
+        "promos_allowed": {
+          "type": "boolean"
+        },
+        "contact_allowed": {
+          "type": "boolean"
         },
         "temperature": {
           "type": "number",
           "minimum": 0,
           "maximum": 2
         },
-        "base_style": {
+        "auto_reply_min_stars": {
+          "type": "integer",
+          "enum": [
+            4,
+            5
+          ]
+        },
+        "auto_reply_delay_min_minutes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1440
+        },
+        "auto_reply_delay_max_minutes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1440
+        },
+        "auto_reply_window_start": {
           "type": "string",
-          "maxLength": 2000
-        }
-      },
-      "required": []
-    },
-    "voice": {
-      "allOf": [
-        {
-          "$ref": "#/$defs/voiceLayer"
+          "pattern": "^(([01][0-9]|2[0-3]):[0-5][0-9])?$"
         },
-        {
-          "required": [
-            "base_style",
-            "business_facts",
-            "contact_allowed",
-            "emoji",
-            "example_replies",
-            "length",
-            "owner_name",
-            "promos_allowed",
-            "reply_name",
-            "sign_off",
-            "style_notes",
-            "temperature",
-            "words_to_avoid"
-          ]
-        }
-      ]
-    },
-    "localizationLayer": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "reply_languages": {
-          "type": "array",
-          "minItems": 1,
-          "uniqueItems": true,
-          "items": {
-            "enum": [
-              "en",
-              "zh",
-              "es"
-            ]
-          }
+        "auto_reply_window_end": {
+          "type": "string",
+          "pattern": "^(([01][0-9]|2[0-3]):[0-5][0-9])?$"
         },
-        "chinese_script": {
-          "enum": [
-            "match",
-            "simplified",
-            "traditional"
-          ]
-        },
-        "chinese_region": {
-          "enum": [
-            "mainland",
-            "taiwan",
-            "hong_kong"
-          ]
-        },
-        "english_variant": {
-          "enum": [
-            "us",
-            "ca"
-          ]
-        },
-        "fallback_language": {
-          "enum": [
-            "en",
-            "zh",
-            "es"
-          ]
-        }
-      },
-      "required": []
-    },
-    "localization": {
-      "allOf": [
-        {
-          "$ref": "#/$defs/localizationLayer"
-        },
-        {
-          "required": [
-            "chinese_region",
-            "chinese_script",
-            "english_variant",
-            "fallback_language",
-            "reply_languages"
-          ]
-        }
-      ]
-    },
-    "policyLayer": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "auto_post_positive": {
+        "auto_reply_enabled": {
           "type": "boolean"
         },
-        "auto_post_rating_only": {
-          "type": "boolean"
-        },
-        "auto_post_min_stars": {
+        "auto_reply_daily_cap": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 5
+          "maximum": 1000
         },
-        "auto_post_delay_min_minutes": {
+        "auto_reply_pause_after_failures": {
           "type": "integer",
-          "minimum": 0,
-          "maximum": 1440
-        },
-        "auto_post_delay_max_minutes": {
-          "type": "integer",
-          "minimum": 0,
-          "maximum": 1440
-        },
-        "auto_post_window_start": {
-          "type": "string",
-          "pattern": "^(([01][0-9]|2[0-3]):[0-5][0-9])?$"
-        },
-        "auto_post_window_end": {
-          "type": "string",
-          "pattern": "^(([01][0-9]|2[0-3]):[0-5][0-9])?$"
+          "minimum": 1,
+          "maximum": 20
         }
       },
       "required": []
     },
-    "policy": {
+    "reply": {
       "allOf": [
         {
-          "$ref": "#/$defs/policyLayer"
+          "$ref": "#/$defs/replyLayer"
         },
         {
           "required": [
-            "auto_post_delay_max_minutes",
-            "auto_post_delay_min_minutes",
-            "auto_post_min_stars",
-            "auto_post_positive",
-            "auto_post_rating_only",
-            "auto_post_window_end",
-            "auto_post_window_start"
+            "auto_reply_daily_cap",
+            "auto_reply_delay_max_minutes",
+            "auto_reply_delay_min_minutes",
+            "auto_reply_enabled",
+            "auto_reply_min_stars",
+            "auto_reply_pause_after_failures",
+            "auto_reply_window_end",
+            "auto_reply_window_start",
+            "contact_allowed",
+            "example_replies",
+            "fallback_language",
+            "length",
+            "promos_allowed",
+            "reply_languages",
+            "sign_off_name",
+            "signature",
+            "temperature"
           ]
         }
       ]

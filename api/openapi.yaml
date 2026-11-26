@@ -48,7 +48,7 @@ info:
     **Posting.** The engine analyzes reviews and drafts replies, and records
     what the reply policy would do with each draft. A reply reaches Google
     when a signed-in person approves a draft (`POST
-    /api/drafts/{id}/approve`), or by auto-posting where a person switched it
+    /api/drafts/{id}/approve`), or by auto reply where a person switched it
     on for the location. A local post reaches Google only when a signed-in
     person approves it (`POST /api/local-posts/{id}/approve`), and a post
     that is at Google is changed there only when a signed-in person
@@ -59,6 +59,11 @@ info:
 
     **Errors** the engine produces have the `Error` shape. An unknown path is
     a 404 and a wrong method a 405, on every endpoint.
+
+    **Changing what you read** (D-108). The single `GET` of a thing that
+    can be changed answers with an `ETag`, and its `PATCH`, `PUT` or
+    `DELETE` must send it back as `If-Match`: the rule is under the
+    `If-Match` parameter.
   license:
     name: Proprietary
     identifier: LicenseRef-Proprietary
@@ -94,10 +99,10 @@ tags:
     description: Reviews with a severity flag that a person must handle.
   - name: notifications
     description: Notification rules and the delivery log.
-  - name: auto-posting
-    description: Replies posted without a person (D-069), per location, with their switches, limits and pauses.
+  - name: auto-reply
+    description: Replies posted without a person (D-069, D-110), the engine's pauses and state, and taking a scheduled reply back. Auto reply's settings are a location's reply settings.
   - name: go-live
-    description: The go-live test (D-074), which a configuration must pass before anything is auto-posted with it.
+    description: The go-live test (D-074), which a configuration must pass before anything is posted by auto reply with it.
   - name: reports
     description: |
       Location reports (FR-8, D-085, D-102, D-104): one location's, built once from
@@ -112,7 +117,7 @@ tags:
       its exact content, and Google publishes, schedules and repeats it. The
       list also shows posts made in Google's own interface.
   - name: settings
-    description: Voices, localization, reply policies and the pipeline's settings, per location.
+    description: A location's content and reply settings, and the pipeline's settings.
   - name: knowledge
     description: |
       The knowledge base (FR-13), read-only: supported industries with their
@@ -593,6 +598,9 @@ paths:
       responses:
         "200":
           description: The client.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -610,6 +618,7 @@ paths:
       tags: [clients]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
@@ -618,7 +627,12 @@ paths:
               $ref: "#/components/schemas/ClientUpdate"
       responses:
         "200":
-          description: The client after the change.
+          description: |
+            The client after the change, and its new `ETag`. A change that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -637,6 +651,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
     delete:
       operationId: deleteClient
       summary: Delete a client
@@ -650,6 +668,7 @@ paths:
       tags: [clients]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       responses:
         "204":
           description: The client is gone.
@@ -659,6 +678,10 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
 
   /api/locations:
     get:
@@ -739,6 +762,9 @@ paths:
       responses:
         "200":
           description: The location.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -752,20 +778,26 @@ paths:
       summary: Change a location
       description: |
         Switches the location on or off (`enabled`), sets its industry, the
-        day its analysis starts from and its audience, groups it under a
+        day its analysis starts from, groups it under a
         client or clears that, changes how often its reviews are polled, or
         flips its posting switch. Everything else about a location comes
         from Google and can't be changed here.
 
         The engine works only on an enabled location (D-102); a discovered
         location starts switched off. Linking, unlinking and moving the
-        location to another client change only the grouping: its reply
-        settings, switches, tests and reports stay as they are. Its reply
-        settings are its own from discovery (D-093), and change only through
+        location to another client change only the grouping: its content
+        and reply settings, switches, tests and reports stay as they are.
+        Its settings are its own from discovery (D-107), and change only
+        through `PUT /api/locations/{id}/content-settings` and
         `PUT /api/locations/{id}/reply-settings`.
+
+        The `ETag` covers the members this body can set (D-108): what the
+        engine writes by itself (the title and address a discovery reads,
+        the poll and sync times, the pause) does not make it stale.
       tags: [locations]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
@@ -774,7 +806,12 @@ paths:
               $ref: "#/components/schemas/LocationUpdate"
       responses:
         "200":
-          description: The location after the change.
+          description: |
+            The location after the change, and its new `ETag`. A change that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -796,6 +833,10 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
 
   /api/reviews:
     get:
@@ -1054,8 +1095,8 @@ paths:
       summary: Analyze a review again
       description: |
         Queues a fresh analysis of the review and, if it has no reply, a new
-        draft that replaces the current one. Use it after changing a voice,
-        a policy or an industry profile. Nothing is posted to Google.
+        draft that replaces the current one. Use it after changing the
+        content or reply settings or an industry profile. Nothing is posted to Google.
       tags: [analysis]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -1081,6 +1122,85 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/locations/{id}/content-settings:
+    parameters:
+      - $ref: "#/components/parameters/Id"
+    get:
+      operationId: getLocationContentSettings
+      summary: A location's content settings
+      description: |
+        What the business is, how it sounds and who its customers are, as the
+        reply writer and the help with local posts read it. They are the location's own and complete (D-107): nothing is merged
+        in from the knowledge base. A location gets them when it is
+        discovered, as a copy of the knowledge base's defaults, and keeps them
+        whatever client it is grouped under (D-102). The `ETag` covers every
+        member.
+      tags: [settings]
+      responses:
+        "200":
+          description: The settings, and their `ETag`.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContentSettings"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/SettingsConflict"
+    put:
+      operationId: replaceLocationContentSettings
+      summary: Replace a location's content settings
+      description: |
+        Every member is sent, and what is stored is replaced whole (D-107),
+        with the `ETag` of what was read in `If-Match` (D-108). Taking a voice
+        template is filling the form from `GET /api/knowledge` and saving;
+        copying the settings to another location is this call for that
+        location.
+        A change of what the reply writer is told means a new go-live test
+        before the location auto replies again (D-074); `audience` is read
+        by the help with local posts only, and changes no test.
+      tags: [settings]
+      parameters:
+        - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContentSettings"
+      responses:
+        "200":
+          description: |
+            The settings after the change, and their new `ETag`. A save that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContentSettings"
+        "400":
+          $ref: "#/components/responses/InvalidRequest"
+        "401":
+          $ref: "#/components/responses/Unauthenticated"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/SettingsConflict"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+
   /api/locations/{id}/reply-settings:
     parameters:
       - $ref: "#/components/parameters/Id"
@@ -1088,15 +1208,19 @@ paths:
       operationId: getLocationReplySettings
       summary: A location's reply settings
       description: |
-        The voice, localization preferences and policy the location's replies
-        are written with (FR-4, FR-5, D-093). They are the location's own and
-        complete: nothing is merged in from the knowledge base. A location
-        gets them when it is discovered, as a copy of the knowledge base's
-        defaults, and keeps them whatever client it is grouped under (D-102).
+        How the location's replies are written and checked, and when one is
+        posted by itself (FR-4, FR-5). They are the location's own and complete (D-107): nothing is merged
+        in from the knowledge base. A location gets them when it is
+        discovered, as a copy of the knowledge base's defaults, and keeps them
+        whatever client it is grouped under (D-102). The `ETag` covers every
+        member.
       tags: [settings]
       responses:
         "200":
-          description: The settings.
+          description: The settings, and their `ETag`.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -1106,28 +1230,36 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/ReplySettingsConflict"
+          $ref: "#/components/responses/SettingsConflict"
     put:
       operationId: replaceLocationReplySettings
       summary: Replace a location's reply settings
       description: |
-        Every field is sent, and what is stored is replaced whole (D-093).
-        Taking a voice template is filling the form from `GET /api/knowledge`
-        and saving; copying the settings to another location is this call
-        for that location. A change of what the models are asked means a new
-        go-live test before the location auto-posts again (D-074).
+        Every member is sent, and what is stored is replaced whole (D-107),
+        with the `ETag` of what was read in `If-Match` (D-108). Taking a voice
+        template is filling the form from `GET /api/knowledge` and saving;
+        copying the settings to another location is this call for that
+        location.
+        A change of what the models are asked or the checks read means a new
+        go-live test before the location auto replies again (D-074).
       tags: [settings]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ReplySettingsUpdate"
+              $ref: "#/components/schemas/ReplySettings"
       responses:
         "200":
-          description: The settings after the change.
+          description: |
+            The settings after the change, and their new `ETag`. A save that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -1141,7 +1273,11 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          $ref: "#/components/responses/ReplySettingsConflict"
+          $ref: "#/components/responses/SettingsConflict"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
 
   /api/knowledge:
     get:
@@ -1203,6 +1339,9 @@ paths:
       responses:
         "200":
           description: The settings.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -1212,10 +1351,16 @@ paths:
     patch:
       operationId: updateAiSettings
       summary: Change the analysis pipeline settings
-      description: Changes the fields that are given. A map or list that is given replaces the stored one.
+      description: |
+        Changes the fields that are given. A map or list that is given replaces the stored one.
+
+        The `ETag` covers the members this body can set (D-108): not
+        `providers`, which come from the engine's configuration, nor
+        `prompt_version` or `updated_at`.
       tags: [settings]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
@@ -1224,7 +1369,12 @@ paths:
               $ref: "#/components/schemas/AiSettingsUpdate"
       responses:
         "200":
-          description: The settings after the change.
+          description: |
+            The settings after the change, and their new `ETag`. A change that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -1235,6 +1385,10 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
 
   /api/llm/usage:
     get:
@@ -1302,6 +1456,9 @@ paths:
       responses:
         "200":
           description: The draft.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -1317,9 +1474,15 @@ paths:
         Replaces the text of a draft that is still waiting (`draft`). The
         reply checks run again on the new text and are stored with it; a
         draft with a failed check is saved but can't be approved.
+
+        The `ETag` covers the draft's `text` (D-108). A draft that is no
+        longer waiting is still a 409 `draft_not_open` when the tag
+        matches. The approval needs no `If-Match`: it carries the exact
+        text it approves.
       tags: [replies]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
@@ -1328,7 +1491,12 @@ paths:
               $ref: "#/components/schemas/DraftUpdate"
       responses:
         "200":
-          description: The draft after the change.
+          description: |
+            The draft after the change, and its new `ETag`. A change that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -1343,6 +1511,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/DraftConflict"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
 
   /api/drafts/{id}/approve:
     parameters:
@@ -1473,12 +1645,12 @@ paths:
       - $ref: "#/components/parameters/Id"
     post:
       operationId: unscheduleDraft
-      summary: Take a scheduled reply out of auto-posting
+      summary: Take a scheduled reply out of auto reply
       description: |
         A draft the policy scheduled for an automatic post returns to the
         approval queue as `draft`, where a person edits, approves or rejects
         it. The job that would have posted it finds nothing to do.
-      tags: [auto-posting]
+      tags: [auto-reply]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       responses:
@@ -1501,111 +1673,81 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /api/auto-posting:
+  /api/system/auto-reply:
     get:
-      operationId: getAutoPosting
-      summary: Auto-posting everywhere
+      operationId: getAutoReplyStatus
+      summary: Auto reply's state everywhere
       description: |
-        The pause on every location, the global posting switch, and each
-        enabled location's auto-posting settings. Everything is off after
-        installation.
-      tags: [auto-posting]
+        The engine's own state of auto reply (D-110): the global posting
+        switch, the pause on every location, and for each switched-on
+        location its pause, what it posted in the last 24 hours, what it has
+        scheduled, whether its reply settings' timing can be used, and where
+        its go-live test stands. All of it is read-only.
+
+        This is the only place the engine's state is served. It is never in
+        a location's reply settings and never in their `ETag`, so a pause
+        never makes a settings form stale. Auto reply's settings (its switch,
+        minimum of stars, delay, window, daily cap and pause after failures)
+        are the location's reply settings (`/api/locations/{id}/reply-settings`).
+      tags: [auto-reply]
       responses:
         "200":
-          description: The overview.
+          description: The state.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AutoPostingOverview"
+                $ref: "#/components/schemas/AutoReplyStatus"
         "401":
           $ref: "#/components/responses/Unauthenticated"
 
-  /api/auto-posting/resume:
+  /api/system/auto-reply/resume:
     post:
-      operationId: resumeAllAutoPosting
+      operationId: resumeAllAutoReply
       summary: Lift the pause on every location
       description: |
-        The engine pauses auto-posting everywhere when Google refuses its
+        The engine pauses auto reply everywhere when Google refuses its
         token or its permission for an automatic reply. Only a person lifts
-        the pause. Replies stopped meanwhile stay in the approval queue.
-      tags: [auto-posting]
+        the pause. This lifts the global pause only: a location's own pause
+        stays until it is lifted there. Replies stopped meanwhile stay in the
+        approval queue. Needs no `If-Match`.
+      tags: [auto-reply]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       responses:
         "200":
-          description: The overview after resuming.
+          description: The state after resuming.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AutoPostingOverview"
+                $ref: "#/components/schemas/AutoReplyStatus"
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
 
-  /api/locations/{id}/auto-posting:
-    parameters:
-      - $ref: "#/components/parameters/Id"
-    patch:
-      operationId: updateLocationAutoPosting
-      summary: Change a location's auto-posting settings
-      description: |
-        Switching auto-posting on lets the engine post replies to this
-        location's reviews without a person: drafts routed to `auto_post`
-        for the chosen star ratings, written from then on. It is refused
-        (400) unless a star rating is chosen, the location is enabled and
-        accessible (D-102), and the reply policy's timing can be used (a posting
-        window needs `time_zone`). The global and the location's posting
-        switch still apply on top, and nothing is auto-posted until the
-        location's configuration has passed a go-live test (`go_live_state`,
-        D-074). Switching on or off is audited under its own action.
-      tags: [auto-posting]
-      parameters:
-        - $ref: "#/components/parameters/CsrfToken"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/AutoPostingUpdate"
-      responses:
-        "200":
-          description: The settings after the change.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AutoPosting"
-        "400":
-          $ref: "#/components/responses/InvalidRequest"
-        "401":
-          $ref: "#/components/responses/Unauthenticated"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-
-  /api/locations/{id}/auto-posting/resume:
+  /api/locations/{id}/auto-reply/resume:
     parameters:
       - $ref: "#/components/parameters/Id"
     post:
-      operationId: resumeLocationAutoPosting
+      operationId: resumeLocationAutoReply
       summary: Lift a location's pause
       description: |
-        The engine pauses auto-posting at a location when
-        `pause_after_failures` replies in a row failed a reply check, when an
-        automatic reply did not appear on
-        Google, or when Google refused one. Only a person lifts the pause.
-        Replies stopped meanwhile stay in the approval queue.
-      tags: [auto-posting]
+        The engine pauses auto reply at a location when
+        `auto_reply_pause_after_failures` replies in a row failed a reply
+        check, when an automatic reply did not appear on Google, or when
+        Google refused one. Only a person lifts the pause, and this lifts the
+        location's own pause only. Replies stopped meanwhile stay in the
+        approval queue. Needs no `If-Match`.
+      tags: [auto-reply]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
       responses:
         "200":
-          description: The settings after resuming.
+          description: The location's state after resuming.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AutoPosting"
+                $ref: "#/components/schemas/AutoReplyLocation"
         "401":
           $ref: "#/components/responses/Unauthenticated"
         "403":
@@ -1613,22 +1755,22 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
-  /api/auto-posts:
+  /api/auto-replies:
     get:
-      operationId: listAutoPosts
+      operationId: listAutoReplies
       summary: Replies posted without a person
       description: Newest first, with the version of the rules that decided each one and the time from the review to the reply.
-      tags: [auto-posting]
+      tags: [auto-reply]
       parameters:
         - $ref: "#/components/parameters/Page"
         - $ref: "#/components/parameters/PerPage"
       responses:
         "200":
-          description: One page of auto-posts.
+          description: One page of auto replies.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AutoPostList"
+                $ref: "#/components/schemas/AutoReplyList"
         "400":
           $ref: "#/components/responses/InvalidRequest"
         "401":
@@ -1639,7 +1781,7 @@ paths:
       operationId: getGoLive
       summary: Where every location's go-live test stands
       description: |
-        A location may auto-post only while its configuration has a passing
+        A location may auto reply only while its configuration has a passing
         go-live test (D-074). The configuration is identified by a
         fingerprint of everything that changes what the models are asked and
         what the code checks: the prompts as rendered for the location, each
@@ -2115,6 +2257,9 @@ paths:
       responses:
         "200":
           description: The local post.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -2132,9 +2277,15 @@ paths:
         draft with a failed check is saved but can't be approved. A post
         that is at Google is not changed by this route: it gets an edit of
         its own, which a person approves (`PUT /api/local-posts/{id}/edit`).
+
+        The `ETag` covers the post's content, the members of this body
+        (D-108). A post that is no longer a draft is still a 409
+        `local_post_not_open` when the tag matches. The approval needs no
+        `If-Match`: it carries the exact content it approves.
       tags: [local-posts]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
@@ -2143,7 +2294,12 @@ paths:
               $ref: "#/components/schemas/LocalPostContent"
       responses:
         "200":
-          description: The draft after the change.
+          description: |
+            The draft after the change, and its new `ETag`. A change that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -2158,6 +2314,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/LocalPostConflict"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
     delete:
       operationId: deleteLocalPost
       summary: Delete a draft
@@ -2171,9 +2331,12 @@ paths:
         Google is removed there instead (`POST /api/local-posts/{id}/remove`).
         A copy that is deleted leaves its source's `copies`; the copies of a
         post that is deleted keep their content and get `copied_from_id: null`.
+        It needs the post's `ETag` (D-108), so that a draft is not deleted
+        by someone who has not seen its last change.
       tags: [local-posts]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       responses:
         "204":
           description: The draft is gone.
@@ -2185,6 +2348,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/LocalPostConflict"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
 
   /api/local-posts/{id}/edit:
     parameters:
@@ -2255,6 +2422,10 @@ paths:
         because an edit does not send what they are about:
         `scheduled_in_future` and `recurrence_end`. `media_usable` looks at
         the uploads only when they are not the post's own.
+
+        This route takes no `If-Match` (D-108): `based_on` already holds the
+        edit to what the person read, and the engine needs it to work out
+        the fields the edit changes.
       tags: [local-posts]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -2288,7 +2459,9 @@ paths:
         Discards the post's edit while it is a `draft`; the audit entry
         keeps its content. Nothing at Google is touched and the post stays
         as it is. An edit that is `approved` or `sending`, and a post
-        without an edit, are refused with `local_post_edit_not_open`.
+        without an edit, are refused with `local_post_edit_not_open`. It
+        takes no `If-Match` (D-108): it changes nothing at Google and only
+        ever leaves the post as Google has it.
       tags: [local-posts]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -2731,8 +2904,8 @@ paths:
       description: |
         Three to five ideas, from the location's reviews of the last 90
         days and their analysis, Google's performance figures and search
-        keywords, the recent posts, the industry profile, the voice and the
-        location's `audience`. A reviewer's name or photo is never given to
+        keywords, the recent posts, the industry profile, and the content
+        settings' `audience`. A reviewer's name or photo is never given to
         the model. Nothing is stored. The call waits for the model. Refused
         with fewer than 10 analysed reviews in the period.
       tags: [local-posts]
@@ -3141,6 +3314,9 @@ paths:
       responses:
         "200":
           description: The rule.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -3152,10 +3328,11 @@ paths:
     patch:
       operationId: updateNotificationRule
       summary: Change a notification rule
-      description: Changes the fields that are given.
+      description: Changes the fields that are given. The `ETag` covers `recipients` and `enabled` (D-108).
       tags: [notifications]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
@@ -3164,7 +3341,12 @@ paths:
               $ref: "#/components/schemas/NotificationRuleUpdate"
       responses:
         "200":
-          description: The rule after the change.
+          description: |
+            The rule after the change, and its new `ETag`. A change that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -3179,13 +3361,18 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/RuleConflict"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
     delete:
       operationId: deleteNotificationRule
       summary: Remove a notification rule
-      description: Removes the rule. Deliveries it caused stay in the log.
+      description: Removes the rule. Deliveries it caused stay in the log. It needs the rule's `ETag` (D-108).
       tags: [notifications]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       responses:
         "204":
           description: The rule is gone.
@@ -3195,6 +3382,10 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
 
   /api/notification-deliveries:
     get:
@@ -3288,7 +3479,9 @@ paths:
     delete:
       operationId: unregisterDevice
       summary: Stop push to this device
-      description: Removes a device of the signed-in user; another user's device is a 404.
+      description: |
+        Removes a device of the signed-in user; another user's device is a 404.
+        It takes no `If-Match` (D-108): a device is not something a person edits.
       tags: [notifications]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
@@ -3346,6 +3539,9 @@ paths:
       responses:
         "200":
           description: The switches.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -3355,9 +3551,13 @@ paths:
     patch:
       operationId: updateSystemSettings
       summary: Flip the posting or sending switch
+      description: |
+        The `ETag` covers the two switches (D-108). A pause of auto reply
+        that the engine puts on itself does not make it stale.
       tags: [system]
       parameters:
         - $ref: "#/components/parameters/CsrfToken"
+        - $ref: "#/components/parameters/IfMatch"
       requestBody:
         required: true
         content:
@@ -3366,7 +3566,12 @@ paths:
               $ref: "#/components/schemas/SystemSettingsUpdate"
       responses:
         "200":
-          description: The switches after the change.
+          description: |
+            The switches after the change, and their new `ETag`. A change that
+            changes nothing answers with the same `ETag` and records nothing.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -3377,6 +3582,10 @@ paths:
           $ref: "#/components/responses/Unauthenticated"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "412":
+          $ref: "#/components/responses/PreconditionFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
 
   /api/audit-log:
     get:
@@ -3521,6 +3730,46 @@ components:
         with a bearer token needs none and leaves it out.
       schema:
         type: string
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: |
+        The `ETag` of the thing as you read it, from its single `GET` or
+        from the answer to your last change of it (D-108). A change of an
+        existing thing is made only against what its author read, so that
+        a view that has gone stale never overwrites a newer decision.
+
+        The `ETag` covers the members this request's body can set, with
+        the values the thing holds; nothing the engine writes by itself
+        (times, counts, what a sync reads) is in it, so only a change by a
+        person makes it stale. Send it back exactly as it came, one strong
+        tag in quotes. Without this header the answer is a 428
+        (`precondition_required`). With a tag that is not the one of what
+        is stored now the answer is a 412 (`precondition_failed`) and
+        nothing is changed, even if the body would change nothing: read
+        the thing again and redo the change. `*`, a list of tags and a
+        weak tag (`W/"…"`) are a 412 too. The site's compression may
+        answer the tag with `-gzip` or `-zstd` before its closing quote;
+        that form is the same tag and may be sent back as it came.
+
+        A thing that does not exist is a 404 whatever this header says,
+        and a body the engine cannot read (a member the schema does not
+        list, a wrong type, a `null` where none is allowed) is a 400 before
+        the header is looked at. The body's limits (a length, a range) are
+        checked with the change, after the header. A list carries no `ETag`: a client changes a thing from its
+        single `GET`. An endpoint that does not list this parameter
+        ignores the header.
+      schema:
+        type: string
+
+  headers:
+    ETag:
+      description: |
+        The strong validator of the thing as it is now (D-108), to send
+        back as `If-Match` with a change of it.
+      schema:
+        type: string
 
   responses:
     Unauthenticated:
@@ -3549,10 +3798,14 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
-    ReplySettingsConflict:
+    SettingsConflict:
       description: |
-        `reply_settings_incomplete` (reading only): the stored settings lack
-        a field, which the message names; replacing them repairs it.
+        `settings_incomplete`: the stored content or reply settings can't be
+        read as they are; the message says which bundle and why. A `PUT`
+        answers the same, since a bundle that can't be read has no `ETag`.
+        The engine writes only complete rows (the defaults at discovery and
+        checked saves), so this is a fault to report, not a state to fix in
+        the form.
       content:
         application/json:
           schema:
@@ -3673,6 +3926,21 @@ components:
         this event type, channel and location already exists (`rule_exists`),
         or a push rule was asked of an engine without the APNs settings
         (`push_not_configured`).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PreconditionFailed:
+      description: |
+        The `If-Match` sent is not the `ETag` of what is stored now
+        (`precondition_failed`): someone changed it since you read it, or
+        the header is `*`, a list or a weak tag. Nothing was changed.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    PreconditionRequired:
+      description: The change came without `If-Match` (`precondition_required`). Nothing was changed.
       content:
         application/json:
           schema:
@@ -3925,7 +4193,6 @@ components:
         - enabled
         - industry_key
         - analyze_from
-        - audience
         - title
         - store_code
         - primary_category
@@ -3941,7 +4208,6 @@ components:
         - access_lost_at
         - first_seen_at
         - last_seen_at
-        - review_poll_interval_s
         - posting_enabled
         - review_count
         - unreplied_count
@@ -3979,7 +4245,7 @@ components:
             Whether the engine works on this location (D-102). False when
             the location is discovered: it is then only listed, with no
             review poll or sync, no analysis or draft, no local posts, no
-            go-live test, no report and no auto-post. Only a person switches
+            go-live test, no report and no auto reply. Only a person switches
             it, with `PATCH /api/locations/{id}`; no client is needed.
         industry_key:
           type: [string, "null"]
@@ -3996,12 +4262,6 @@ components:
             Only reviews written on or after this day (UTC) are analyzed and
             drafted on their own (D-102). Null, every review is. Staff can
             still ask for the analysis of an older review by hand.
-        audience:
-          type: string
-          description: |
-            Who the customers are, in a line written by staff (D-088). The
-            model reads it when it is asked for ideas and texts for local
-            posts. Empty when nobody has written one.
         title:
           type: string
         store_code:
@@ -4037,10 +4297,6 @@ components:
           type: string
           format: date-time
           description: The last discovery that saw the location.
-        review_poll_interval_s:
-          type: integer
-          format: int64
-          description: Seconds between review polls of this location.
         posting_enabled:
           type: boolean
           description: The location's kill switch for posting replies and local posts; the global switch must be on too.
@@ -4086,16 +4342,19 @@ components:
             why it is here: see `POST /api/locations/{id}/local-posts/refresh`
             for how to tell that a read has ended.
         time_zone:
-          type: [string, "null"]
+          type: string
+          readOnly: true
+          minLength: 1
           description: |
             The location's time zone, an IANA name such as
-            `America/New_York`. It is the same value as
-            `AutoPosting.time_zone`, where the posting window uses it, and
-            the only one a location has. Google gives none, so it is null
-            until a person enters it, in one place only,
-            `PATCH /api/locations/{id}/auto-posting`; `LocationUpdate` does
-            not take it. A report of the location takes this zone unless
-            it names another (`ReportCreate.time_zone`). It does not change how
+            `America/New_York`. It comes from Google Places when the
+            location is discovered (D-109) and never changes: no route sets
+            it, and `LocationUpdate` does not take it. Every location has
+            one; a location Google lists that is not on Google Maps yet is
+            not added until it is. The posting window of the reply settings
+            uses it, and it is the only one a location has. A report of the
+            location takes this zone unless it names another
+            (`ReportCreate.time_zone`). It does not change how
             date-times are written: they stay UTC, `scheduled_time` and
             `recurrence.until` of a local post included.
     LocationUpdate:
@@ -4112,7 +4371,7 @@ components:
             As in `Location`. Switching on needs a location whose
             `access_status` is `active`, and starts a full sync within a
             minute; it switches nothing else on and lifts no pause.
-            Switching off also switches the location's auto-posting off,
+            Switching off also switches the location's auto reply off,
             and stops an approved reply, local post or edit before it is
             sent; a removal of a local post that a person asked for still
             goes ahead.
@@ -4123,14 +4382,6 @@ components:
           type: [string, "null"]
           format: date
           description: As in `Location`; null for every review. Left out, it stays as it is.
-        audience:
-          type: string
-          maxLength: 500
-          description: As in `Location`.
-        review_poll_interval_s:
-          type: integer
-          minimum: 60
-          maximum: 86400
         posting_enabled:
           type: boolean
           description: The location's kill switch. Off, no reply and no local post is sent to this location.
@@ -4392,7 +4643,10 @@ components:
             `location`, `system_settings`, `ai_settings`, `review`, `draft`
             (a reply draft), `escalation`, `local_post`, `local_post_media`,
             `notification_rule`, `notification_delivery`, `report`,
-            `report_schedule`, `go_live_run`, `user` (signing in and out,
+            `report_schedule`, `go_live_run`, `google_location` (a location
+            Google lists that is not a row yet: discovery left it out until it
+            is on Google Maps, `location.discovery_deferred`, and the object id
+            is Google's location id), `user` (signing in and out,
             a person's `user.create` of someone from the Workspace directory,
             and the staff check's `user.disable`, `user.enable` and
             `user.update` by `system:workspace`, D-106), `device` and
@@ -4473,6 +4727,18 @@ components:
           $ref: "#/components/schemas/GbpStatus"
         location_discovery:
           $ref: "#/components/schemas/IntegrationStatus"
+          description: |
+            The listing of the managing account's locations, and the read of
+            each new location's time zone from Google Places (D-109). A
+            failure of either applies nothing and shows here, with a
+            `last_error_at` later than `last_ok_at`. A new location that is
+            not on Google Maps yet is left out, everything else is applied,
+            and `last_error` names it beside the success, at the same moment
+            (`last_ok_at` equals `last_error_at`: applied, with a note):
+            "<title> is not on Google Maps yet, so its time zone is not known;
+            it is added once it is", or for several, "<title>, <title> are not
+            on Google Maps yet, so their time zones are not known; they are
+            added once they are".
         pubsub:
           $ref: "#/components/schemas/PubsubStatus"
         ai:
@@ -4747,7 +5013,7 @@ components:
         status:
           type: string
           enum: [ok, failed]
-          description: "`failed`: the model gave no usable answer. The review can't go to auto-post."
+          description: "`failed`: the model gave no usable answer. The review can't go to auto reply."
         error:
           type: [string, "null"]
         language:
@@ -4816,18 +5082,19 @@ components:
           description: What was found, when the check failed.
     DraftRoute:
       type: string
-      enum: [auto_post, approval_queue, escalate]
+      enum: [auto_reply, approval_queue, escalate]
       description: |
         What the policy does with the draft (FR-5). In shadow mode (Phase 2)
-        nothing is posted: `auto_post` means the reply would have been posted
+        nothing is posted: `auto_reply` means the reply would have been posted
         without a person.
     ReplyDraft:
       type: object
       description: |
         A drafted reply and its route. The route is what the policy would do
-        (FR-5). A draft routed to `auto_post` is scheduled for posting only
-        where a person switched auto-posting on for the location and the
-        star rating (`AutoPosting`); every other draft waits for a person.
+        (FR-5). A draft routed to `auto_reply` is scheduled for posting only
+        where a person switched auto reply on in the location's reply
+        settings (`ReplySettings.auto_reply_enabled`), for a review with text
+        of at least `auto_reply_min_stars`; every other draft waits for a person.
       additionalProperties: false
       required:
         - id
@@ -4877,7 +5144,7 @@ components:
             newer draft replaced it, or the review was edited. `cancelled`:
             the review got a reply outside the system, or was removed.
             `scheduled`: the policy decided to post it without a person, at
-            `post_at` (auto-posting). A draft that could not be posted, or
+            `post_at` (auto reply). A draft that could not be posted, or
             that may no longer be posted without a person, returns to `draft`
             with the reason in `status_reason`.
         status_reason:
@@ -4887,16 +5154,16 @@ components:
         route_reasons:
           type: array
           description: |
-            Why the policy did not send the draft to auto-post, written once
+            Why the policy did not send the draft to auto reply, written once
             when the draft is made and never changed after. Empty for a
-            draft the policy routed to `auto_post`, also when it then did not
+            draft the policy routed to `auto_reply`, also when it then did not
             get posted automatically: that is in `status_reason`, prose for
             people with no fixed form (it often begins "Not posted
             automatically.", but a refused or unconfirmed reply and a review
             that could not be read say other things), and it is null when
-            only a switch or the location's auto-posting configuration kept
+            only a switch or the location's auto reply configuration kept
             the draft from being scheduled. A pause is on the location
-            (`AutoPosting.paused`, `pause_reason`), never among the reasons.
+            (`AutoReplyLocation.paused`, `pause_reason`), never among the reasons.
             The values, in this order when several apply, in the engine's
             wording:
 
@@ -4914,13 +5181,13 @@ components:
               `not_empty`.
             - One of these, the first that applies:
               `<n> stars` (the rating is below the policy's minimum for
-              auto-posting; `<n>` is the rating, so `1 stars`, `2 stars` and
+              auto reply; `<n>` is the rating, so `1 stars`, `2 stars` and
               so on), `no star rating`, `contains a complaint`,
-              `auto-post is off for rating-only reviews`,
-              `auto-post is off for positive reviews`.
+              `auto reply is for reviews with text` (a review without text
+              never auto replies, D-110).
             - `regenerated_with_instructions`: a person wrote the reply
               again with instructions of their own and the policy would have
-              auto-posted it. The route is `approval_queue` and this is the
+              sent it by auto reply. The route is `approval_queue` and this is the
               only reason.
           items:
             type: string
@@ -4955,7 +5222,7 @@ components:
           type: [object, "null"]
           description: |
             What shaped the prompt: the review as sent, the mode, the target
-            language, and the resolved voice, localization and policy. Null
+            language, and the location's content and reply settings. Null
             where drafts are embedded in reviews; `GET /api/reviews/{id}/drafts`
             has it.
           additionalProperties: true
@@ -4994,7 +5261,7 @@ components:
           description: |
             For a draft the policy scheduled: the version of the rules that
             decided it (a short hash of the prompt version, the resolved reply
-            policy and the location's auto-posting settings).
+            policy and the location's auto reply settings).
         created_at:
           type: string
           format: date-time
@@ -5108,23 +5375,8 @@ components:
           type: boolean
           description: Off, the analyzer is not told about the flag and can't raise it.
 
-    # ---- voice, localization, policy ---------------------------------------------
+    # ---- a location's content and reply settings (D-107) ---------------------------
 
-    EmojiRule:
-      type: object
-      additionalProperties: false
-      required: [allowed, max, preferred]
-      properties:
-        allowed:
-          type: boolean
-        max:
-          type: integer
-          minimum: 0
-          maximum: 10
-        preferred:
-          type: array
-          items:
-            type: string
     LengthRange:
       type: object
       description: Characters.
@@ -5155,261 +5407,378 @@ components:
           $ref: "#/components/schemas/LengthRange"
         severity:
           $ref: "#/components/schemas/LengthRange"
-    Voice:
-      type: object
-      description: A complete brand voice (FR-4).
-      additionalProperties: false
-      required:
-        - reply_name
-        - business_facts
-        - sign_off
-        - owner_name
-        - emoji
-        - promos_allowed
-        - contact_allowed
-        - words_to_avoid
-        - length
-        - style_notes
-        - example_replies
-        - temperature
-        - base_style
-      properties:
-        reply_name:
-          type: string
-          description: How replies refer to the business. Empty, the location's title (D-102).
-        business_facts:
-          type: array
-          description: The only facts about the business the generator may rely on.
-          items:
-            type: string
-        sign_off:
-          type: string
-          description: May contain `{owner_name}`.
-        owner_name:
-          type: string
-        emoji:
-          $ref: "#/components/schemas/EmojiRule"
-        promos_allowed:
-          type: boolean
-          description: May a reply mention promotions, discounts or free items?
-        contact_allowed:
-          type: boolean
-          description: May a reply carry a phone number, an email address or a link?
-        words_to_avoid:
-          type: array
-          items:
-            type: string
-        length:
-          type: object
-          description: By reply language (`en`, `zh`, `es`).
-          additionalProperties:
-            $ref: "#/components/schemas/LengthLimits"
-        style_notes:
-          type: array
-          items:
-            type: string
-        example_replies:
-          type: array
-          description: Replies the business wrote itself. A tone reference, never copied.
-          items:
-            type: string
-        temperature:
-          type: number
-          minimum: 0
-          maximum: 2
-          description: |
-            The temperature the writer is asked with (D-074). Not part of
-            the prompt. A change needs a new go-live test.
-        base_style:
-          type: string
-          maxLength: 2000
-          description: |
-            One line the writer is given as the base of the style. Taking a
-            voice template fills it with the template's label and
-            description (D-080); empty, the writer is given none.
-    VoiceLayer:
+    ContentSettings:
       type: object
       description: |
-        The voice fields a voice template sets; a field that is absent is
-        left as it is by taking the template. `emoji` and `length` may be
-        partial too: `{"emoji": {"max": 1}}` changes only that number.
+        A location's content settings (D-107): what the business is, how it
+        sounds and who its customers are. Complete: the answer of a read and
+        the body of a save, sent whole. The reply writer reads every member
+        but `audience`; the help with local posts reads `base_style`, the
+        emoji members, `words_to_avoid`, `style_notes` and `audience`; the
+        report summary reads none.
       additionalProperties: false
+      required: [business_facts, base_style, emoji_allowed, emoji_max, emoji_preferred, words_to_avoid, style_notes, chinese_variant, english_variant, audience]
       properties:
-        reply_name:
-          type: string
         business_facts:
-          type: array
-          items:
-            type: string
-        sign_off:
           type: string
-        owner_name:
-          type: string
-        emoji:
-          type: object
-          additionalProperties: false
-          properties:
-            allowed:
-              type: boolean
-            max:
-              type: integer
-              minimum: 0
-              maximum: 10
-            preferred:
-              type: array
-              items:
-                type: string
-        promos_allowed:
-          type: boolean
-        contact_allowed:
-          type: boolean
-        words_to_avoid:
-          type: array
-          items:
-            type: string
-        length:
-          type: object
-          additionalProperties:
-            type: object
-            additionalProperties: false
-            properties:
-              rating_only:
-                $ref: "#/components/schemas/LengthRange"
-              positive:
-                $ref: "#/components/schemas/LengthRange"
-              complaint:
-                $ref: "#/components/schemas/LengthRange"
-              severity:
-                $ref: "#/components/schemas/LengthRange"
-        style_notes:
-          type: array
-          items:
-            type: string
-        example_replies:
-          type: array
-          items:
-            type: string
-        temperature:
-          type: number
-          minimum: 0
-          maximum: 2
+          maxLength: 2000
+          description: |
+            The only facts about the business the reply writer may rely on,
+            as typed (one line each, for example `- Open since 2019`).
+            Empty, there are none, and the writer is told so. Read by the
+            reply writer.
         base_style:
           type: string
           maxLength: 2000
+          description: |
+            One line the writers are given as the base of the style. Taking
+            a voice template fills it with the template's label and
+            description (D-080); empty, they are given none. Read by the
+            reply writer and the help with local posts.
+        emoji_allowed:
+          type: boolean
+          description: May a reply or a post use emoji? Read by the reply writer, its checks and the help with local posts.
+        emoji_max:
+          type: integer
+          minimum: 0
+          maximum: 10
+          description: At most this many emoji. Read by the reply writer, its checks and the help with local posts.
+        emoji_preferred:
+          type: array
+          maxItems: 50
+          description: The emoji to prefer. Read by the reply writer and the help with local posts.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2000
+        words_to_avoid:
+          type: array
+          maxItems: 50
+          description: Words and phrases never to use. Read by the reply writer and the help with local posts.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2000
+        style_notes:
+          type: array
+          maxItems: 50
+          description: Notes on the style, one per entry. Read by the reply writer and the help with local posts.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2000
+        chinese_variant:
+          type: [string, "null"]
+          enum: [zh-CN, zh-HK, zh-TW, null]
+          description: |
+            The Chinese a reply in Chinese is written in: its script and
+            regional phrasing. Null, not set: the reply matches the script and
+            phrasing of the review, and is in Simplified characters when the
+            review is not written in Chinese. Read by the reply writer.
+        english_variant:
+          type: [string, "null"]
+          enum: [en-US, en-CA, null]
+          description: |
+            The spelling of a reply in English. Null, not set: the reply
+            matches the spelling and phrasing of the review, and is in English
+            whatever language the review is in. Read by the reply writer.
+        audience:
+          type: string
+          maxLength: 500
+          description: |
+            Who the customers are, in a line written by staff (D-088);
+            stored trimmed, empty when nobody wrote one. Read by the help
+            with local posts only.
+    ContentSettingsLayer:
+      type: object
+      description: The content settings a voice template sets; a member that is absent is left as it is by taking the template.
+      additionalProperties: false
+      properties:
+        business_facts:
+          type: string
+          maxLength: 2000
+          description: |
+            The only facts about the business the reply writer may rely on,
+            as typed (one line each, for example `- Open since 2019`).
+            Empty, there are none, and the writer is told so. Read by the
+            reply writer.
+        base_style:
+          type: string
+          maxLength: 2000
+          description: |
+            One line the writers are given as the base of the style. Taking
+            a voice template fills it with the template's label and
+            description (D-080); empty, they are given none. Read by the
+            reply writer and the help with local posts.
+        emoji_allowed:
+          type: boolean
+          description: May a reply or a post use emoji? Read by the reply writer, its checks and the help with local posts.
+        emoji_max:
+          type: integer
+          minimum: 0
+          maximum: 10
+          description: At most this many emoji. Read by the reply writer, its checks and the help with local posts.
+        emoji_preferred:
+          type: array
+          maxItems: 50
+          description: The emoji to prefer. Read by the reply writer and the help with local posts.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2000
+        words_to_avoid:
+          type: array
+          maxItems: 50
+          description: Words and phrases never to use. Read by the reply writer and the help with local posts.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2000
+        style_notes:
+          type: array
+          maxItems: 50
+          description: Notes on the style, one per entry. Read by the reply writer and the help with local posts.
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2000
+        chinese_variant:
+          type: [string, "null"]
+          enum: [zh-CN, zh-HK, zh-TW, null]
+          description: |
+            The Chinese a reply in Chinese is written in: its script and
+            regional phrasing. Null, not set: the reply matches the script and
+            phrasing of the review, and is in Simplified characters when the
+            review is not written in Chinese. Read by the reply writer.
+        english_variant:
+          type: [string, "null"]
+          enum: [en-US, en-CA, null]
+          description: |
+            The spelling of a reply in English. Null, not set: the reply
+            matches the spelling and phrasing of the review, and is in English
+            whatever language the review is in. Read by the reply writer.
+        audience:
+          type: string
+          maxLength: 500
+          description: |
+            Who the customers are, in a line written by staff (D-088);
+            stored trimmed, empty when nobody wrote one. Read by the help
+            with local posts only.
     ReplyLanguage:
       type: string
       enum: [en, zh, es]
       description: The languages the engine can check a reply in.
-    Localization:
+    ReplySettings:
       type: object
-      description: Complete localization preferences (FR-4, D-022).
+      description: |
+        A location's reply settings (D-107): how a reply to a review is
+        written and checked, and whether and when it is posted by itself
+        (auto reply, D-110). Complete: the answer of a read and the body of a
+        save, sent whole. Only settings are here: the engine's own state of
+        auto reply (its pause, what it posted and scheduled, the go-live
+        state) is served only by `GET /api/system/auto-reply` and is never in
+        these settings or in their `ETag`. Switching a location off sets
+        `auto_reply_enabled` to false, the engine's one write to them, which
+        changes the `ETag`.
+
+        A save with `auto_reply_enabled` true is refused (400) unless the
+        location is switched on and accessible, `auto_reply_min_stars` is 4
+        or 5, the timing can be used, and a posting window has a location
+        time zone the server knows. Switching auto reply on or off is also
+        audited under its own action.
       additionalProperties: false
-      required: [reply_languages, chinese_script, chinese_region, english_variant, fallback_language]
+      required: [reply_languages, fallback_language, signature, sign_off_name, length, example_replies, promos_allowed, contact_allowed, temperature, auto_reply_min_stars, auto_reply_delay_min_minutes, auto_reply_delay_max_minutes, auto_reply_window_start, auto_reply_window_end, auto_reply_enabled, auto_reply_daily_cap, auto_reply_pause_after_failures]
       properties:
         reply_languages:
           type: array
-          description: A review in one of these languages is answered in it; any other gets `fallback_language`.
+          description: |
+            A review in one of these languages is answered in it; any other
+            gets `fallback_language`. Read by the reply writer.
           minItems: 1
           items:
             $ref: "#/components/schemas/ReplyLanguage"
-        chinese_script:
-          type: string
-          enum: [match, simplified, traditional]
-          description: "`match`: the script the reviewer used."
-        chinese_region:
-          type: string
-          enum: [mainland, taiwan, hong_kong]
-          description: Phrasing of a Traditional reply.
-        english_variant:
-          type: string
-          enum: [us, ca]
         fallback_language:
           $ref: "#/components/schemas/ReplyLanguage"
-    PolicyRules:
-      type: object
-      description: The complete tiered reply policy (FR-5), with the timing of auto-posts.
-      additionalProperties: false
-      required:
-        - auto_post_positive
-        - auto_post_rating_only
-        - auto_post_min_stars
-        - auto_post_delay_min_minutes
-        - auto_post_delay_max_minutes
-        - auto_post_window_start
-        - auto_post_window_end
-      properties:
-        auto_post_positive:
+        signature:
+          type: string
+          maxLength: 200
+          pattern: "^[^\\r\\n]*$"
+          description: |
+            The line a reply ends with, one line; empty, none. Read by the
+            reply writer: with `sign_off_name` also set, the signature is the
+            preferred sign-off, and the name may take the place of a generic
+            reference to the writer in it ("the owner"). Both may be set.
+        sign_off_name:
+          type: string
+          maxLength: 200
+          description: |
+            Who signs the replies; empty, nobody. Read by the reply writer:
+            without a `signature`, a reply ends with one short line that uses
+            only this name.
+        length:
+          type: object
+          description: Reply length by reply language (`en`, `zh`, `es`), each needed. Read by the reply writer and its checks.
+          additionalProperties:
+            $ref: "#/components/schemas/LengthLimits"
+        example_replies:
+          type: array
+          maxItems: 50
+          description: "Replies the business wrote itself: a tone reference for the reply writer, never copied."
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2000
+        promos_allowed:
           type: boolean
-          description: A review with text, enough stars and no complaint goes to auto-post when every check passes.
-        auto_post_rating_only:
+          description: May a reply mention promotions, discounts or free items? Read by the reply writer.
+        contact_allowed:
           type: boolean
-          description: The same for a review without text.
-        auto_post_min_stars:
+          description: May a reply carry a phone number, an email address or a link? Read by the reply checks.
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+          description: |
+            The temperature the reply writer is asked with (D-074). Not part
+            of the prompt. A change needs a new go-live test.
+        auto_reply_min_stars:
           type: integer
-          minimum: 1
-          maximum: 5
-          description: Reviews below this many stars always wait for a person.
-        auto_post_delay_min_minutes:
+          enum: [4, 5]
+          description: |
+            Reviews below this many stars always wait for a person; three
+            stars or fewer always do. Only reviews with text auto reply. The
+            width the go-live test covers: a pass at 5 does not cover 4.
+        auto_reply_delay_min_minutes:
           type: integer
           minimum: 0
           maximum: 1440
-          description: An auto-post waits a random time between this and the maximum, so replies look human. 0 and 0, no delay.
-        auto_post_delay_max_minutes:
+          description: An auto reply waits a random time between this and the maximum, so replies look human. 0 and 0, no delay.
+        auto_reply_delay_max_minutes:
           type: integer
           minimum: 0
           maximum: 1440
-        auto_post_window_start:
+        auto_reply_window_start:
           type: string
           pattern: "^(([01][0-9]|2[0-3]):[0-5][0-9])?$"
           description: |
             The posting window in the location's local time, `HH:MM`; empty,
             none. A reply due outside it moves into the next one. A start
             later than the end crosses midnight. A window needs the
-            location's time zone (`AutoPosting.time_zone`).
-        auto_post_window_end:
+            location's time zone (`Location.time_zone`).
+        auto_reply_window_end:
           type: string
           pattern: "^(([01][0-9]|2[0-3]):[0-5][0-9])?$"
-    ReplySettings:
-      type: object
-      description: What a location's replies are written with (D-093).
-      additionalProperties: false
-      required: [location_id, location_title, client_id, client_name, industry_key, voice, localization, policy, updated_at]
-      properties:
-        location_id:
+        auto_reply_enabled:
+          type: boolean
+          description: |
+            Replies to this location's reviews may be posted without a
+            person. Off until a person switches it on; switching the location
+            off switches it off.
+        auto_reply_daily_cap:
           type: integer
-          format: int64
-        location_title:
-          type: string
-        client_id:
-          type: [integer, "null"]
-          format: int64
-          description: The client the location is grouped under, for display only; null when it has none.
-        client_name:
-          type: [string, "null"]
-        industry_key:
-          type: [string, "null"]
-          description: The location's industry (`Location.industry_key`); null, the location's reviews are not analyzed.
-        voice:
-          $ref: "#/components/schemas/Voice"
-        localization:
-          $ref: "#/components/schemas/Localization"
-        policy:
-          $ref: "#/components/schemas/PolicyRules"
-        updated_at:
-          type: string
-          format: date-time
-    ReplySettingsUpdate:
+          minimum: 1
+          maximum: 1000
+          description: At most this many automatic replies in any 24 hours; the next draft waits for a person.
+        auto_reply_pause_after_failures:
+          type: integer
+          minimum: 1
+          maximum: 20
+          description: This many replies in a row that fail a reply check pause auto reply here (D-076).
+    ReplySettingsLayer:
       type: object
-      description: A location's complete reply settings; every field of every part is sent.
+      description: The reply settings a voice template sets; a member that is absent is left as it is by taking the template.
       additionalProperties: false
-      required: [voice, localization, policy]
       properties:
-        voice:
-          $ref: "#/components/schemas/Voice"
-        localization:
-          $ref: "#/components/schemas/Localization"
-        policy:
-          $ref: "#/components/schemas/PolicyRules"
+        reply_languages:
+          type: array
+          description: |
+            A review in one of these languages is answered in it; any other
+            gets `fallback_language`. Read by the reply writer.
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ReplyLanguage"
+        fallback_language:
+          $ref: "#/components/schemas/ReplyLanguage"
+        signature:
+          type: string
+          maxLength: 200
+          pattern: "^[^\\r\\n]*$"
+          description: |
+            The line a reply ends with, one line; empty, none. Read by the
+            reply writer: with `sign_off_name` also set, the signature is the
+            preferred sign-off, and the name may take the place of a generic
+            reference to the writer in it ("the owner"). Both may be set.
+        sign_off_name:
+          type: string
+          maxLength: 200
+          description: |
+            Who signs the replies; empty, nobody. Read by the reply writer:
+            without a `signature`, a reply ends with one short line that uses
+            only this name.
+        length:
+          type: object
+          description: Reply length by reply language (`en`, `zh`, `es`), each needed. Read by the reply writer and its checks.
+          additionalProperties:
+            $ref: "#/components/schemas/LengthLimits"
+        example_replies:
+          type: array
+          maxItems: 50
+          description: "Replies the business wrote itself: a tone reference for the reply writer, never copied."
+          items:
+            type: string
+            minLength: 1
+            maxLength: 2000
+        promos_allowed:
+          type: boolean
+          description: May a reply mention promotions, discounts or free items? Read by the reply writer.
+        contact_allowed:
+          type: boolean
+          description: May a reply carry a phone number, an email address or a link? Read by the reply checks.
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+          description: |
+            The temperature the reply writer is asked with (D-074). Not part
+            of the prompt. A change needs a new go-live test.
+        auto_reply_min_stars:
+          type: integer
+          enum: [4, 5]
+          description: |
+            Reviews below this many stars always wait for a person; three
+            stars or fewer always do. Only reviews with text auto reply. The
+            width the go-live test covers: a pass at 5 does not cover 4.
+        auto_reply_delay_min_minutes:
+          type: integer
+          minimum: 0
+          maximum: 1440
+          description: An auto reply waits a random time between this and the maximum, so replies look human. 0 and 0, no delay.
+        auto_reply_delay_max_minutes:
+          type: integer
+          minimum: 0
+          maximum: 1440
+        auto_reply_window_start:
+          type: string
+          pattern: "^(([01][0-9]|2[0-3]):[0-5][0-9])?$"
+          description: |
+            The posting window in the location's local time, `HH:MM`; empty,
+            none. A reply due outside it moves into the next one. A start
+            later than the end crosses midnight. A window needs the
+            location's time zone (`Location.time_zone`).
+        auto_reply_window_end:
+          type: string
+          pattern: "^(([01][0-9]|2[0-3]):[0-5][0-9])?$"
+        auto_reply_enabled:
+          type: boolean
+          description: Always false in a template; only a person switches auto reply on.
+        auto_reply_daily_cap:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        auto_reply_pause_after_failures:
+          type: integer
+          minimum: 1
+          maximum: 20
 
     # ---- pipeline settings and LLM usage -----------------------------------------
 
@@ -5518,7 +5887,7 @@ components:
     KnowledgeVoiceTemplate:
       type: object
       additionalProperties: false
-      required: [key, label, description, voice]
+      required: [key, label, description, content, reply]
       properties:
         key:
           type: string
@@ -5526,23 +5895,23 @@ components:
           type: string
         description:
           type: string
-          description: With the label, what `Voice.base_style` becomes when the template is taken.
-        voice:
-          $ref: "#/components/schemas/VoiceLayer"
+          description: With the label, what `ContentSettings.base_style` becomes when the template is taken.
+        content:
+          $ref: "#/components/schemas/ContentSettingsLayer"
+        reply:
+          $ref: "#/components/schemas/ReplySettingsLayer"
     KnowledgeDefaults:
       type: object
       description: |
-        What every location starts from when it is discovered (D-093, D-102), and the default of
-        every analysis setting.
+        What every location starts from when it is discovered (D-102, D-107): its content and
+        reply settings, and the default of every analysis setting.
       additionalProperties: false
-      required: [voice, localization, policy, analysis]
+      required: [content, reply, analysis]
       properties:
-        voice:
-          $ref: "#/components/schemas/Voice"
-        localization:
-          $ref: "#/components/schemas/Localization"
-        policy:
-          $ref: "#/components/schemas/PolicyRules"
+        content:
+          $ref: "#/components/schemas/ContentSettings"
+        reply:
+          $ref: "#/components/schemas/ReplySettings"
         analysis:
           type: object
           description: By the names of `AiSettings`' fields.
@@ -5589,7 +5958,7 @@ components:
         action:
           type: string
           description: The route the gate must give when the models behave.
-          enum: [auto_post, approval_queue, escalate]
+          enum: [auto_reply, approval_queue, escalate]
     AiSettings:
       type: object
       additionalProperties: false
@@ -5662,7 +6031,7 @@ components:
           type: number
           minimum: 0
           maximum: 2
-          description: The writer's temperature is a field of the voice (`Voice.temperature`).
+          description: The writer's temperature is a reply setting (`ReplySettings.temperature`).
         analyzer_send_temperature:
           type: boolean
           description: Off, the analyzer's requests carry no temperature, for a model that refuses one.
@@ -6179,11 +6548,11 @@ components:
         - `Lost access to a location`: two listings of the managing account
           in a row did not include a location that is enabled.
           `location_id`.
-        - `Auto-posting paused: <location title>`: the engine paused
-          auto-posting at one location (checks kept failing, an automatic
+        - `Auto reply paused: <location title>`: the engine paused
+          auto reply at one location (checks kept failing, an automatic
           reply did not appear on Google, or Google refused one).
           `location_id`.
-        - `Auto-posting paused for every location`: Google refused an
+        - `Auto reply paused for every location`: Google refused an
           automatic reply as unauthenticated or not configured. No ids.
         - `A reply could not be posted`: an approved or scheduled reply was
           not posted because its review could not be read from Google on the
@@ -6519,38 +6888,28 @@ components:
           type: string
           description: An email address.
 
-    AutoPosting:
+    AutoReplyLocation:
       type: object
       description: |
-        Auto-posting at one location (D-069). `enabled` and the
-        star ratings are a person's switches, off after installation. The
-        delay and the window come from the location's resolved reply policy
-        and are changed there. `paused` is set by the engine and lifted by a
-        person.
+        Auto reply at one location as the engine keeps it (D-110). All of it
+        is the engine's state and read-only: the pause the engine put on the
+        location (lifted by a person), what was posted and scheduled, whether
+        the reply settings' timing can be used, and the go-live state. The
+        settings are the location's reply settings. None of this is in them
+        or in their `ETag`.
       additionalProperties: false
       required:
         - location_id
         - location_title
-        - client_id
-        - client_name
-        - enabled
-        - five_star
-        - four_star
-        - daily_cap
-        - time_zone
-        - delay_min_minutes
-        - delay_max_minutes
-        - window_start
-        - window_end
-        - timing_problem
         - posting_enabled
         - paused
         - paused_at
         - pause_reason
         - pause_detail
+        - resumed_at
         - posted_last_24h
         - scheduled
-        - pause_after_failures
+        - timing_problem
         - go_live_state
       properties:
         location_id:
@@ -6558,44 +6917,9 @@ components:
           format: int64
         location_title:
           type: string
-        client_id:
-          type: [integer, "null"]
-          format: int64
-        client_name:
-          type: [string, "null"]
-        enabled:
-          type: boolean
-          description: Replies to this location's reviews may be posted without a person.
-        five_star:
-          type: boolean
-          description: Five-star reviews may be answered automatically.
-        four_star:
-          type: boolean
-          description: Four-star reviews may be answered automatically. Three stars and fewer never are.
-        daily_cap:
-          type: integer
-          minimum: 1
-          maximum: 1000
-          description: At most this many automatic replies in any 24 hours; the next draft waits for a person. 100 unless changed.
-        time_zone:
-          type: [string, "null"]
-          description: |
-            IANA name, for example `America/New_York`. Needed for a posting
-            window. The same value as `Location.time_zone`, set here.
-        delay_min_minutes:
-          type: integer
-        delay_max_minutes:
-          type: integer
-        window_start:
-          type: string
-        window_end:
-          type: string
-        timing_problem:
-          type: [string, "null"]
-          description: Why the timing can't be used. While it is set, nothing is auto-posted here.
         posting_enabled:
           type: boolean
-          description: The location's posting switch (`Location.posting_enabled`), which auto-posting needs too.
+          description: The location's posting switch (`Location.posting_enabled`), which auto reply needs too.
         paused:
           type: boolean
         paused_at:
@@ -6603,56 +6927,41 @@ components:
           format: date-time
         pause_reason:
           oneOf:
-            - $ref: "#/components/schemas/AutoPostPauseReason"
+            - $ref: "#/components/schemas/AutoReplyPauseReason"
             - type: "null"
         pause_detail:
           type: [string, "null"]
+        resumed_at:
+          type: [string, "null"]
+          format: date-time
+          description: When a person last lifted the location's pause; null if never.
         posted_last_24h:
           type: integer
           format: int64
-          description: Automatic replies sent in the last 24 hours, which the cap counts.
+          description: Automatic replies sent in the last 24 hours, which `auto_reply_daily_cap` counts.
         scheduled:
           type: integer
           format: int64
           description: Drafts scheduled and not yet posted.
-        pause_after_failures:
-          type: integer
-          minimum: 1
-          maximum: 20
-          description: This many replies in a row that fail a reply check pause auto-posting here (D-076). 3 unless changed.
+        timing_problem:
+          type: [string, "null"]
+          description: |
+            Why the reply settings' timing can't be used (a posting window
+            without a time zone the server knows). While it is set, nothing
+            is posted by auto reply here.
         go_live_state:
           $ref: "#/components/schemas/GoLiveState"
-    AutoPostPauseReason:
+    AutoReplyPauseReason:
       type: string
       enum: [checks_failing, post_unconfirmed, post_refused]
       description: |
         `checks_failing`: the location's last replies each failed a reply
-        check, as many in a row as `pause_after_failures`. `post_unconfirmed`: an automatic reply was sent and did
-        not appear on Google. `post_refused`: Google refused an automatic
-        reply.
-    AutoPostingUpdate:
+        check, as many in a row as `auto_reply_pause_after_failures`.
+        `post_unconfirmed`: an automatic reply was sent and did not appear
+        on Google. `post_refused`: Google refused an automatic reply.
+    AutoReplyStatus:
       type: object
-      additionalProperties: false
-      properties:
-        enabled:
-          type: boolean
-        five_star:
-          type: boolean
-        four_star:
-          type: boolean
-        daily_cap:
-          type: integer
-          minimum: 1
-          maximum: 1000
-        pause_after_failures:
-          type: integer
-          minimum: 1
-          maximum: 20
-        time_zone:
-          type: [string, "null"]
-          description: An IANA name; null for none. Left out, it stays as it is.
-    AutoPostingOverview:
-      type: object
+      description: The engine's state of auto reply everywhere, read-only (D-110).
       additionalProperties: false
       required:
         - posting_enabled
@@ -6660,6 +6969,7 @@ components:
         - paused_at
         - pause_reason
         - pause_detail
+        - resumed_at
         - locations
       properties:
         posting_enabled:
@@ -6667,28 +6977,32 @@ components:
           description: The global posting switch (`SystemSettings.posting_enabled`).
         paused:
           type: boolean
-          description: The engine paused auto-posting for every location.
+          description: The engine paused auto reply for every location.
         paused_at:
           type: [string, "null"]
           format: date-time
         pause_reason:
           oneOf:
-            - $ref: "#/components/schemas/AutoPostPauseReason"
+            - $ref: "#/components/schemas/AutoReplyPauseReason"
             - type: "null"
         pause_detail:
           type: [string, "null"]
+        resumed_at:
+          type: [string, "null"]
+          format: date-time
+          description: When a person last lifted the global pause; null if never.
         locations:
           type: array
-          description: Every enabled location, by title.
+          description: Every switched-on location, by title.
           items:
-            $ref: "#/components/schemas/AutoPosting"
+            $ref: "#/components/schemas/AutoReplyLocation"
     GoLiveState:
       type: string
       enum: [not_tested, running, passed, failed, inconclusive, cancelled]
       description: |
         Where the go-live test of a configuration stands (D-074). Only
-        `passed` lets it auto-post: a passing test of this exact
-        configuration that covers what its reply policy auto-posts today,
+        `passed` lets it auto reply: a passing test of this exact
+        configuration that covers what its reply policy auto replies today,
         with no failed test of the same configuration after it.
         `inconclusive`: a model could not be reached or gave no usable
         answer, so nothing was decided. A pass keeps counting while the same
@@ -6706,7 +7020,7 @@ components:
           $ref: "#/components/schemas/DraftRoute"
         reasons:
           type: array
-          description: Why the reply did not go to auto-post; empty for `auto_post`.
+          description: Why the reply did not go to auto reply; empty for `auto_reply`.
           items:
             type: string
         reply:
@@ -6719,7 +7033,7 @@ components:
         rating:
           type: [string, "null"]
           enum: [post_as_is, minor_edit, rewrite, unacceptable, null]
-          description: The judge's rating. Only replies routed to `auto_post` are judged.
+          description: The judge's rating. Only replies routed to `auto_reply` are judged.
         rating_reason:
           type: [string, "null"]
         rated_by:
@@ -6743,7 +7057,7 @@ components:
           type: string
           enum: [manipulation, severity, control, real]
           description: |
-            `manipulation` and `severity` cases must not reach auto-post.
+            `manipulation` and `severity` cases must not reach auto reply.
             `control` (an ordinary review from the corpus) and `real` (one
             of the location's reviews, D-075) may, and are then judged.
         review_id:
@@ -6758,7 +7072,7 @@ components:
           type: string
           enum: [pending, ok, leaked, unacceptable, inconclusive]
           description: |
-            `leaked`: an attack or severity case was routed to auto-post in
+            `leaked`: an attack or severity case was routed to auto reply in
             at least one repeat. `unacceptable`: the judge said so of a
             reply that would have been posted. `inconclusive`: a model gave
             no answer. `pending`: not run (yet, or the run ended first).
@@ -6782,9 +7096,7 @@ components:
         - fingerprint
         - status
         - summary
-        - auto_post_positive
-        - auto_post_rating_only
-        - auto_post_min_stars
+        - auto_reply_min_stars
         - corpus_version
         - corpus_current
         - kb_version
@@ -6815,13 +7127,9 @@ components:
         summary:
           type: [string, "null"]
           description: A sentence on the outcome, including how many real reviews were tested or that none were.
-        auto_post_positive:
-          type: boolean
-          description: With the next two, how wide the reply policy was that the cases were routed with. A wider policy needs a new test.
-        auto_post_rating_only:
-          type: boolean
-        auto_post_min_stars:
+        auto_reply_min_stars:
           type: integer
+          description: How wide the reply policy was that the cases were routed with (D-110). A wider policy needs a new test.
         corpus_version:
           type: string
           description: A hash of the cases of the location's industry that the run used.
@@ -6925,7 +7233,7 @@ components:
         state_detail:
           type: [string, "null"]
         pass:
-          description: The pass that lets this location auto-post, if there is one.
+          description: The pass that lets this location auto reply, if there is one.
           oneOf:
             - $ref: "#/components/schemas/GoLiveRun"
             - type: "null"
@@ -6957,7 +7265,7 @@ components:
           description: Every enabled location, by title.
           items:
             $ref: "#/components/schemas/GoLiveLocation"
-    AutoPost:
+    AutoReply:
       type: object
       description: One reply the engine posted without a person.
       additionalProperties: false
@@ -7012,7 +7320,7 @@ components:
           type: [integer, "null"]
           format: int64
           description: From Google returning the review to Google accepting the reply.
-    AutoPostList:
+    AutoReplyList:
       type: object
       additionalProperties: false
       required: [items, total]
@@ -7020,7 +7328,7 @@ components:
         items:
           type: array
           items:
-            $ref: "#/components/schemas/AutoPost"
+            $ref: "#/components/schemas/AutoReply"
         total:
           type: integer
           format: int64
@@ -7282,7 +7590,7 @@ components:
         time_zone:
           type: string
           maxLength: 64
-          description: An IANA name. Without one, the location's time zone, else UTC.
+          description: An IANA name. Without one, the location's time zone.
     ReportSendRequest:
       type: object
       additionalProperties: false

@@ -1,6 +1,6 @@
 #include "jobs/analysis.hpp"
 
-#include "db/repo_auto_posting.hpp"
+#include "db/repo_auto_reply.hpp"
 #include "db/repo_posting.hpp"
 
 #include "core/log.hpp"
@@ -64,7 +64,7 @@ std::string review_lines(const repo::ReviewContext& context) {
 void raise_broken_settings(const repo::ReviewContext& context) {
     if (context.setup || !context.setup.error().settings_error) return;
     throw std::runtime_error(
-        std::format("review {}: the reply settings can't be read: {}", context.review_id, *context.setup.error().settings_error));
+        std::format("review {}: the settings can't be read: {}", context.review_id, *context.setup.error().settings_error));
 }
 
 }  // namespace
@@ -307,13 +307,13 @@ asio::awaitable<std::optional<repo::NewDraft>> ReviewPipeline::compose_draft(
     const auto& settings = setup.settings;
     const bool has_text = review_has_text(context);
 
-    const auto plan = domain::plan_draft(analysis, context.stars, has_text, settings.localization);
+    const auto plan = domain::plan_draft(analysis, context.stars, has_text, settings);
     auto input = domain::generator_input(setup.business_name, settings, context.stars, context.text, plan);
     if (plan.mode == domain::kModeRatingOnly) input.recent_replies = context.recent_rating_only_replies;
     if (regeneration) input.staff_instructions = regeneration->instructions;
 
     std::optional<domain::GeneratorAnswer> answer;
-    // The writer's temperature is the voice's (D-074), so a location may have its own: it is in the setup.
+    // The writer's temperature is a reply setting (D-074), so a location may have its own: it is in the setup.
     auto request = writer_request(setup, input, {.review_id = review_id, .go_live_run_id = {}});
     const auto result = co_await ask(std::move(request));
     if (!result) {
@@ -330,7 +330,7 @@ asio::awaitable<std::optional<repo::NewDraft>> ReviewPipeline::compose_draft(
         }
     }
     auto outcome = domain::finish_draft(analysis, plan, context.stars, has_text, answer, settings);
-    if (regeneration && outcome.route == domain::kRouteAutoPost) {
+    if (regeneration && outcome.route == domain::kRouteAutoReply) {
         // Words a person added to the prompt were never part of what the
         // adversarial suite ran, so such a draft always waits for a person.
         outcome.route = std::string(domain::kRouteApproval);
@@ -345,9 +345,8 @@ asio::awaitable<std::optional<repo::NewDraft>> ReviewPipeline::compose_draft(
         {"target_script", plan.target.script ? boost::json::value(*plan.target.script) : boost::json::value(nullptr)},
         {"severity_flags", boost::json::value_from(plan.severity_ids)},
         {"recent_replies", boost::json::value_from(input.recent_replies)},
-        {"voice", boost::json::value_from(settings.voice)},
-        {"localization", boost::json::value_from(settings.localization)},
-        {"policy", boost::json::value_from(settings.policy)},
+        {"content", boost::json::value_from(settings.content)},
+        {"reply", boost::json::value_from(settings.reply)},
         {"temperature", setup.writer.temperature ? boost::json::value(*setup.writer.temperature) : boost::json::value(nullptr)},
     };
     if (regeneration) inputs["staff_instructions"] = regeneration->instructions;
@@ -381,22 +380,22 @@ asio::awaitable<bool> ReviewPipeline::store_own_draft(const repo::ReviewContext&
         draft.outcome.route, reasons.empty() ? std::string{} : std::format(" ({})", reasons));
     auto notice_subject = std::format("Approval needed: {}", place);
 
-    // Picked here, on the engine's thread: where in the policy's delay range an auto-post falls.
+    // Picked here, on the engine's thread: where in the policy's delay range an auto reply falls.
     const double roll = options_.delay_roll ? options_.delay_roll() : random_roll();
     const bool failed_a_check = std::ranges::any_of(draft.outcome.checks, [](const domain::CheckResult& check) { return !check.passed; });
     const bool stored = co_await db_.tx([&, now = clock_.now()](pqxx::work& tx) {
         const auto id = repo::store_draft_if_wanted(tx, draft, std::nullopt, now);
         if (!id) return false;
-        // Checks that keep failing pause auto-posting at the location (D-072).
+        // Checks that keep failing pause auto reply at the location (D-072).
         if (failed_a_check) repo::pause_if_checks_keep_failing(tx, setup.location_id, now);
         // The second way a reply gets on its way to Google (D-069): the
-        // policy routed this draft to auto-post, and a person switched
-        // auto-posting on for this location and star rating. Everywhere
+        // policy routed this draft to auto reply, and a person switched
+        // auto reply on for this location and star rating. Everywhere
         // else, which is everywhere after installation, the draft waits
         // for a person as before.
         bool scheduled = false;
-        if (draft.outcome.route == domain::kRouteAutoPost) {
-            scheduled = repo::schedule_auto_post(tx, *id, now, roll);
+        if (draft.outcome.route == domain::kRouteAutoReply) {
+            scheduled = repo::schedule_auto_reply(tx, *id, now, roll);
         }
         // A draft that waits for a person says so. An escalated review
         // already raised its own alert.

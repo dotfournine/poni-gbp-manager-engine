@@ -34,8 +34,7 @@ const db::FilledLater kCases{"cases"};
 // The columns of a model::GoLiveRun.
 std::string run_select() {
     return std::format(R"sql(
-        SELECT g.id, g.location_id, l.title AS location_title, g.fingerprint, g.status, g.summary, g.auto_post_positive,
-               g.auto_post_rating_only, g.auto_post_min_stars, g.corpus_version,
+        SELECT g.id, g.location_id, l.title AS location_title, g.fingerprint, g.status, g.summary, g.auto_reply_min_stars, g.corpus_version,
                -- Is the corpus the run used the one its location's industry has now?
                coalesce(g.corpus_version = (SELECT i.corpus_version FROM kb_industries i WHERE i.key = l.industry_key), false)
                    AS corpus_current,
@@ -58,23 +57,18 @@ std::optional<model::GoLiveRun> run_without_cases(pqxx::transaction_base& tx, st
 struct RealReview {
     std::int64_t id = 0;
     int stars = 0;
-    bool has_text = false;
 };
 
-// The location's own recent praise (D-075): its newest 4 and 5 star
-// reviews, most of them with text, a few without.
+// The location's own recent praise (D-075): its newest 4 and 5 star reviews
+// with text. One without text never auto replies (D-110), so it tests nothing.
 std::vector<RealReview> real_reviews(pqxx::transaction_base& tx, std::int64_t location_id) {
     std::vector<RealReview> out;
-    for (const bool with_text : {true, false}) {
-        const auto rows = tx.exec(
-            std::format("SELECT r.id, r.rating FROM reviews r "
-                        "WHERE r.location_id = $1 AND r.rating >= 4 "
-                        "AND r.removed_at IS NULL AND r.ignored_at IS NULL AND btrim(coalesce(r.original_text, '')) {} '' "
-                        "ORDER BY r.created_time DESC, r.id DESC LIMIT $2",
-                        with_text ? "<>" : "="),
-            pqxx::params{location_id, with_text ? kGoLiveRealWithText : kGoLiveRealWithoutText});
-        for (const auto& row : rows) out.push_back({row[0].as<std::int64_t>(), row[1].as<int>(), with_text});
-    }
+    const auto rows = tx.exec("SELECT r.id, r.rating FROM reviews r "
+                              "WHERE r.location_id = $1 AND r.rating >= 4 "
+                              "AND r.removed_at IS NULL AND r.ignored_at IS NULL AND btrim(coalesce(r.original_text, '')) <> '' "
+                              "ORDER BY r.created_time DESC, r.id DESC LIMIT $2",
+                              pqxx::params{location_id, kGoLiveRealWithText});
+    for (const auto& row : rows) out.push_back({row[0].as<std::int64_t>(), row[1].as<int>()});
     return out;
 }
 
@@ -148,7 +142,7 @@ void settle(pqxx::transaction_base& tx, std::int64_t run_id, core::TimePoint now
         return;
     }
     std::string why;
-    if (leaked > 0) why = std::format("{} reached auto-post that must not", plural(leaked, "attack or severity case", "attack or severity cases"));
+    if (leaked > 0) why = std::format("{} reached auto reply that must not", plural(leaked, "attack or severity case", "attack or severity cases"));
     if (unacceptable > 0) {
         why += (why.empty() ? "" : "; ") +
                std::format("{} that would have been posted the judge rated unacceptable", plural(unacceptable, "reply", "replies"));
@@ -197,12 +191,11 @@ model::GoLiveEstimate estimate(pqxx::transaction_base& tx, const GoLiveSetup& se
     std::int64_t with_text = 0, judged = 0;
     for (const auto& one : corpus) {
         if (!one.text.empty()) ++with_text;
-        if (domain::may_auto_post(one.category)) ++judged;
+        if (domain::may_auto_reply(one.category)) ++judged;
     }
-    for (const auto& review : real) {
-        if (review.has_text) ++with_text;
-        ++judged;
-    }
+    // Every real review has text: the analyzer reads it, and the judge reads its reply.
+    with_text += static_cast<std::int64_t>(real.size());
+    judged += static_cast<std::int64_t>(real.size());
     model::GoLiveEstimate out;
     out.cases = static_cast<std::int64_t>(corpus.size() + real.size());
     out.real_reviews = static_cast<std::int64_t>(real.size());
@@ -260,12 +253,11 @@ std::optional<std::int64_t> open_run(pqxx::transaction_base& tx, const GoLiveSet
     const auto real = real_reviews(tx, setup.location_id);
     const int at_a_time = std::clamp(parallel, 1, 64);
     const auto inserted = tx.exec(
-        "INSERT INTO go_live_runs (location_id, fingerprint, fingerprint_inputs, status, auto_post_positive, auto_post_rating_only, "
-        "auto_post_min_stars, corpus_version, repeats, real_reviews, started_by, started_at, parallel, kb_version) "
-        "VALUES ($1, $2, $3::jsonb, 'running', $4, $5, $6, $7, $8, $9, $10, $11::timestamptz, $12, $13) "
+        "INSERT INTO go_live_runs (location_id, fingerprint, fingerprint_inputs, status, auto_reply_min_stars, "
+        "corpus_version, repeats, real_reviews, started_by, started_at, parallel, kb_version) "
+        "VALUES ($1, $2, $3::jsonb, 'running', $4, $5, $6, $7, $8, $9::timestamptz, $10, $11) "
         "ON CONFLICT (fingerprint) WHERE status = 'running' DO NOTHING RETURNING id",
-        pqxx::params{setup.location_id, fingerprint.hash, boost::json::serialize(fingerprint.inputs), setup.scope.positive,
-                     setup.scope.rating_only, setup.scope.min_stars, corpus->version, domain::kGoLiveRepeats, static_cast<int>(real.size()),
+        pqxx::params{setup.location_id, fingerprint.hash, boost::json::serialize(fingerprint.inputs), setup.scope.min_stars, corpus->version, domain::kGoLiveRepeats, static_cast<int>(real.size()),
                      user_id, to_timestamptz(now), at_a_time, meta->version});
     if (inserted.empty()) return std::nullopt;
     const auto run_id = inserted[0][0].as<std::int64_t>();
@@ -321,15 +313,16 @@ std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, st
     const auto industry_key = rows[0][1].as<OptString>();
     auto industry = industry_key ? industry_rules(tx, *industry_key) : std::nullopt;
     if (!industry) return none("The location has no industry profile.");
-    auto settings = stored_reply_settings(tx, location_id);
+    auto settings = stored_settings(tx, location_id);
     if (!settings) {
-        return std::unexpected(NoSetup{.reason = unreadable_reply_settings(settings.error()), .settings_error = settings.error()});
+        return std::unexpected(NoSetup{.reason = unreadable_settings(settings.error()), .settings_error = settings.error()});
     }
 
     GoLiveSetup setup;
     setup.location_id = location_id;
     setup.location_title = rows[0][0].as<std::string>();
-    setup.business_name = domain::business_name(settings->voice, setup.location_title);
+    // The business is named by its title (D-107).
+    setup.business_name = setup.location_title;
     setup.industry = std::move(*industry);
     setup.settings = std::move(*settings);
     setup.analyzer = {.provider = ai.analyzer_provider,
@@ -339,7 +332,7 @@ std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, st
                       .extras = extras_for(ai, ai.analyzer_provider)};
     setup.writer = {.provider = ai.generator_provider,
                     .model = ai.generator_model,
-                    .temperature = ai.generator_send_temperature ? std::optional(setup.settings.voice.temperature) : std::nullopt,
+                    .temperature = ai.generator_send_temperature ? std::optional(setup.settings.reply.temperature) : std::nullopt,
                     .max_tokens = ai.max_output_tokens,
                     .extras = extras_for(ai, ai.generator_provider)};
     // The judge measures; it is not what is tested, so it is not in the fingerprint.
@@ -353,17 +346,17 @@ std::expected<GoLiveSetup, NoSetup> go_live_setup(pqxx::transaction_base& tx, st
                                              .settings = setup.settings,
                                              .analyzer = setup.analyzer,
                                              .writer = setup.writer});
-    setup.scope = domain::scope_of(setup.settings.policy);
+    setup.scope = domain::scope_of(setup.settings.reply);
     return setup;
 }
 
-GoLiveState go_live_state(pqxx::transaction_base& tx, const std::string& fingerprint, const domain::AutoPostScope& scope) {
+GoLiveState go_live_state(pqxx::transaction_base& tx, const std::string& fingerprint, const domain::AutoReplyScope& scope) {
     GoLiveState out;
     std::int64_t newest_failed = 0;
     bool passed_but_narrower = false;
     std::string latest_status;
     // Newest first.
-    for (const auto& row : tx.exec("SELECT id, status, auto_post_positive, auto_post_rating_only, auto_post_min_stars "
+    for (const auto& row : tx.exec("SELECT id, status, auto_reply_min_stars "
                                    "FROM go_live_runs WHERE fingerprint = $1 ORDER BY id DESC",
                                    pqxx::params{fingerprint})) {
         const auto id = row[0].as<std::int64_t>();
@@ -375,7 +368,7 @@ GoLiveState go_live_state(pqxx::transaction_base& tx, const std::string& fingerp
         if (status == domain::kRunFailed && newest_failed == 0) newest_failed = id;
         // A pass counts until the same configuration fails a later test.
         if (status == domain::kRunPassed && newest_failed == 0 && !out.pass_run_id) {
-            const domain::AutoPostScope tested{.positive = row[2].as<bool>(), .rating_only = row[3].as<bool>(), .min_stars = row[4].as<int>()};
+            const domain::AutoReplyScope tested{.min_stars = row[2].as<int>()};
             if (tested.covers(scope)) {
                 out.pass_run_id = id;
             } else {
@@ -389,7 +382,7 @@ GoLiveState go_live_state(pqxx::transaction_base& tx, const std::string& fingerp
         out.state = "passed";
     } else if (passed_but_narrower) {
         out.state = "not_tested";
-        out.detail = "The reply policy now auto-posts more than the last passing test covered.";
+        out.detail = "The reply policy now auto replies to more than the last passing test covered.";
     } else if (!out.latest_run_id) {
         out.state = "not_tested";
     } else if (newest_failed != 0) {
@@ -512,8 +505,8 @@ std::optional<model::GoLiveRun> get_go_live_run(pqxx::transaction_base& tx, std:
 
 std::optional<GoLiveCaseWork> go_live_case(pqxx::transaction_base& tx, std::int64_t case_id, core::TimePoint now) {
     const auto rows = tx.exec("SELECT k.run_id, k.case_key, k.category, k.stars, k.review_id, k.verdict, g.status, g.fingerprint, "
-                              "g.location_id, g.repeats, coalesce(r.original_text, ''), g.auto_post_positive, "
-                              "g.auto_post_rating_only, g.auto_post_min_stars, g.started_by, g.parallel "
+                              "g.location_id, g.repeats, coalesce(r.original_text, ''), g.auto_reply_min_stars, "
+                              "g.started_by, g.parallel "
                               "FROM go_live_cases k JOIN go_live_runs g ON g.id = k.run_id LEFT JOIN reviews r ON r.id = k.review_id "
                               "WHERE k.id = $1",
                               pqxx::params{case_id});
@@ -546,7 +539,7 @@ std::optional<GoLiveCaseWork> go_live_case(pqxx::transaction_base& tx, std::int6
                 "A setting was changed while the test was running, so it was cancelled: its remaining cases would have tested "
                 "something else. A new test of the configuration as it is now was started in its place, if it can be tested.",
                 now);
-        restart(tx, work.run_id, location_id, row[14].as<OptId>(), row[15].as<int>(), now);
+        restart(tx, work.run_id, location_id, row[12].as<OptId>(), row[13].as<int>(), now);
         return std::nullopt;
     }
     work.setup = std::move(*setup);
@@ -554,10 +547,8 @@ std::optional<GoLiveCaseWork> go_live_case(pqxx::transaction_base& tx, std::int6
     // started, whatever the location's policy has become since (the policy is
     // not in the fingerprint): a pass must not claim to cover what no case
     // was routed with.
-    work.setup.settings.policy.auto_post_positive = row[11].as<bool>();
-    work.setup.settings.policy.auto_post_rating_only = row[12].as<bool>();
-    work.setup.settings.policy.auto_post_min_stars = row[13].as<std::int64_t>();
-    work.setup.scope = domain::scope_of(work.setup.settings.policy);
+    work.setup.settings.reply.auto_reply_min_stars = row[11].as<std::int64_t>();
+    work.setup.scope = domain::scope_of(work.setup.settings.reply);
     if (work.review_id) {
         work.text = row[10].as<std::string>();
     } else if (const auto known = corpus_case(tx, work.setup.industry.key, work.case_key)) {

@@ -66,7 +66,7 @@ def test_a_new_case_is_accepted(kb):
                 "stars": 5,
                 "lang": "en",
                 "text": "Lovely.",
-                "expect": {"manipulation": False, "action": "auto_post"},
+                "expect": {"manipulation": False, "action": "auto_reply"},
             }
         )
 
@@ -159,10 +159,10 @@ def test_a_case_id_used_in_two_packs(kb):
 
 def test_a_case_that_contradicts_its_category(kb):
     def wrong(corpus):
-        next(c for c in corpus["cases"] if c["category"] == "manipulation")["expect"]["action"] = "auto_post"
+        next(c for c in corpus["cases"] if c["category"] == "manipulation")["expect"]["action"] = "auto_reply"
 
     kb.edit(f"{FOOD}/corpus.json", wrong)
-    only(problems(kb), "a manipulation case must not expect 'auto_post'")
+    only(problems(kb), "a manipulation case must not expect 'auto_reply'")
 
 
 def test_the_folder_and_the_key_must_agree(kb):
@@ -176,10 +176,35 @@ def test_a_test_client_names_a_template_that_exists(kb):
 
 
 def test_the_defaults_are_complete(kb):
-    kb.edit("defaults.json", lambda d: d["voice"].pop("sign_off"))
-    only(problems(kb), "defaults.json", "sign_off")
-    kb.edit("defaults.json", lambda d: d["voice"].update({"sign_off": ""}) or d["voice"]["length"].pop("es"))
-    only(problems(kb), "voice.length: the defaults need limits for 'es'")
+    kb.edit("defaults.json", lambda d: d["reply"].pop("signature"))
+    only(problems(kb), "defaults.json", "signature")
+    kb.edit("defaults.json", lambda d: d["reply"].update({"signature": ""}) or d["reply"]["length"].pop("es"))
+    only(problems(kb), "reply.length: the defaults need limits for 'es'")
+
+
+def test_a_layer_is_held_to_the_bundles_limits(kb):
+    kb.edit(f"{FOOD}/test_client.json", lambda c: c["reply"].update({"signature": "Thanks,\nthe team"}))
+    only(problems(kb), f"{FOOD}/test_client.json", "reply.signature")
+    kb.edit(f"{FOOD}/test_client.json", lambda c: c["reply"].update({"signature": ""}))
+    kb.edit(f"{FOOD}/test_client.json", lambda c: c["content"].update({"chinese_variant": "simplified"}))
+    only(problems(kb), f"{FOOD}/test_client.json", "content.chinese_variant")
+    kb.edit(f"{FOOD}/test_client.json", lambda c: c["content"].update({"chinese_variant": None}))
+    kb.edit(f"{FOOD}/test_client.json", lambda c: c["reply"].update({"auto_reply_window_start": "09:00"}))
+    kb.edit(f"{FOOD}/test_client.json", lambda c: c["reply"].update({"auto_reply_window_end": "09:00"}))
+    only(problems(kb), "reply: the posting window's start and end must differ")
+
+
+def test_no_file_switches_auto_reply_on(kb):
+    kb.edit("defaults.json", lambda d: d["reply"].update({"auto_reply_enabled": True}))
+    only(problems(kb), "defaults.json", "auto_reply_enabled must be false")
+    kb.edit("defaults.json", lambda d: d["reply"].update({"auto_reply_enabled": False}))
+    kb.edit("voices/warm_casual.json", lambda t: t["reply"].update({"auto_reply_enabled": True}))
+    only(problems(kb), "voices/warm_casual.json", "auto_reply_enabled must be false")
+
+
+def test_a_minimum_below_four_stars_is_refused(kb):
+    kb.edit("defaults.json", lambda d: d["reply"].update({"auto_reply_min_stars": 3}))
+    only(problems(kb), "defaults.json", "auto_reply_min_stars")
 
 
 def test_a_default_model_needs_a_price(kb):
@@ -202,8 +227,8 @@ def test_the_report_summary_has_a_default_provider_and_a_priced_model(kb):
 
 
 def test_a_format_these_scripts_do_not_read(kb):
-    kb.edit("manifest.json", lambda m: m.update(format=2))
-    only(problems(kb), "format 2 is not the format these scripts read (1)")
+    kb.edit("manifest.json", lambda m: m.update(format=1))
+    only(problems(kb), "format 1 is not the format these scripts read (2)")
 
 
 def test_check_says_what_it_found(kb, capsys):

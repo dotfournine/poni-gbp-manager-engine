@@ -1,7 +1,7 @@
 #include "jobs/posting.hpp"
 
 #include "core/log.hpp"
-#include "db/repo_auto_posting.hpp"
+#include "db/repo_auto_reply.hpp"
 #include "db/repo_notifications.hpp"
 #include "db/repo_posting.hpp"
 #include "db/repo_reviews.hpp"
@@ -89,9 +89,9 @@ asio::awaitable<void> ReplyPoster::post(std::int64_t draft_id, bool last_attempt
                     // account depends on stops it everywhere.
                     const auto detail = std::format("Google refused an automatic reply ({}). Nothing was posted.", refused->message);
                     if (refused->kind == ApiError::Kind::unauthenticated || refused->kind == ApiError::Kind::not_configured) {
-                        repo::pause_auto_posting(tx, std::nullopt, repo::kPausePostRefused, detail, now);
+                        repo::pause_auto_reply(tx, std::nullopt, repo::kPausePostRefused, detail, now);
                     } else {
-                        repo::pause_auto_posting(tx, target->location_id, repo::kPausePostRefused, detail, now);
+                        repo::pause_auto_reply(tx, target->location_id, repo::kPausePostRefused, detail, now);
                     }
                 }
                 if (!retry) {

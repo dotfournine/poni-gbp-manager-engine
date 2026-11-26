@@ -1,13 +1,13 @@
 // Mechanical checks on a drafted reply (architecture section 10, item 3).
 // They are plain code and know nothing about the model: a reply that fails
-// any of them is never routed to auto-post, whatever the model claimed.
+// any of them is never routed to auto reply, whatever the model claimed.
 //
 // They run on the reply with full-width forms turned into ASCII and
 // zero-width characters dropped (text::fold), so a link or a number can't
 // hide behind those.
 #pragma once
 
-#include "domain/reply_settings.hpp"
+#include "domain/settings.hpp"
 
 #include <boost/describe/class.hpp>
 
@@ -37,7 +37,8 @@ struct CheckReport {
 };
 
 struct CheckContext {
-    const Voice& voice;
+    // The location's settings: the content's emoji rule, the reply's contact rule and lengths.
+    const ResolvedSettings& settings;
     // "en", "zh" or "es": the language the reply must be in.
     std::string target_language;
     // "positive", "complaint", "severity", "rating_only" or "rating_only_low".
@@ -46,7 +47,7 @@ struct CheckContext {
 
 // Check names, in the order they run:
 //   not_empty, no_url, no_email, no_phone, emoji_limit, length, language_match.
-// no_url, no_email and no_phone pass when the voice allows contact details.
+// no_url, no_email and no_phone pass when the reply settings allow contact details.
 // These are the checks that need no pattern library (D-058). What a reply
 // says (offers, promises, other businesses) and the script of a Chinese reply
 // (D-056) are left to the model and to the person who approves the reply.

@@ -16,6 +16,7 @@
 #include "connectors/gbp/performance.hpp"
 #include "connectors/gbp/writer.hpp"
 #include "connectors/google/auth.hpp"
+#include "connectors/google/places.hpp"
 #include "connectors/identity/provider.hpp"
 #include "connectors/llm/net_client.hpp"
 #include "connectors/notify/apns.hpp"
@@ -145,6 +146,8 @@ void configure_limits(core::RateLimiter& limiter) {
         {pubsub::kPubsubApi, {.per_minute = 120, .burst = 10}},
         {storage::kStorageApi, {.per_minute = 120, .burst = 10}},
         {workspace::kDirectoryApi, {.per_minute = 120, .burst = 10}},
+        // A newly discovered location's time zone (D-109): one read per new location.
+        {google::kPlacesApi, {.per_minute = 60, .burst = 5}},
         // A report's send emails each recipient apart, and the notifications share the slots (D-104 point 9).
         {notify::kGmailApi, {.per_minute = 120, .burst = 5}},
         // One slot per connection to Apple's push service, which carries one delivery's pushes.
@@ -260,10 +263,14 @@ int run(const core::Config& config) {
         log::warn("no model provider is configured (PONI_LLM_<NAME>_BASE_URL and PONI_LLM_<NAME>_API_KEY): reviews are not analyzed");
     }
 
+    // A newly discovered location's time zone (D-109), with a key and no token.
+    google::HttpPlaceTimeZones places(http_client, limiter, config.google_places_api_key, config.google_mock());
+
     // ---- jobs ------------------------------------------------------------------
-    jobs::Sync sync(database, clock, gbp_reader, queue,
+    jobs::Sync sync(database, clock, gbp_reader, places, queue,
                     {.discovery_interval = config.location_discovery_interval,
                      .poll_tick = config.review_poll_tick,
+                     .review_poll_interval = config.review_poll_interval,
                      .full_sync_interval = config.review_full_sync_interval,
                      .notification_pull_interval = config.pubsub_pull_interval});
     jobs::ReviewPipeline pipeline(database, clock, llm_client, queue, {.tick = config.analysis_tick});

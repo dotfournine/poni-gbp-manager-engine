@@ -13,9 +13,11 @@
 
 #include <array>
 #include <boost/describe/class.hpp>
+#include <boost/json/object.hpp>
 #include <pqxx/pqxx>
 
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -47,6 +49,10 @@ model::ClientList list_clients(pqxx::transaction_base& tx, const ClientFilter& f
 std::optional<model::Client> get_client(pqxx::transaction_base& tx, std::int64_t id);
 Result<model::Client> create_client(pqxx::transaction_base& tx, audit::Writer& audit, const NewClient& client);
 Result<model::Client> update_client(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const ClientPatch& patch);
+// What PATCH /api/clients/{id} can set, in ClientPatch's order, with the client's values: what its ETag covers (D-108).
+boost::json::object editable(const model::Client& client);
+// Locks the client's row (FOR UPDATE) and gives the ETag of what it holds, for Api::change_if_match.
+Result<std::string> current_client_etag(pqxx::transaction_base& tx, std::int64_t id);
 // Removes a client, archived or not. Its locations are unlinked through
 // update_location and nothing else about them changes (D-102); the entry
 // keeps what the client was.
@@ -76,28 +82,32 @@ struct LocationPatch {
     core::Nullable<std::string> industry_key;
     // The day analysis starts from, "YYYY-MM-DD"; null for every review.
     core::Nullable<std::string> analyze_from;
-    // Who the customers are: at most 500 characters.
-    std::optional<std::string> audience;
-    std::optional<int> review_poll_interval_s;
     // The location's kill switch for posting.
     std::optional<bool> posting_enabled;
 };
 BOOST_DESCRIBE_STRUCT(LocationPatch, (),
-                      (client_id, enabled, industry_key, analyze_from, audience, review_poll_interval_s, posting_enabled))
+                      (client_id, enabled, industry_key, analyze_from, posting_enabled))
 
 model::LocationList list_locations(pqxx::transaction_base& tx, const LocationFilter& filter);
 std::optional<model::Location> get_location(pqxx::transaction_base& tx, std::int64_t id);
 // The one place that changes locations.client_id. The link is bookkeeping
 // and changes nothing else about the location (D-102). Switching the
 // location on needs access to it and makes its reviews due for a full sync
-// at once; switching it off switches its auto-posting off (D-070).
+// at once; switching it off switches its auto reply off (D-070).
 Result<model::Location> update_location(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id, const LocationPatch& patch);
+// What PATCH /api/locations/{id} can set, in LocationPatch's order, with the location's values: what its ETag
+// covers (D-108). Nothing a discovery, a poll or a pause writes is in it.
+boost::json::object editable(const model::Location& location);
+// Locks the location's row (FOR UPDATE, the lock update_location takes) and gives the ETag of what it holds.
+Result<std::string> current_location_etag(pqxx::transaction_base& tx, std::int64_t id);
 
 // ---- location discovery --------------------------------------------------------
 
 struct SeenLocation {
     std::string account_id;
     gbp::Location location;
+    // A new location's IANA zone, read from Google Places (D-109); nothing for a known one.
+    std::optional<std::string> time_zone = std::nullopt;
 };
 
 struct DiscoveryOutcome {
@@ -119,7 +129,15 @@ void request_discovery(pqxx::transaction_base& tx, audit::Writer& audit);
 // location missing from two complete discoveries in a row is marked lost.
 // New, lost and restored locations get an audit entry. Call this only with a
 // complete listing: a partial one would count locations as missing.
-DiscoveryOutcome apply_discovery(pqxx::transaction_base& tx, const std::vector<SeenLocation>& seen, core::TimePoint now);
+// A new location is inserted with its `time_zone`, which it must have.
+// `deferred` are the new locations Google lists that are not on Google Maps
+// yet (no place id, D-109 point 6): they are not rows and not counted as seen,
+// and each gets one `location.discovery_deferred` entry, the first time only.
+DiscoveryOutcome apply_discovery(pqxx::transaction_base& tx, const std::vector<SeenLocation>& seen,
+                                 const std::vector<SeenLocation>& deferred, core::TimePoint now);
+
+// Which of these Google location ids are rows already.
+std::set<std::string> known_location_ids(pqxx::transaction_base& tx, const std::vector<std::string>& ids);
 
 // ---- audit log and status ------------------------------------------------------
 

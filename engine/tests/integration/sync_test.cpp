@@ -11,8 +11,15 @@
 #include "jobs/sync.hpp"
 #include "jobs/worker.hpp"
 
+#include "connectors/google/places.hpp"
+#include "core/rate_limiter.hpp"
+
 #include <boost/json/parse.hpp>
 #include <gmock/gmock.h>
+
+#include <algorithm>
+#include <string>
+#include <vector>
 
 using namespace poni;
 using namespace std::chrono_literals;
@@ -31,7 +38,7 @@ protected:
         EngineTest::SetUp();
         gbp_.add_location(std::string(kSpa), "Spa");
         gbp_.add_location(std::string(kBuffet), "Buffet");
-        sync_.emplace(db(), clock_, gbp_, queue(), jobs::SyncOptions{});
+        sync_.emplace(db(), clock_, gbp_, places_, queue(), jobs::SyncOptions{});
     }
 
     // Discovers both locations and switches the spa on, with no client (D-102). Returns the spa's id.
@@ -59,6 +66,10 @@ protected:
             out.push_back(row[0].as<std::string>());
         }
         return out;
+    }
+
+    std::string zone_of(std::string_view gbp_location_id) {
+        return value<std::string>(std::format("SELECT time_zone FROM locations WHERE gbp_location_id = '{}'", gbp_location_id));
     }
 
     test::FakeGbp gbp_;
@@ -120,6 +131,202 @@ TEST_F(SyncTest, AMovedLocationKeepsItsRowAndRebindsTheAccount) {
     EXPECT_EQ(count("locations"), 2);
     EXPECT_EQ(count("locations WHERE gbp_account_id = '222'"), 2);
     EXPECT_EQ(count("audit_log WHERE action = 'location.account_changed'"), 2);
+}
+
+// ---- a new location's time zone (D-109) -------------------------------------------
+
+TEST_F(SyncTest, ANewLocationGetsItsZoneFromPlacesAndAKnownOneAsksNothing) {
+    places_.zones["place-9002"] = "America/Chicago";
+    await(sync_->discover_locations());
+    EXPECT_EQ(places_.asked, (std::vector<std::string>{"place-9001", "place-9002"})) << "once each, by its place id";
+    EXPECT_EQ(zone_of(kSpa), "America/New_York");
+    EXPECT_EQ(zone_of(kBuffet), "America/Chicago");
+
+    // A known location is never sent to Places, whatever the engine remembers: a new Sync remembers nothing.
+    sync_.emplace(db(), clock_, gbp_, places_, queue(), jobs::SyncOptions{});
+    places_.zones["place-9002"] = "Asia/Tokyo";
+    await(sync_->discover_locations());
+    EXPECT_EQ(places_.asked.size(), 2u);
+    EXPECT_EQ(zone_of(kBuffet), "America/Chicago") << "a known location keeps the zone it was discovered with";
+}
+
+TEST_F(SyncTest, APlacesFailureAppliesNothingAndShowsWhy) {
+    await(sync_->discover_locations());
+    const auto ok_at = value<std::string>("SELECT last_ok_at::text FROM integration_status WHERE name = 'location_discovery'");
+    const auto before = value<std::string>("SELECT string_agg(concat_ws('|', title, raw, missed_discoveries, access_status, last_seen_at), ',' "
+                                           "ORDER BY id) FROM locations");
+
+    clock_.advance(15min);
+    gbp_.locations[0].title = "Spa (renamed)";
+    gbp_.locations.pop_back();  // the buffet is missing from this listing
+    gbp_.add_location("9003", "Harbor Nails");
+    places_.fail = ApiError{ApiError::Kind::permission_denied, 403, "Google Places answered 403 PERMISSION_DENIED"};
+    await(sync_->discover_locations());
+
+    EXPECT_EQ(count("locations"), 2) << "the new location is not inserted";
+    EXPECT_EQ(value<std::string>("SELECT string_agg(concat_ws('|', title, raw, missed_discoveries, access_status, last_seen_at), ',' "
+                                 "ORDER BY id) FROM locations"),
+              before)
+        << "no title refreshed, no miss counted";
+    EXPECT_EQ(value<std::string>("SELECT last_ok_at::text FROM integration_status WHERE name = 'location_discovery'"), ok_at);
+    const auto error = value<std::string>("SELECT last_error FROM integration_status WHERE name = 'location_discovery'");
+    EXPECT_THAT(error, testing::HasSubstr("Harbor Nails"));
+    EXPECT_THAT(error, testing::HasSubstr("403 PERMISSION_DENIED"));
+    EXPECT_EQ(places_.asked, (std::vector<std::string>{"place-9001", "place-9002", "place-9003"})) << "only the new one is asked";
+}
+
+TEST_F(SyncTest, AZoneTheServerDoesNotKnowAppliesNothing) {
+    places_.zones["place-9002"] = "Mars/Olympus_Mons";
+    await(sync_->discover_locations());
+    EXPECT_EQ(count("locations"), 0);
+    EXPECT_THAT(value<std::string>("SELECT last_error FROM integration_status WHERE name = 'location_discovery'"),
+                testing::AllOf(testing::HasSubstr("Buffet"), testing::HasSubstr("Mars/Olympus_Mons"), testing::HasSubstr("does not know")));
+}
+
+TEST_F(SyncTest, APlaceIdThePlacesRuleRefusesAppliesNothingAndAsksNothing) {
+    for (const auto* bad : {"a/b", "..", "place id"}) {
+        gbp_.locations[1].metadata->placeId = bad;
+        await(sync_->discover_locations());
+        EXPECT_EQ(count("locations"), 0) << bad;
+        EXPECT_THAT(value<std::string>("SELECT last_error FROM integration_status WHERE name = 'location_discovery'"),
+                    testing::HasSubstr("\"Buffet\""));
+    }
+    gbp_.locations[1].metadata->placeId = std::string(1025, 'p');
+    await(sync_->discover_locations());
+    EXPECT_EQ(count("locations"), 0);
+    EXPECT_TRUE(places_.asked.empty()) << "every new location's place id is checked before any call";
+
+    gbp_.locations[1].metadata->placeId = std::string(1024, 'p');
+    await(sync_->discover_locations());
+    EXPECT_EQ(count("locations"), 2) << "1,024 characters is a place id";
+    EXPECT_EQ(places_.asked.size(), 2u);
+}
+
+TEST_F(SyncTest, AFailedRunDoesNotAskAgainForTheZonesItHad) {
+    gbp_.add_location("9003", "Harbor Nails");
+    places_.zones["place-9002"] = "Nowhere/Land";
+    await(sync_->discover_locations());
+    EXPECT_EQ(count("locations"), 0);
+    EXPECT_EQ(places_.asked, (std::vector<std::string>{"place-9001", "place-9002"})) << "it stops at the failing one";
+
+    places_.zones["place-9002"] = "Asia/Tokyo";
+    await(sync_->discover_locations());
+    EXPECT_EQ(places_.asked, (std::vector<std::string>{"place-9001", "place-9002", "place-9002", "place-9003"}));
+    EXPECT_EQ(count("locations"), 3);
+    EXPECT_EQ(zone_of(kSpa), "America/New_York");
+    EXPECT_EQ(zone_of(kBuffet), "Asia/Tokyo");
+    EXPECT_EQ(count("integration_status WHERE name = 'location_discovery' AND last_error IS NULL AND last_ok_at IS NOT NULL"), 1);
+}
+
+TEST_F(SyncTest, ALocationNotOnMapsYetWaitsAndTheRestIsApplied) {
+    gbp_.add_location("9003", "Old Branch");
+    await(sync_->discover_locations());
+    ASSERT_EQ(count("locations"), 3);
+
+    // Google lists the buffet's twin, not on Maps yet; the old branch is gone, and a new one is on Maps.
+    clock_.advance(15min);
+    std::erase_if(gbp_.locations, [](const gbp::Location& l) { return l.name == "locations/9003"; });
+    gbp_.add_location("9004", "Waiting Buffet");
+    gbp_.locations.back().metadata->placeId.reset();
+    gbp_.add_location("9005", "New Branch");
+    await(sync_->discover_locations());
+
+    EXPECT_EQ(count("locations WHERE gbp_location_id = '9004'"), 0) << "not inserted";
+    EXPECT_EQ(count("locations WHERE gbp_location_id = '9005' AND time_zone = 'America/New_York'"), 1) << "the rest is applied";
+    EXPECT_EQ(count("locations WHERE gbp_location_id = '9003' AND missed_discoveries = 1"), 1) << "a missing one is counted";
+    EXPECT_EQ(value<std::string>("SELECT last_error FROM integration_status WHERE name = 'location_discovery'"),
+              "Waiting Buffet is not on Google Maps yet, so its time zone is not known; it is added once it is");
+    // Applied, with a note: the success moved, at the same moment as the note.
+    EXPECT_EQ(count(std::format("integration_status WHERE name = 'location_discovery' AND last_ok_at = '{}'::timestamptz "
+                                "AND last_error_at = last_ok_at AND (detail->>'locations')::int = 3",
+                                db::to_timestamptz(clock_.now()))),
+              1);
+    EXPECT_EQ(std::ranges::count(places_.asked, std::string("place-9005")), 1);
+
+    const auto entries = [&] { return count("audit_log WHERE action = 'location.discovery_deferred'"); };
+    EXPECT_EQ(entries(), 1);
+    EXPECT_EQ(count("audit_log WHERE action = 'location.discovery_deferred' AND object_type = 'google_location' AND object_id = '9004' "
+                    "AND actor = 'system:location-discovery' AND location_id IS NULL"),
+              1);
+    const auto after = boost::json::parse(value<std::string>("SELECT after::text FROM audit_log WHERE action = 'location.discovery_deferred'"));
+    EXPECT_EQ(after, (boost::json::value{{"gbp_location_id", "9004"},
+                                          {"gbp_account_id", "111"},
+                                          {"title", "Waiting Buffet"},
+                                          {"reason", "not on Google Maps yet: no place id"}}));
+
+    // A second one waits too, and the first is listed twice, as under two accounts: each is named once.
+    gbp_.add_location("9006", "Waiting Nails");
+    gbp_.locations.back().metadata->placeId.reset();
+    gbp_.locations.push_back(gbp_.locations[gbp_.locations.size() - 3]);
+    clock_.advance(15min);
+    await(sync_->discover_locations());
+    EXPECT_EQ(value<std::string>("SELECT last_error FROM integration_status WHERE name = 'location_discovery'"),
+              "Waiting Buffet, Waiting Nails are not on Google Maps yet, so their time zones are not known; they are added once they are");
+    EXPECT_EQ(count("integration_status WHERE name = 'location_discovery' AND last_error_at = last_ok_at"), 1);
+    EXPECT_EQ(entries(), 2) << "once per location, not once per run";
+    EXPECT_EQ(count("audit_log WHERE action = 'location.discovery_deferred' AND object_id = '9004'"), 1);
+    gbp_.locations.pop_back();
+    gbp_.locations.pop_back();
+
+    // Google gives it a place id: the next run adds it like any new location.
+    gbp_.locations[gbp_.locations.size() - 2].metadata->placeId = "place-9004";
+    clock_.advance(15min);
+    await(sync_->discover_locations());
+    EXPECT_EQ(count("locations WHERE gbp_location_id = '9004' AND time_zone = 'America/New_York'"), 1);
+    EXPECT_EQ(count("audit_log WHERE action = 'location.discovered' AND object_id = "
+                    "(SELECT id::text FROM locations WHERE gbp_location_id = '9004')"),
+              1);
+    EXPECT_EQ(entries(), 2);
+    EXPECT_EQ(count("integration_status WHERE name = 'location_discovery' AND last_error IS NULL"), 1);
+}
+
+// "Look for new locations" runs the same discovery, through the queue.
+TEST_F(SyncTest, APersonsDiscoveryReadsTheZonesTheSameWay) {
+    jobs::Registry registry;
+    jobs::install(registry, *sync_, nullptr);
+    const auto discover_now = [&] {
+        as_test([](pqxx::work& tx, audit::Writer& audit) { repo::request_discovery(tx, audit); });
+        run_jobs(registry);
+    };
+
+    places_.fail = ApiError{ApiError::Kind::unavailable, 0, "network error: timed out"};
+    discover_now();
+    EXPECT_EQ(count("locations"), 0);
+    EXPECT_THAT(value<std::string>("SELECT last_error FROM integration_status WHERE name = 'location_discovery'"),
+                testing::HasSubstr("network error"));
+
+    places_.fail.reset();
+    places_.zones["place-9002"] = "America/Los_Angeles";
+    discover_now();
+    EXPECT_EQ(zone_of(kSpa), "America/New_York");
+    EXPECT_EQ(zone_of(kBuffet), "America/Los_Angeles");
+}
+
+// The real connector, against a scripted HTTP client: Google's answer may quote the key, and nothing of it is kept.
+TEST_F(SyncTest, NoPlacesKeyReachesTheStatusTheAuditLogOrTheLocations) {
+    constexpr std::string_view key = "test-places-key-0123456789abcdef";
+    core::RateLimiter limiter{io_.get_executor(), clock_};
+    limiter.configure(std::string(google::kPlacesApi), {.per_minute = 6000, .burst = 100});
+    test::FakeHttp http;
+    google::HttpPlaceTimeZones places(http, limiter, std::string(key), false);
+    jobs::Sync sync(db(), clock_, gbp_, places, queue(), {});
+
+    http.reply(403, std::format(R"({{"error": {{"code": 403, "message": "API key {} is not valid.", "status": "PERMISSION_DENIED"}}}})", key));
+    await(sync.discover_locations());
+    ASSERT_EQ(http.requests.size(), 1u);
+    const auto error = value<std::string>("SELECT last_error FROM integration_status WHERE name = 'location_discovery'");
+    EXPECT_THAT(error, testing::HasSubstr("403"));
+    EXPECT_THAT(error, testing::Not(testing::HasSubstr(std::string(key))));
+    EXPECT_THAT(error, testing::Not(testing::HasSubstr("places.googleapis.com")));
+
+    http.reply(200, R"({"timeZone": {"id": "America/New_York"}})");
+    http.reply(200, R"({"timeZone": {"id": "America/Chicago"}})");
+    await(sync.discover_locations());
+    EXPECT_EQ(count("locations"), 2);
+    const auto like = std::format("'%{}%'", key);
+    EXPECT_EQ(count("audit_log WHERE concat(before, after, object_id) LIKE " + like), 0);
+    EXPECT_EQ(count("integration_status WHERE concat(last_error, detail) LIKE " + like), 0);
+    EXPECT_EQ(count("locations WHERE concat(time_zone, raw) LIKE " + like), 0);
 }
 
 // ---- reviews: full sync ----------------------------------------------------------
@@ -293,7 +500,7 @@ TEST_F(SyncTest, PollFindsANewReviewAndStopsAtTheFirstPageWithNothingNew) {
               1);
 }
 
-TEST_F(SyncTest, EachLocationIsPolledAtItsOwnInterval) {
+TEST_F(SyncTest, ALocationIsPolledAgainAfterTheDefaultInterval) {
     const auto spa = enabled_spa();
     seed_reviews(3);
     await(sync_->full_sync(spa));
@@ -307,6 +514,34 @@ TEST_F(SyncTest, EachLocationIsPolledAtItsOwnInterval) {
     clock_.advance(61s);
     await(sync_->poll_reviews());
     EXPECT_EQ(gbp_.batch_calls, 2);
+}
+
+// One interval for every location, the engine's setting (D-112): after a poll and after a failed one.
+TEST_F(SyncTest, ThePollIntervalOfTheSettingsDecidesWhenTheNextPollIsDue) {
+    sync_.emplace(db(), clock_, gbp_, places_, queue(), jobs::SyncOptions{.review_poll_interval = 300s});
+    const auto spa = enabled_spa();
+    seed_reviews(3);
+    await(sync_->full_sync(spa));
+    await(sync_->poll_reviews());
+    ASSERT_EQ(gbp_.batch_calls, 1);
+
+    clock_.advance(280s);
+    await(sync_->poll_reviews());
+    EXPECT_EQ(gbp_.batch_calls, 1) << "not due yet: the interval is five minutes (and the poll takes ten seconds of grace)";
+    clock_.advance(20s);
+    gbp_.fail_batch = ApiError{ApiError::Kind::rate_limited, 429, "HTTP 429 RESOURCE_EXHAUSTED"};
+    await(sync_->poll_reviews());
+    EXPECT_EQ(gbp_.batch_calls, 2);
+    EXPECT_EQ(count("locations WHERE id = " + std::to_string(spa) + " AND last_sync_error IS NOT NULL"), 1);
+
+    gbp_.fail_batch.reset();
+    clock_.advance(280s);
+    await(sync_->poll_reviews());
+    EXPECT_EQ(gbp_.batch_calls, 2) << "a failed poll waits the same interval";
+    clock_.advance(20s);
+    await(sync_->poll_reviews());
+    EXPECT_EQ(gbp_.batch_calls, 3);
+    EXPECT_EQ(count("locations WHERE id = " + std::to_string(spa) + " AND last_sync_error IS NULL"), 1);
 }
 
 TEST_F(SyncTest, OneBatchCallCoversEveryDueLocationOfAnAccount) {

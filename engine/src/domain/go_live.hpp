@@ -2,7 +2,7 @@
 // location's configuration, how wide a policy is, and what a test's cases
 // add up to.
 //
-// A location may auto-post only while its fingerprint has a passing test at
+// A location may auto reply only while its fingerprint has a passing test at
 // least as wide as its policy. The fingerprint holds everything that changes
 // what the models are asked and what the code checks, and nothing else: a
 // settings edit that leaves the prompts alone changes nothing, and the daily
@@ -10,7 +10,7 @@
 #pragma once
 
 #include "domain/industry.hpp"
-#include "domain/reply_settings.hpp"
+#include "domain/settings.hpp"
 
 #include <boost/json/object.hpp>
 
@@ -24,7 +24,7 @@ namespace poni::domain {
 
 // Raised by hand when the gate, the reply checks or the way a test runs
 // change in a way that makes earlier passes worth nothing. It is also the
-// "gate" of the policy snapshot stored with an auto-post (D-069).
+// "gate" of the policy snapshot stored with an auto reply (D-069).
 inline constexpr std::string_view kGateVersion = "phase-4.1";
 
 // How often each case of a test is run.
@@ -43,7 +43,7 @@ struct ModelSetup {
 };
 
 struct FingerprintInput {
-    // How replies name the business: the voice's reply_name, or the location's title (D-102 point 10).
+    // How replies name the business: the location's title (D-107).
     std::string business_name;
     const IndustryRules& industry;
     const ResolvedSettings& settings;
@@ -61,21 +61,18 @@ struct Fingerprint {
 
 Fingerprint fingerprint(const FingerprintInput& input);
 
-// What a policy routes to auto-post. A test is run with one; a later policy
-// that routes more needs a new test, one that routes less does not.
-struct AutoPostScope {
-    bool positive = false;
-    bool rating_only = false;
-    // 4 or 5: three stars and fewer never auto-post (FR-5), whatever a policy says.
+// What a policy routes to auto reply: reviews with text of at least this
+// many stars (D-110). A test is run with one; a later policy that routes more
+// needs a new test, one that routes less does not.
+struct AutoReplyScope {
+    // 4 or 5: three stars and fewer never auto reply (FR-5), whatever a policy says.
     int min_stars = 5;
 
-    // Everything `other` auto-posts, this does too.
-    bool covers(const AutoPostScope& other) const {
-        return (positive || !other.positive) && (rating_only || !other.rating_only) && min_stars <= other.min_stars;
-    }
+    // Everything `other` auto replies, this does too.
+    bool covers(const AutoReplyScope& other) const { return min_stars <= other.min_stars; }
 };
 
-AutoPostScope scope_of(const PolicyRules& policy);
+AutoReplyScope scope_of(const ReplySettings& reply);
 
 // ---- what a run adds up to ------------------------------------------------------------
 
@@ -91,8 +88,8 @@ inline constexpr std::string_view kRunFailed = "failed";
 inline constexpr std::string_view kRunInconclusive = "inconclusive";
 inline constexpr std::string_view kRunCancelled = "cancelled";
 
-// May a case of this category be routed to auto-post? An attack or a
+// May a case of this category be routed to auto reply? An attack or a
 // severity case may not; an ordinary review may, and is then judged.
-bool may_auto_post(std::string_view category);
+bool may_auto_reply(std::string_view category);
 
 }  // namespace poni::domain

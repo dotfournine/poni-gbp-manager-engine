@@ -1,12 +1,13 @@
 // The tiered reply policy (FR-5): which kind of reply a review gets, in which
 // language, and where the draft goes. Every review ends on exactly one route.
 //
-// The route "auto_post" says only that the policy would let the reply go out
-// without a person: whether it does is up to repo::schedule_auto_post.
+// The route "auto_reply" says only that the policy would let the reply go out
+// without a person: whether it does is up to repo::schedule_auto_reply.
 #pragma once
 
-#include "domain/reply_settings.hpp"
+#include "domain/settings.hpp"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -14,7 +15,7 @@
 
 namespace poni::domain {
 
-inline constexpr std::string_view kRouteAutoPost = "auto_post";
+inline constexpr std::string_view kRouteAutoReply = "auto_reply";
 inline constexpr std::string_view kRouteApproval = "approval_queue";
 inline constexpr std::string_view kRouteEscalate = "escalate";
 
@@ -34,8 +35,8 @@ struct TargetLanguage {
 
 // The language and script the reply is written in: the review's language if
 // the business replies in it, else the fallback; for Chinese, the script the
-// localization preference names, or the review's own.
-TargetLanguage target_language(std::string_view review_language, std::string_view review_script, const Localization& localization);
+// content settings' Chinese variant names, or the review's own when none is set.
+TargetLanguage target_language(std::string_view review_language, std::string_view review_script, const ResolvedSettings& settings);
 
 struct GateInput {
     int stars = 0;  // 0 when Google sent no rating
@@ -53,10 +54,15 @@ struct GateInput {
 
 struct GateDecision {
     std::string route;
-    // Why the review did not go to auto-post; empty for auto_post.
+    // Why the review did not go to auto reply; empty for auto_reply.
     std::vector<std::string> reasons;
 };
 
-GateDecision gate(const GateInput& input, const PolicyRules& policy);
+GateDecision gate(const GateInput& input, const ReplySettings& reply);
+
+// Whether a review of `stars` may auto reply under a minimum of `min_stars`.
+// Three stars or fewer never do, whatever the minimum says (FR-5, D-110):
+// the explicit 4 is the guard that holds even if a lower minimum were stored.
+constexpr bool stars_may_auto_reply(std::int64_t stars, std::int64_t min_stars) { return stars >= 4 && stars >= min_stars; }
 
 }  // namespace poni::domain

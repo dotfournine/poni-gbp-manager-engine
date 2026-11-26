@@ -64,35 +64,31 @@ def _applicable_flags(profile: dict, common: dict) -> list[str]:
     return [f["id"] for f in profile["severity_flags"] + common["severity_flags"] if f["enabled"]]
 
 
-def _voice_problems(file: str, voice: dict, complete: bool) -> list[str]:
+def _reply_problems(file: str, reply: dict, complete: bool) -> list[str]:
+    """The reply settings' rules the schema cannot say: length ranges, the delay, the window, auto reply off."""
     problems = []
-    length = voice.get("length", {})
+    length = reply.get("length", {})
     for language, limits in length.items():
         for mode in LENGTH_MODES:
             r = limits.get(mode)
             if r and r["min"] > r["max"]:
-                problems.append(f"{file}: voice.length.{language}.{mode}: min is greater than max")
+                problems.append(f"{file}: reply.length.{language}.{mode}: min is greater than max")
     if complete:
         for language in REPLY_LANGUAGES:
             if language not in length:
-                problems.append(f"{file}: voice.length: the defaults need limits for '{language}'")
-        for key in ("allowed", "max", "preferred"):
-            if key not in voice.get("emoji", {}):
-                problems.append(f"{file}: voice.emoji: the defaults must set '{key}'")
-    return problems
-
-
-def _policy_problems(file: str, policy: dict) -> list[str]:
-    problems = []
-    low, high = policy.get("auto_post_delay_min_minutes"), policy.get("auto_post_delay_max_minutes")
+                problems.append(f"{file}: reply.length: the defaults need limits for '{language}'")
+    low, high = reply.get("auto_reply_delay_min_minutes"), reply.get("auto_reply_delay_max_minutes")
     if low is not None and high is not None and low > high:
-        problems.append(f"{file}: policy: auto_post_delay_min_minutes is greater than auto_post_delay_max_minutes")
-    start, end = policy.get("auto_post_window_start"), policy.get("auto_post_window_end")
+        problems.append(f"{file}: reply: auto_reply_delay_min_minutes is greater than auto_reply_delay_max_minutes")
+    start, end = reply.get("auto_reply_window_start"), reply.get("auto_reply_window_end")
     if start is not None and end is not None:
         if bool(start) != bool(end):
-            problems.append(f"{file}: policy: set both ends of the posting window, or leave both empty")
+            problems.append(f"{file}: reply: set both ends of the posting window, or leave both empty")
         elif start and start == end:
-            problems.append(f"{file}: policy: the posting window's start and end must differ")
+            problems.append(f"{file}: reply: the posting window's start and end must differ")
+    # Only a person switches auto reply on (D-110): defaults or a template that did would do it for them.
+    if reply.get("auto_reply_enabled") is True:
+        problems.append(f"{file}: reply: auto_reply_enabled must be false; only a person switches auto reply on")
     return problems
 
 
@@ -116,8 +112,8 @@ def _case_problems(file: str, case: dict, flags: list[str]) -> list[str]:
     elif case["category"] == "manipulation":
         if not expect["manipulation"]:
             problems.append(f"{where}: a manipulation case must expect manipulation: true")
-        if expect["action"] == "auto_post":
-            problems.append(f"{where}: a manipulation case must not expect 'auto_post'")
+        if expect["action"] == "auto_reply":
+            problems.append(f"{where}: a manipulation case must not expect 'auto_reply'")
     else:
         if named or expect["manipulation"]:
             problems.append(f"{where}: an ordinary (control) case expects no flag and no manipulation")
@@ -231,8 +227,7 @@ def check(kb: Knowledge) -> list[str]:
         template = pack.test_client.get("template")
         if template is not None and template not in kb.voices:
             problems.append(f"{client_file}: the voice template '{template}' does not exist (voices/{template}.json)")
-        problems += _voice_problems(client_file, pack.test_client["voice"], complete=False)
-        problems += _policy_problems(client_file, pack.test_client["policy"])
+        problems += _reply_problems(client_file, pack.test_client["reply"], complete=False)
 
     for case_id, count in sorted(case_ids.items()):
         if count > 1:
@@ -240,16 +235,15 @@ def check(kb: Knowledge) -> list[str]:
                 f"industries/: the case id '{case_id}' is used in {count} packs; ids are unique across packs"
             )
 
-    for key, voice in kb.voices.items():
+    for key, template in kb.voices.items():
         file = f"voices/{key}.json"
-        if voice["key"] != key:
-            problems.append(f"{file}: key is '{voice['key']}' but the file is '{key}.json'")
-        problems += _voice_problems(file, voice["voice"], complete=False)
+        if template["key"] != key:
+            problems.append(f"{file}: key is '{template['key']}' but the file is '{key}.json'")
+        problems += _reply_problems(file, template["reply"], complete=False)
 
-    problems += _voice_problems("defaults.json", kb.defaults["voice"], complete=True)
-    problems += _policy_problems("defaults.json", kb.defaults["policy"])
-    if kb.defaults["localization"]["fallback_language"] not in kb.defaults["localization"]["reply_languages"]:
-        problems.append("defaults.json: localization.fallback_language is not one of reply_languages")
+    problems += _reply_problems("defaults.json", kb.defaults["reply"], complete=True)
+    if kb.defaults["reply"]["fallback_language"] not in kb.defaults["reply"]["reply_languages"]:
+        problems.append("defaults.json: reply.fallback_language is not one of reply_languages")
     for task in ("analyzer", "generator", "judge", "summary", "posts"):
         model = kb.defaults["analysis"][f"{task}_model"]
         if model not in kb.models["prices"]:

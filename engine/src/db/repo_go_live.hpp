@@ -1,12 +1,12 @@
 // The go-live test (D-074, D-075): a location's fingerprint, the gate that
-// auto-posting asks, and the runs. Blocking calls on a transaction the caller
+// auto reply asks, and the runs. Blocking calls on a transaction the caller
 // owns: run them through Database::run.
 //
 // A run tests one location's fingerprint, and its pass counts for every
 // location with that fingerprint. It is started by a person for one
 // location, never by a change, and it ends as passed, failed, inconclusive or cancelled. Only a pass
 // counts, and all it does is remove one obstacle: nothing here switches
-// auto-posting on or lifts a pause.
+// auto reply on or lifts a pause.
 #pragma once
 
 #include "core/clock.hpp"
@@ -16,7 +16,7 @@
 #include "domain/go_live.hpp"
 #include "domain/industry.hpp"
 #include "domain/models.hpp"
-#include "domain/reply_settings.hpp"
+#include "domain/settings.hpp"
 
 #include <pqxx/pqxx>
 
@@ -36,9 +36,8 @@ inline constexpr std::string_view kGoLiveCaseKind = "golive.case";
 // workers the engine runs (PONI_JOB_WORKERS), passed in as `parallel`. Other
 // jobs take their turn between cases: each next case is queued only when one
 // finishes, behind whatever is already waiting.
-// The location's own reviews among the cases (D-075): the newest with 4 or 5 stars.
+// The location's own reviews among the cases (D-075): the newest with 4 or 5 stars and text.
 inline constexpr int kGoLiveRealWithText = 20;
-inline constexpr int kGoLiveRealWithoutText = 2;
 
 // ---- the fingerprint and the gate ---------------------------------------------------
 
@@ -56,15 +55,15 @@ struct GoLiveSetup {
     domain::ModelSetup writer;
     domain::ModelSetup judge;
     domain::Fingerprint fingerprint;
-    domain::AutoPostScope scope;
+    domain::AutoReplyScope scope;
 };
 
 // Why a location has no setup.
 struct NoSetup {
     // As a sentence, for the page.
     std::string reason;
-    // Set when the location's stored reply settings can't be read (there is
-    // no row, or a part lacks a field), in the reader's own words. A save is
+    // Set when the location's stored settings can't be read (a bundle has
+    // no row, or a row lacks a member), in the reader's own words. A save is
     // checked and discovery writes complete settings, so it is a fault to raise
     // and not a state a location can be in.
     std::optional<std::string> settings_error;
@@ -88,7 +87,7 @@ struct GoLiveGate {
     std::string fingerprint;
 };
 
-// May this location auto-post as far as the go-live test goes: does its
+// May this location auto reply as far as the go-live test goes: does its
 // fingerprint have a passing run at least as wide as its policy today?
 // The gate reads the location's configuration itself, as it is now.
 GoLiveGate go_live_gate(pqxx::transaction_base& tx, std::int64_t location_id);
@@ -102,7 +101,7 @@ struct GoLiveState {
     std::optional<std::int64_t> pass_run_id;
     std::optional<std::int64_t> latest_run_id;
 };
-GoLiveState go_live_state(pqxx::transaction_base& tx, const std::string& fingerprint, const domain::AutoPostScope& scope);
+GoLiveState go_live_state(pqxx::transaction_base& tx, const std::string& fingerprint, const domain::AutoReplyScope& scope);
 
 // ---- what people do -------------------------------------------------------------------
 

@@ -1,5 +1,6 @@
 #include "db/repo_local_posts.hpp"
 
+#include "core/etag.hpp"
 #include "core/json.hpp"
 #include "core/text.hpp"
 #include "db/audit.hpp"
@@ -502,6 +503,14 @@ Result<model::LocalPost> edit_local_post(pqxx::transaction_base& tx, audit::Writ
                  {.before = {{"content", boost::json::value_from(before)}},
                   .after = {{"content", boost::json::value_from(*normalized)}, {"failed_checks", boost::json::value_from(report.failed())}}});
     return *get_local_post(tx, id, media_base);
+}
+
+boost::json::object editable(const model::LocalPost& post) { return boost::json::value_from(post.content()).as_object(); }
+
+Result<std::string> current_local_post_etag(pqxx::transaction_base& tx, std::int64_t id) {
+    if (!lock_post(tx, id)) return not_found("local post");
+    // The content holds no address of the bucket, so none is needed to read it.
+    return core::etag(editable(*get_local_post(tx, id, "")));
 }
 
 Result<model::LocalPost> reject_local_post(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id,

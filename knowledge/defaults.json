@@ -1,17 +1,10 @@
 {
-  "voice": {
-    "temperature": 0.7,
-    "reply_name": "",
-    "business_facts": [],
-    "example_replies": [],
-    "sign_off": "",
-    "emoji": {
-      "allowed": false,
-      "max": 0,
-      "preferred": []
-    },
-    "promos_allowed": false,
-    "contact_allowed": false,
+  "content": {
+    "business_facts": "",
+    "base_style": "",
+    "emoji_allowed": false,
+    "emoji_max": 0,
+    "emoji_preferred": [],
     "words_to_avoid": [
       "sorry for any inconvenience",
       "valued customer",
@@ -20,7 +13,19 @@
       "unfortunately you"
     ],
     "style_notes": [],
-    "owner_name": "",
+    "chinese_variant": null,
+    "english_variant": null,
+    "audience": ""
+  },
+  "reply": {
+    "reply_languages": [
+      "en",
+      "zh",
+      "es"
+    ],
+    "fallback_language": "en",
+    "signature": "",
+    "sign_off_name": "",
     "length": {
       "en": {
         "rating_only": {
@@ -77,27 +82,18 @@
         }
       }
     },
-    "base_style": ""
-  },
-  "localization": {
-    "reply_languages": [
-      "en",
-      "zh",
-      "es"
-    ],
-    "chinese_script": "match",
-    "chinese_region": "taiwan",
-    "english_variant": "us",
-    "fallback_language": "en"
-  },
-  "policy": {
-    "auto_post_positive": true,
-    "auto_post_rating_only": true,
-    "auto_post_min_stars": 4,
-    "auto_post_delay_min_minutes": 0,
-    "auto_post_delay_max_minutes": 0,
-    "auto_post_window_start": "",
-    "auto_post_window_end": ""
+    "example_replies": [],
+    "promos_allowed": false,
+    "contact_allowed": false,
+    "temperature": 0.7,
+    "auto_reply_min_stars": 5,
+    "auto_reply_delay_min_minutes": 0,
+    "auto_reply_delay_max_minutes": 0,
+    "auto_reply_window_start": "",
+    "auto_reply_window_end": "",
+    "auto_reply_enabled": false,
+    "auto_reply_daily_cap": 100,
+    "auto_reply_pause_after_failures": 3
   },
   "analysis": {
     "enabled": true,

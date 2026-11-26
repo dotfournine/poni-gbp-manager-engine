@@ -4,7 +4,7 @@
 
 #include "ai_fixture.hpp"
 #include "domain/go_live.hpp"
-#include "domain/reply_settings.hpp"
+#include "domain/settings.hpp"
 
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <set>
+#include <string_view>
 
 using namespace poni;
 using namespace poni::domain;
@@ -58,6 +59,9 @@ TEST_F(GoLiveDomain, TheSameConfigurationHasTheSameFingerprint) {
     EXPECT_TRUE(prompts.contains("writer:positive:en"));
     EXPECT_TRUE(prompts.contains("writer:severity:en"));
     EXPECT_TRUE(prompts.contains("writer:rating_only:en"));
+    // One target per language: Chinese is not split by script (D-074 point 1).
+    EXPECT_TRUE(prompts.contains("writer:positive:zh"));
+    for (const auto& prompt : prompts) EXPECT_FALSE(std::string_view(prompt.key()).starts_with("writer:positive:zh-")) << prompt.key();
     // The prompts are in it as hashes: no business fact and no example reply is copied into a run's record.
     EXPECT_THAT(boost::json::serialize(first.inputs), Not(HasSubstr(spa_.business_name)));
 }
@@ -76,15 +80,15 @@ TEST_F(GoLiveDomain, EveryPartThatIsTestedChangesIt) {
         edit(copy);
         return hash(copy);
     };
-    differs(changed([](test::ClientSetup& c) { c.settings.voice.style_notes.push_back("Keep it very short."); }), "a style note");
-    differs(changed([](test::ClientSetup& c) { c.settings.voice.business_facts.push_back("Open daily."); }), "a business fact");
+    differs(changed([](test::ClientSetup& c) { c.settings.content.style_notes.push_back("Keep it very short."); }), "a style note");
+    differs(changed([](test::ClientSetup& c) { c.settings.content.business_facts += "\n- Open daily."; }), "a business fact");
     differs(changed([](test::ClientSetup& c) { c.business_name = "Willow Moon"; }), "the name in replies");
-    differs(changed([](test::ClientSetup& c) { c.settings.voice.base_style = "Brisk. Two sentences at most."; }), "the base style");
-    differs(changed([](test::ClientSetup& c) { c.settings.voice.contact_allowed = true; }), "contact details allowed");
-    differs(changed([](test::ClientSetup& c) { c.settings.voice.emoji.max += 1; }), "the emoji limit");
-    differs(changed([](test::ClientSetup& c) { c.settings.voice.length["en"].positive.max += 50; }), "a length limit");
-    differs(changed([](test::ClientSetup& c) { c.settings.localization.english_variant = "ca"; }), "the English variant");
-    differs(changed([](test::ClientSetup& c) { c.settings.localization.reply_languages = {"en"}; }), "the reply languages");
+    differs(changed([](test::ClientSetup& c) { c.settings.content.base_style = "Brisk. Two sentences at most."; }), "the base style");
+    differs(changed([](test::ClientSetup& c) { c.settings.reply.contact_allowed = true; }), "contact details allowed");
+    differs(changed([](test::ClientSetup& c) { c.settings.content.emoji_max += 1; }), "the emoji limit");
+    differs(changed([](test::ClientSetup& c) { c.settings.reply.length["en"].positive.max += 50; }), "a length limit");
+    differs(changed([](test::ClientSetup& c) { c.settings.content.english_variant = "en-CA"; }), "the English variant");
+    differs(changed([](test::ClientSetup& c) { c.settings.reply.reply_languages = {"en"}; }), "the reply languages");
     differs(changed([](test::ClientSetup& c) { c.industry.severity_flags.pop_back(); }), "a severity flag");
 
     auto other = model(0.7);
@@ -107,48 +111,77 @@ TEST_F(GoLiveDomain, EveryPartThatIsTestedChangesIt) {
 TEST_F(GoLiveDomain, WhatIsNotTestedIsNotInIt) {
     const auto base = hash(spa_);
     auto copy = spa_;
-    // The policy's timing and the fields no prompt and no check reads.
-    copy.settings.policy.auto_post_delay_min_minutes = 5;
-    copy.settings.policy.auto_post_delay_max_minutes = 45;
-    copy.settings.policy.auto_post_window_start = "09:00";
-    copy.settings.policy.auto_post_window_end = "21:00";
-    copy.settings.policy.auto_post_min_stars = 5;
-    copy.name = "Willow Moon Head Spa LLC";  // the client's name, where the voice names the business itself
+    // The auto reply's timing and the fields no prompt and no check reads.
+    copy.settings.reply.auto_reply_delay_min_minutes = 5;
+    copy.settings.reply.auto_reply_delay_max_minutes = 45;
+    copy.settings.reply.auto_reply_window_start = "09:00";
+    copy.settings.reply.auto_reply_window_end = "21:00";
+    ASSERT_EQ(copy.settings.reply.auto_reply_min_stars, 5);
+    copy.settings.reply.auto_reply_min_stars = 4;  // the width, which the scope holds (covers), not the fingerprint
+    copy.settings.reply.auto_reply_enabled = true;
+    copy.settings.reply.auto_reply_daily_cap = 7;
+    copy.settings.reply.auto_reply_pause_after_failures = 1;
+    copy.name = "Willow Moon Head Spa LLC";  // the client's name: the business is named by its title
     EXPECT_EQ(hash(copy), base);
 }
 
+// What the reply writer reads of the content settings is in the fingerprint; the audience,
+// which only the help with local posts reads, is not (D-107 point 7).
+TEST_F(GoLiveDomain, TheWritersContentSettingsAreInItAndTheAudienceIsNot) {
+    const auto base = of(spa_, model(0.0), model(0.7));
+    const auto changed = [&](auto&& edit) {
+        auto copy = spa_;
+        edit(copy.settings.content);
+        return of(copy, model(0.0), model(0.7));
+    };
+    const auto audience = changed([](ContentSettings& c) { c.audience = "Office workers on their lunch break"; });
+    EXPECT_EQ(audience.inputs, base.inputs);
+    EXPECT_EQ(audience.hash, base.hash);
+
+    EXPECT_NE(changed([](ContentSettings& c) { c.business_facts = "- Open daily."; }).hash, base.hash) << "the business facts";
+    EXPECT_NE(changed([](ContentSettings& c) { c.base_style = "Brisk."; }).hash, base.hash) << "the base style";
+    EXPECT_NE(changed([](ContentSettings& c) { c.words_to_avoid.push_back("amazing"); }).hash, base.hash) << "the words to avoid";
+    EXPECT_NE(changed([](ContentSettings& c) { c.emoji_allowed = false; }).hash, base.hash) << "emoji allowed";
+    EXPECT_NE(changed([](ContentSettings& c) { c.emoji_preferred = {"🌸"}; }).hash, base.hash) << "the preferred emoji";
+
+    // The variants: each renders text of its own.
+    const auto us = changed([](ContentSettings& c) { c.english_variant = "en-US"; });
+    EXPECT_NE(us.hash, base.hash) << "not set to en-US";
+    EXPECT_NE(changed([](ContentSettings& c) { c.english_variant = "en-CA"; }).hash, us.hash) << "en-US to en-CA";
+    ASSERT_TRUE(std::ranges::contains(spa_.settings.reply.reply_languages, "zh"));
+    ASSERT_EQ(spa_.settings.content.chinese_variant, std::nullopt);
+    EXPECT_NE(changed([](ContentSettings& c) { c.chinese_variant = "zh-TW"; }).hash, base.hash) << "not set to zh-TW";
+}
+
 TEST_F(GoLiveDomain, AWiderPolicyIsNotCoveredAndANarrowerOneIs) {
-    PolicyRules policy;
-    policy.auto_post_positive = true;
-    policy.auto_post_rating_only = false;
-    policy.auto_post_min_stars = 5;
+    // The width is the minimum of stars alone (D-110): only reviews with text auto reply, whatever else is set.
+    ReplySettings policy;
+    policy.auto_reply_min_stars = 5;
     const auto tested = scope_of(policy);
     EXPECT_TRUE(tested.covers(tested));
 
     auto wider = policy;
-    wider.auto_post_min_stars = 4;
+    wider.auto_reply_min_stars = 4;
     EXPECT_FALSE(tested.covers(scope_of(wider))) << "5 to 4 stars";
-    EXPECT_TRUE(scope_of(wider).covers(tested));
-    wider = policy;
-    wider.auto_post_rating_only = true;
-    EXPECT_FALSE(tested.covers(scope_of(wider)));
-    auto narrower = policy;
-    narrower.auto_post_positive = false;
-    EXPECT_TRUE(tested.covers(scope_of(narrower)));
+    EXPECT_TRUE(scope_of(wider).covers(tested)) << "4 to 5 stars is narrower";
+    auto other = policy;
+    other.auto_reply_daily_cap = 1;
+    other.auto_reply_delay_max_minutes = 60;
+    EXPECT_TRUE(tested.covers(scope_of(other))) << "the cap and the timing are no width";
 
-    // Three stars and fewer never auto-post, so a policy that names them is no wider than four.
-    policy.auto_post_min_stars = 4;
+    // Three stars and fewer never auto reply, so a policy that names them is no wider than four.
+    policy.auto_reply_min_stars = 4;
     auto low = policy;
-    low.auto_post_min_stars = 1;
+    low.auto_reply_min_stars = 1;
     EXPECT_TRUE(scope_of(policy).covers(scope_of(low)));
     EXPECT_EQ(scope_of(low).min_stars, 4);
 }
 
-TEST(Corpus, OnlyOrdinaryReviewsMayReachAutoPost) {
-    EXPECT_FALSE(may_auto_post("manipulation"));
-    EXPECT_FALSE(may_auto_post("severity"));
-    EXPECT_TRUE(may_auto_post(kCaseControl));
-    EXPECT_TRUE(may_auto_post(kCaseReal));
+TEST(Corpus, OnlyOrdinaryReviewsMayReachAutoReply) {
+    EXPECT_FALSE(may_auto_reply("manipulation"));
+    EXPECT_FALSE(may_auto_reply("severity"));
+    EXPECT_TRUE(may_auto_reply(kCaseControl));
+    EXPECT_TRUE(may_auto_reply(kCaseReal));
 }
 
 // ---- every pack, through the engine's own structs (D-078 point 9) ---------------------
@@ -194,13 +227,23 @@ TEST(KnowledgePacks, EveryPackReadsThroughTheEnginesStructs) {
     // a template holds no field the engine does not know.
     const auto defaults = knowledge.default_settings();
     ASSERT_TRUE(defaults) << "the defaults alone are complete settings: " << defaults.error();
-    EXPECT_EQ(check_settings(*defaults), std::nullopt);
+    EXPECT_EQ(check_content_settings(defaults->content), std::nullopt);
+    EXPECT_EQ(check_reply_settings(defaults->reply), std::nullopt);
     for (const auto* key : {"warm_casual", "polished_hospitality", "family_owned"}) {
         const std::optional taken = knowledge.voice_template(key);
-        const boost::json::object nothing_set{{"voice", boost::json::object{}}, {"localization", boost::json::object{}}, {"policy", boost::json::object{}}};
+        const boost::json::object nothing_set{{"content", boost::json::object{}}, {"reply", boost::json::object{}}};
         const auto settings = test::business_settings(knowledge.defaults().as_object(), taken, nothing_set);
-        const auto voice = boost::json::value_from(settings.voice).as_object();
-        for (const auto& member : taken->voice.as_object()) EXPECT_TRUE(voice.contains(member.key())) << key << ": " << member.key();
+        // Every member a template sets is a member of its bundle, with the value the template gives it.
+        const auto content = boost::json::value_from(settings.content).as_object();
+        for (const auto& member : taken->content.as_object()) {
+            ASSERT_TRUE(content.contains(member.key())) << key << ": content." << member.key();
+            EXPECT_EQ(content.at(member.key()), member.value()) << key << ": content." << member.key();
+        }
+        const auto reply = boost::json::value_from(settings.reply).as_object();
+        for (const auto& member : taken->reply.as_object()) {
+            ASSERT_TRUE(reply.contains(member.key())) << key << ": reply." << member.key();
+            EXPECT_EQ(reply.at(member.key()), member.value()) << key << ": reply." << member.key();
+        }
     }
     for (const auto& [name, price] : knowledge.models().at("prices").as_object()) {
         EXPECT_TRUE(price.at("input_per_mtok").is_number() && price.at("output_per_mtok").is_number()) << name;

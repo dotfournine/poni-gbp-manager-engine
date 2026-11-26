@@ -1,25 +1,16 @@
 {
   "name": "Willow Moon Head Spa",
   "template": "warm_casual",
-  "voice": {
-    "reply_name": "Willow Moon Head Spa",
-    "business_facts": [
-      "A head spa and wellness studio in New York City with two locations.",
-      "Treatments include head spa and scalp care, massage, foot massage, gua sha sculpting facials and combination packages.",
-      "A rough blow-dry follows the head spa; it is not a professional salon blowout."
+  "content": {
+    "business_facts": "- A head spa and wellness studio in New York City with two locations.\n- Treatments include head spa and scalp care, massage, foot massage, gua sha sculpting facials and combination packages.\n- A rough blow-dry follows the head spa; it is not a professional salon blowout.",
+    "emoji_allowed": true,
+    "emoji_max": 2,
+    "emoji_preferred": [
+      "🤍",
+      "💕",
+      "🌿",
+      "✨"
     ],
-    "emoji": {
-      "allowed": true,
-      "max": 2,
-      "preferred": [
-        "🤍",
-        "💕",
-        "🌿",
-        "✨"
-      ]
-    },
-    "promos_allowed": false,
-    "contact_allowed": false,
     "words_to_avoid": [
       "cheap",
       "deal",
@@ -33,18 +24,19 @@
       "A Chinese reply is warm and natural (e.g. 谢谢您的好评！很开心您喜欢这次头疗，期待下次再见～). Light emoji is fine.",
       "For complaints, apologise sincerely, show you understood the specific issue, and invite the guest to contact the spa directly by \"reaching out to us\" without giving a phone, email or link."
     ],
-    "example_replies": [
-      "Thank you for the lovely review! So happy the head spa left you relaxed. See you again soon 🤍",
-      "We'll pass your kind words on to Eva! Thank you for coming in ✨",
-      "谢谢您的好评！💕 很高兴您喜欢我们的环境，期待下次再为您服务！"
-    ]
+    "chinese_variant": null
   },
-  "localization": {
+  "reply": {
     "reply_languages": [
       "en",
       "zh"
     ],
-    "chinese_script": "match"
-  },
-  "policy": {}
+    "example_replies": [
+      "Thank you for the lovely review! So happy the head spa left you relaxed. See you again soon 🤍",
+      "We'll pass your kind words on to Eva! Thank you for coming in ✨",
+      "谢谢您的好评！💕 很高兴您喜欢我们的环境，期待下次再为您服务！"
+    ],
+    "promos_allowed": false,
+    "contact_allowed": false
+  }
 }

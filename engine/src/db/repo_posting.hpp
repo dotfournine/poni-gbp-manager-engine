@@ -8,15 +8,15 @@
 //
 //   approved   a signed-in person approved exactly this text
 //   scheduled  the policy decided to post it without a person, at post_at
-//              (auto-posting, D-069)
+//              (auto reply, D-069)
 //   posting    the job owns the post: a reply_posts row exists and the PUT
 //              is being sent, or was sent and its outcome is not known
 //   posted     Google answered 200
 //   published  a later read of the review showed the reply
 //
 // Two things put a draft on its way, and nothing else does: approve_draft
-// (a person) and schedule_auto_post (the policy, for a location where a
-// person switched auto-posting on). Both end in the same job and the same
+// (a person) and schedule_auto_reply (the policy, for a location where a
+// person switched auto reply on). Both end in the same job and the same
 // claim_post, so every guard below holds for both.
 //
 // The rule everything here protects: at most one PUT per approval, and no
@@ -34,6 +34,7 @@
 #include "db/repo_notifications.hpp"
 #include "domain/models.hpp"
 
+#include <boost/json/object.hpp>
 #include <pqxx/pqxx>
 
 #include <cstdint>
@@ -63,6 +64,10 @@ inline constexpr std::string_view kLiveDrafts = "('draft', 'approved', 'schedule
 
 // Replaces the text of a waiting draft and runs the reply checks on it again.
 Result<model::ReplyDraft> edit_draft(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t draft_id, const std::string& text);
+// What PATCH /api/drafts/{id} can set, its text: what the draft's ETag covers (D-108).
+boost::json::object editable(const model::ReplyDraft& draft);
+// Locks the review and then the draft, as edit_draft does, and gives the ETag of what the draft holds.
+Result<std::string> current_draft_etag(pqxx::transaction_base& tx, std::int64_t draft_id);
 
 // Approves a waiting draft whose stored text is `text` and enqueues the job
 // that posts it. Refuses unless every reply check passes on the text, both
@@ -72,19 +77,19 @@ Result<model::ReplyDraft> approve_draft(pqxx::transaction_base& tx, audit::Write
 
 Result<model::ReplyDraft> reject_draft(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t draft_id, const std::string& reason);
 
-// ---- auto-posting (D-069) --------------------------------------------------------
+// ---- auto reply (D-069) --------------------------------------------------------
 
 // Called by the pipeline in the transaction that stored `draft_id`, for a
-// draft whose route is auto_post. If a person switched auto-posting on for
+// draft whose route is auto_reply. If a person switched auto reply on for
 // the location and this star rating, nothing is paused, the cap is not
-// reached and every other condition holds (see auto-posting in
+// reached and every other condition holds (see auto reply in
 // repo_posting.cpp), the draft becomes `scheduled` and the posting job is
 // enqueued for post_at: now plus the policy's random delay (`roll` in
 // [0, 1) picks the point in its range), moved into the posting window.
 // Otherwise the draft stays in the approval queue, with the reason unless
-// the switches simply don't ask for an auto-post here. True if it was
+// the switches simply don't ask for an auto reply here. True if it was
 // scheduled. The caller must hold the review's row lock.
-bool schedule_auto_post(pqxx::transaction_base& tx, std::int64_t draft_id, core::TimePoint now, double roll);
+bool schedule_auto_reply(pqxx::transaction_base& tx, std::int64_t draft_id, core::TimePoint now, double roll);
 
 // A person takes a scheduled draft back: it waits in the approval queue
 // like any other, and the job that would have posted it finds nothing to do.
@@ -108,7 +113,7 @@ struct Claim {
         stopped,           // an approved or a scheduled draft: the review is gone, was edited or has
                            // someone else's reply, or a kill switch is off or the location is no
                            // longer synced. `detail` says which
-        auto_post_stopped, // a scheduled draft: the auto-posting conditions or the reply policy no
+        auto_reply_stopped, // a scheduled draft: the auto reply conditions or the reply policy no
                            // longer allow it without a person
     };
     Outcome outcome = Outcome::not_approved;
@@ -128,8 +133,8 @@ struct Claim {
 // the queue with the reason) and the caller must not post.
 //
 // A scheduled draft goes through the same checks and then through the
-// auto-posting conditions again, as they are now: a switch flipped, a pause,
-// the cap or a changed voice since it was scheduled stops it, and it goes to
+// auto reply conditions again, as they are now: a switch flipped, a pause,
+// the cap or changed settings since it was scheduled stop it, and it goes to
 // the approval queue with the reason and an "approval needed" notification.
 Claim claim_post(pqxx::transaction_base& tx, std::int64_t draft_id, core::TimePoint now);
 
@@ -164,7 +169,7 @@ std::vector<OpenPost> open_posts(pqxx::transaction_base& tx, core::TimePoint ove
 // said and settles the post if the reply is there. A post that is still open
 // when its window has ended becomes `unconfirmed`: the draft returns to the
 // queue for a person to decide, staff are notified, and an automatic reply
-// pauses auto-posting at its location. Nothing is posted again. True if the
+// pauses auto reply at its location. Nothing is posted again. True if the
 // post is no longer open.
 bool settle_open_post(pqxx::transaction_base& tx, const OpenPost& post, const std::optional<gbp::Review>& review, bool gone,
                       core::TimePoint now);

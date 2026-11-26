@@ -8,6 +8,7 @@ add_executable(poni_unit_tests
   unit/config_test.cpp
   unit/connectors_test.cpp
   unit/core_test.cpp
+  unit/etag_test.cpp
   unit/directory_connector_test.cpp
   unit/h2_test.cpp
   unit/http_client_test.cpp
@@ -23,6 +24,7 @@ add_executable(poni_unit_tests
   unit/local_post_copy_test.cpp
   unit/local_post_edit_test.cpp
   unit/local_posts_connector_test.cpp
+  unit/places_connector_test.cpp
   unit/signin_test.cpp
   unit/tls_test.cpp
   unit/upload_test.cpp
@@ -59,7 +61,7 @@ add_executable(poni_integration_tests
   integration/app_sign_in_test.cpp
   integration/audit_location_test.cpp
   integration/auth_test.cpp
-  integration/auto_posting_test.cpp
+  integration/auto_reply_test.cpp
   integration/connect_test.cpp
   integration/go_live_test.cpp
   integration/google_target_test.cpp
@@ -93,7 +95,7 @@ gtest_discover_tests(poni_integration_tests PROPERTIES LABELS integration FIXTUR
 
 # AI tests (architecture section 10): unit tests for every mechanical check
 # and the offline adversarial suite. No database, no network, no model: CI
-# runs them on every build, and an attack that reaches auto-post fails it.
+# runs them on every build, and an attack that reaches auto reply fails it.
 add_executable(poni_ai_tests
   ai/adversarial_suite_test.cpp
   ai/checks_test.cpp

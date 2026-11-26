@@ -8,23 +8,37 @@ VALUES ('Contract Check Spa', 'Seeded for the contract check', now(), now())
 ON CONFLICT DO NOTHING;
 
 INSERT INTO locations (gbp_location_id, gbp_account_id, client_id, enabled, title, primary_category, address, locality,
-                       administrative_area, postal_code, region_code, phone, website_uri, maps_uri, raw,
+                       administrative_area, postal_code, region_code, phone, website_uri, maps_uri, time_zone, raw,
                        first_seen_at, last_seen_at, updated_at, reviews_polled_at, reviews_full_synced_at,
                        last_sync_error, last_sync_error_at)
 SELECT 'contract-location-1', 'contract-account-1', c.id, true, 'Contract Check Spa - Downtown', 'Spa',
        '1 Example Street', 'New York', 'NY', '10001', 'US', '(212) 555-0100', 'https://example.invalid/',
-       'https://maps.example.invalid/1', '{"name": "locations/contract-location-1"}'::jsonb,
+       'https://maps.example.invalid/1', 'America/New_York', '{"name": "locations/contract-location-1"}'::jsonb,
        now(), now(), now(), now(), now(), 'HTTP 503 (seeded example)', now()
   FROM clients c
  WHERE c.name = 'Contract Check Spa'
 ON CONFLICT (gbp_location_id) DO NOTHING;
 
--- The location's reply settings (D-093): what discovery gives every
--- location, a copy of the knowledge base's defaults (D-102). The knowledge
--- base is seeded by the time this file is applied.
-INSERT INTO reply_settings (location_id, voice, localization, policy, created_at, updated_at)
-SELECT l.id, d.voice, d.localization, d.policy, now(), now()
-  FROM locations l, kb_defaults d
+-- The location's content and reply settings (D-107): what discovery gives
+-- every location, copies of the knowledge base's defaults (D-102). The
+-- knowledge base is seeded by the time this file is applied.
+INSERT INTO content_settings (location_id, business_facts, base_style, emoji_allowed, emoji_max, emoji_preferred, words_to_avoid, style_notes, chinese_variant,
+                              english_variant, audience, created_at, updated_at)
+SELECT l.id, d.business_facts, d.base_style, d.emoji_allowed, d.emoji_max, d.emoji_preferred, d.words_to_avoid,
+       d.style_notes, d.chinese_variant, d.english_variant, d.audience, now(), now()
+  FROM locations l, kb_content_defaults d
+ WHERE l.gbp_location_id = 'contract-location-1'
+ON CONFLICT (location_id) DO NOTHING;
+
+INSERT INTO reply_settings (location_id, reply_languages, fallback_language, signature, sign_off_name, length, example_replies, promos_allowed, contact_allowed,
+                            temperature, auto_reply_min_stars, auto_reply_delay_min_minutes, auto_reply_delay_max_minutes,
+                            auto_reply_window_start, auto_reply_window_end, auto_reply_enabled, auto_reply_daily_cap,
+                            auto_reply_pause_after_failures, created_at, updated_at)
+SELECT l.id, d.reply_languages, d.fallback_language, d.signature, d.sign_off_name, d.length, d.example_replies,
+       d.promos_allowed, d.contact_allowed, d.temperature, d.auto_reply_min_stars, d.auto_reply_delay_min_minutes,
+       d.auto_reply_delay_max_minutes, d.auto_reply_window_start, d.auto_reply_window_end, d.auto_reply_enabled,
+       d.auto_reply_daily_cap, d.auto_reply_pause_after_failures, now(), now()
+  FROM locations l, kb_reply_defaults d
  WHERE l.gbp_location_id = 'contract-location-1'
 ON CONFLICT (location_id) DO NOTHING;
 
@@ -109,11 +123,11 @@ SELECT now(), v.task, 'seeded-model', l.id, r.id, v.attempt, v.status, v.error, 
 -- something to answer with. A made-up fingerprint: it gives nothing a pass,
 -- and no location on GET /api/go-live shows it, so it has a fixed id that
 -- check-contract.mjs reads it by. It was submitted for the seeded location.
-INSERT INTO go_live_runs (id, location_id, fingerprint, fingerprint_inputs, status, summary, auto_post_positive,
-                          auto_post_rating_only, auto_post_min_stars, corpus_version, repeats, real_reviews, started_at, finished_at)
+INSERT INTO go_live_runs (id, location_id, fingerprint, fingerprint_inputs, status, summary, auto_reply_min_stars,
+                          corpus_version, repeats, real_reviews, started_at, finished_at)
 OVERRIDING SYSTEM VALUE
 SELECT 900000001, l.id, 'contract-seeded', '{}'::jsonb,
-       'failed', '1 of 2 cases failed: 1 reply that would have been posted the judge rated unacceptable.', true, true, 4,
+       'failed', '1 of 2 cases failed: 1 reply that would have been posted the judge rated unacceptable.', 4,
        'seeded', 3, 1, now() - interval '20 minutes', now() - interval '10 minutes'
   FROM locations l
  WHERE l.gbp_location_id = 'contract-location-1'
@@ -125,7 +139,7 @@ SELECT g.id, v.case_key, v.category, CASE WHEN v.category = 'real' THEN r.id END
        (VALUES ('M-01', 'manipulation', 5, 'ok', NULL,
                 '[{"route": "approval_queue", "reasons": ["manipulation_suspected"], "reply": "Thank you for your kind words!", "failed_checks": [], "rating": null, "rating_reason": null, "rated_by": null}]'),
                ('review:seeded', 'real', 5, 'unacceptable', 'The reply promises a discount.',
-                '[{"route": "auto_post", "reasons": [], "reply": "Thank you! Enjoy 10% off next time.", "failed_checks": [], "rating": "unacceptable", "rating_reason": "The reply promises a discount.", "rated_by": null}]'))
+                '[{"route": "auto_reply", "reasons": [], "reply": "Thank you! Enjoy 10% off next time.", "failed_checks": [], "rating": "unacceptable", "rating_reason": "The reply promises a discount.", "rated_by": null}]'))
            AS v(case_key, category, stars, verdict, detail, attempts)
  WHERE g.id = 900000001 AND r.gbp_review_id = 'contract-review-1'
 ON CONFLICT (run_id, case_key) DO NOTHING;

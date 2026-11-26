@@ -21,6 +21,7 @@
 #pragma once
 
 #include "connectors/gbp/reader.hpp"
+#include "connectors/google/places.hpp"
 #include "connectors/pubsub/subscriber.hpp"
 #include "core/clock.hpp"
 #include "db/database.hpp"
@@ -33,6 +34,8 @@
 
 #include <chrono>
 #include <cstdint>
+#include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -46,20 +49,26 @@ inline constexpr std::string_view kPullNotificationsKind = "notifications.pull";
 
 struct SyncOptions {
     std::chrono::seconds discovery_interval{900};
-    // How often the poll job runs. Each location has its own interval
-    // (locations.review_poll_interval_s); the job polls those that are due.
+    // How often the poll job runs; it polls the locations that are due
+    // (locations.next_review_poll_at).
     std::chrono::seconds poll_tick{60};
+    // How long after its last poll, or its last failed poll, a location is due again (D-112).
+    std::chrono::seconds review_poll_interval{120};
     std::chrono::seconds full_sync_interval{3600};
     std::chrono::seconds notification_pull_interval{30};
 };
 
 class Sync {
 public:
-    Sync(db::Database& db, const core::Clock& clock, gbp::Reader& reader, JobQueue& queue, SyncOptions options)
-        : db_(db), clock_(clock), reader_(reader), queue_(queue), options_(options) {}
+    Sync(db::Database& db, const core::Clock& clock, gbp::Reader& reader, google::PlaceTimeZones& places, JobQueue& queue,
+         SyncOptions options)
+        : db_(db), clock_(clock), reader_(reader), places_(places), queue_(queue), options_(options) {}
 
-    // Lists every account and location and stores the result. Google errors
-    // are recorded for the status page, not thrown: the next run retries.
+    // Lists every account and location and stores the result. A location
+    // that is new gets its time zone from Google Places first (D-109); one
+    // that is not on Google Maps yet is left out until it is. Google errors,
+    // and any failure to read a new location's zone, are recorded for the
+    // status page and apply nothing, not thrown: the next run retries.
     boost::asio::awaitable<void> discover_locations();
 
     // Enqueues full syncs that are due, then polls the locations that are due.
@@ -85,11 +94,20 @@ private:
     // One batch: locations of one account, polled with one call per page.
     boost::asio::awaitable<void> poll_batch(std::vector<repo::SyncLocation> locations);
 
+    // Gives each new location of `seen` its time zone, and moves the new ones
+    // without a place id to `deferred`. Nothing on a failure, which names the location.
+    boost::asio::awaitable<std::optional<std::string>> resolve_time_zones(std::vector<repo::SeenLocation>& seen,
+                                                                          std::vector<repo::SeenLocation>& deferred);
+
     db::Database& db_;
     const core::Clock& clock_;
     gbp::Reader& reader_;
+    google::PlaceTimeZones& places_;
     JobQueue& queue_;
     SyncOptions options_;
+    // The zones Places gave, by place id (D-109 point 4): a run that failed
+    // does not ask again for the ones it had. Touched only on the io_context.
+    std::map<std::string, std::string> zones_;
 };
 
 // `subscriber` may be null: Pub/Sub is then off and only polling runs.

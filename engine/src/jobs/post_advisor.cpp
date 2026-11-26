@@ -41,19 +41,19 @@ asio::awaitable<repo::Result<PostAdvisor::Prepared>> PostAdvisor::prepare(std::i
     if (!llm_.configured(help.settings.posts_provider)) {
         co_return no_model(std::format("The model provider '{}' is not configured.", help.settings.posts_provider));
     }
-    auto& settings = help.reply_settings;
+    auto& settings = help.location_settings;
     // A save is checked and discovery writes complete settings, which prevent this.
-    if (!settings) throw std::runtime_error(std::format("post help: the location's reply settings can't be read: {}", settings.error()));
+    if (!settings) throw std::runtime_error(std::format("post help: the location's settings can't be read: {}", settings.error()));
 
     const auto* industry = help.industry ? &*help.industry : nullptr;
     domain::PostHelpInput input;
-    input.business_name = domain::business_name(settings->voice, help.location_title);
+    input.business_name = help.location_title;
     input.location_title = help.location_title;
     input.industry_label = industry ? industry->label : std::string{};
     if (industry) {
         for (const auto& topic : industry->topics) input.topic_labels[topic.id] = topic.label;
     }
-    input.audience = help.audience;
+    input.audience = settings->content.audience;
     input.today = domain::day_in_words(help.period_end);
     input.settings = std::move(*settings);
     input.reviews = domain::reviews_for_model(help.usable, industry);

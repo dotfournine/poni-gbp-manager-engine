@@ -5,14 +5,11 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "voice": {
-      "$ref": "settings.schema.json#/$defs/voice"
+    "content": {
+      "$ref": "settings.schema.json#/$defs/content"
     },
-    "localization": {
-      "$ref": "settings.schema.json#/$defs/localization"
-    },
-    "policy": {
-      "$ref": "settings.schema.json#/$defs/policy"
+    "reply": {
+      "$ref": "settings.schema.json#/$defs/reply"
     },
     "analysis": {
       "type": "object",
@@ -127,8 +124,7 @@
   },
   "required": [
     "analysis",
-    "localization",
-    "policy",
-    "voice"
+    "content",
+    "reply"
   ]
 }

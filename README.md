@@ -12,7 +12,7 @@ Two clients use the API and live in repositories of their own: the dashboard (Re
 
 Documents are in [`docs/`](docs/): [architecture](docs/architecture.md) (with the requirements), [decisions](docs/decisions.md) in force, [work items](docs/work-items.md) still to build, and the [Google mock runbook](docs/runbook-google-mock.md). Conventions and the rules that protect clients are in [`CLAUDE.md`](CLAUDE.md).
 
-Status: built and tried locally: the review mirror, analysis and drafts, approved and automatic replies, the go-live test, reports and local posts. Nothing is deployed yet ([`deploy/`](deploy/README.md) has the files), and nothing auto-posts: it is off until a person switches it on for a location, and no configuration has a passing go-live test.
+Status: built and tried locally: the review mirror, analysis and drafts, approved and automatic replies, the go-live test, reports and local posts. Nothing is deployed yet ([`deploy/`](deploy/README.md) has the files), and nothing auto replies: it is off until a person switches it on for a location, and no configuration has a passing go-live test.
 
 ## Getting started (macOS, Apple silicon)
 
@@ -129,8 +129,10 @@ Settings are environment variables. `--config FILE` (or `PONI_CONFIG`) names an 
 | `PONI_APP_SESSION_TTL_HOURS` / `PONI_APP_SESSION_IDLE_HOURS` | `2160` / `720` | The same for the phone app's session (D-095): 90 days, or 30 days without use |
 | `PONI_TRUST_FORWARDED_FOR` | `false` | `true` behind a reverse proxy: the visitor's address is taken from `X-Forwarded-For` |
 | `PONI_GBP_OAUTH_CLIENT_ID` / `_SECRET` | none | The Google OAuth client (a web client) through which the GBP managing account, the sending mailbox and the Workspace administrator are connected on the status page. Its redirect addresses must include `<PONI_PUBLIC_URL>/api/connections/gbp/callback`, `.../gmail/callback` and `.../workspace/callback` |
+| `PONI_GOOGLE_PLACES_API_KEY` | none | A Google Maps Platform key restricted to the Places API (New), with which a newly discovered location's time zone is read (D-109). Required with `PONI_GBP_OAUTH_CLIENT_ID` unless `PONI_GOOGLE_MOCK_URL` is set |
 | `PONI_LOCATION_DISCOVERY_INTERVAL_S` | `900` | How often locations are discovered |
-| `PONI_REVIEW_POLL_TICK_S` | `60` | How often the review poll job runs. Each location has its own interval on top (default 120 s) |
+| `PONI_REVIEW_POLL_TICK_S` | `60` | How often the review poll job runs. Due polls are picked up at this tick; how often a location is polled is `PONI_REVIEW_POLL_INTERVAL_S` |
+| `PONI_REVIEW_POLL_INTERVAL_S` | `120` | How often each location's reviews are polled (D-112); at least 60 |
 | `PONI_REVIEW_FULL_SYNC_INTERVAL_S` | `3600` | How often every review of a location is reconciled |
 | `PONI_STAFF_CHECK_INTERVAL_S` | `300` | How often the staff check reads the Workspace directory's list and disables or enables users (D-106); at least 60 |
 | `PONI_PUBSUB_SUBSCRIPTION` | none | `projects/…/subscriptions/…`; empty means polling only |
@@ -142,7 +144,7 @@ Settings are environment variables. `--config FILE` (or `PONI_CONFIG`) names an 
 | `PONI_ANALYSIS_TICK_S` | `60` | How often reviews that still need an analysis or a draft are picked up |
 | `PONI_POST_CONFIRM_WINDOW_S` | `1800` | How long a reply that was sent may stay invisible on Google before the engine stops waiting and returns the draft to the approval queue (D-062). At least 600 |
 | `PONI_EMAIL_FROM_NAME` | `PONI GBP Manager` | The name shown beside the address notifications are sent from. The address is the mailbox connected on the status page, whichever account signed in there (D-100); no setting names it |
-| `PONI_GOOGLE_MOCK_URL` | none | Local only: the address of the mock of Google, a loopback address, which every call to Google then goes to instead (D-087; [docs/runbook-google-mock.md](docs/runbook-google-mock.md)) |
+| `PONI_GOOGLE_MOCK_URL` | none | Local only: the address of the mock of Google, a loopback address, which every call to Google then goes to instead, Google Places' time-zone read included, with any key or none (D-087; [docs/runbook-google-mock.md](docs/runbook-google-mock.md)) |
 | `PONI_APNS_ENVIRONMENT`, `PONI_APNS_KEY`, `PONI_APNS_KEY_ID`, `PONI_APNS_TEAM_ID`, `PONI_APNS_BUNDLE_ID` | none | Push to the phone app (D-097), all five or none: `production` (builds from TestFlight and the App Store) or `sandbox` (builds run from Xcode; the only one allowed with the Google mock), the APNs auth key as its `.p8` file holds it between the BEGIN and END lines (`grep -v -- ----- AuthKey_XXXXXXXXXX.p8 \| tr -d '\n'`; a secret), its ten-character key id, the team id, and the app's bundle id. None: nothing is pushed and push rules are refused |
 | `PONI_PUBLIC_BUCKET` | empty | Where the pages of reports are put when they are built (D-104), and the photos and videos of local posts: a Cloud Storage bucket that anyone can read an object of and nobody can list, or, with a slash in the value, a local folder for development (`/tmp/poni-public`). Empty: no report is built, and no photo or video can be uploaded for a post |
 | `PONI_PUBLIC_FOLDER_URL` | none | Local only: the address the folder of `PONI_PUBLIC_BUCKET` is served at, so that the dashboard can show a report's page (D-105): `http://127.0.0.1:8088`, a loopback address; only with a folder, and refused with an `https` public URL. Start the server with `PONI_PUBLIC_FOLDER=<the folder> docker compose -f deploy/docker-compose.dev.yml --profile public up -d public`. Without it an object's address is the folder's `file://` one, which a browser does not show in the dashboard |

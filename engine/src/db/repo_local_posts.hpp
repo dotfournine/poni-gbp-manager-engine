@@ -29,6 +29,7 @@
 #include "domain/models.hpp"
 
 #include <array>
+#include <boost/json/object.hpp>
 #include <pqxx/pqxx>
 
 #include <chrono>
@@ -113,6 +114,12 @@ Result<model::LocalPost> create_local_post(pqxx::transaction_base& tx, audit::Wr
 // Replaces the content of a post that is still a draft.
 Result<model::LocalPost> edit_local_post(pqxx::transaction_base& tx, audit::Writer& audit, std::int64_t id,
                                          const domain::LocalPostContent& content, std::string_view media_base);
+// What PUT /api/local-posts/{id} sets, the post's content as edit_local_post compares it, in
+// LocalPostContent's order: what the post's ETag covers (D-108).
+boost::json::object editable(const model::LocalPost& post);
+// Locks the post's row (FOR UPDATE, the lock edit_local_post and delete_local_post take) and gives the ETag of
+// what it holds.
+Result<std::string> current_local_post_etag(pqxx::transaction_base& tx, std::int64_t id);
 
 // A new draft for the post's location with the post's content as it is now,
 // for any post, also one made at Google (D-094). What a draft cannot hold is

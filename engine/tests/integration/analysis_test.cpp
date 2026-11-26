@@ -85,14 +85,14 @@ constexpr std::string_view kHoldingReply = R"({
 TEST_F(Analysis, BothLocationsHaveAnIndustryAndAVoiceOfTheirOwn) {
     EXPECT_EQ(value<std::string>("SELECT industry_key FROM locations WHERE id = " + std::to_string(spa_)), "wellness");
     EXPECT_EQ(value<std::string>("SELECT industry_key FROM locations WHERE id = " + std::to_string(buffet_)), "food_beverage");
-    EXPECT_EQ(count("reply_settings"), 2) << "one complete row per location, and nothing for a client";
+    EXPECT_EQ(count("content_settings"), 2) << "one complete row of each bundle per location, and nothing for a client";
+    EXPECT_EQ(count("reply_settings"), 2);
     pqxx::work tx{conn()};
-    const auto settings = repo::reply_settings(tx, spa_).value();
-    // The voice template the business took was copied: its line for the writer is part of the voice.
-    EXPECT_THAT(settings.voice.base_style, testing::StartsWith("Warm and casual. "));
-    EXPECT_EQ(settings.voice.reply_name, "Willow Moon Head Spa");
-    EXPECT_EQ(settings.localization.chinese_region, "taiwan");
-    EXPECT_EQ(settings.policy.auto_post_min_stars, 4);
+    const auto settings = repo::stored_settings(tx, spa_).value();
+    // The voice template the business took was copied: its line for the writer is part of the content settings.
+    EXPECT_THAT(settings.content.base_style, testing::StartsWith("Warm and casual. "));
+    EXPECT_FALSE(settings.content.chinese_variant) << "the pack sets none";
+    EXPECT_EQ(settings.reply.auto_reply_min_stars, 5);
 }
 
 TEST_F(Analysis, AnUnrepliedReviewGetsAnAnalysisADraftAndARoute) {
@@ -109,7 +109,7 @@ TEST_F(Analysis, AnUnrepliedReviewGetsAnAnalysisADraftAndARoute) {
     EXPECT_TRUE(stored.analysis->is_current);
     ASSERT_TRUE(stored.draft);
     EXPECT_EQ(stored.draft->status, "draft");
-    EXPECT_EQ(stored.draft->route, "auto_post");
+    EXPECT_EQ(stored.draft->route, "auto_reply");
     EXPECT_THAT(stored.draft->route_reasons, testing::IsEmpty());
     EXPECT_EQ(stored.draft->mode, "positive");
     EXPECT_EQ(stored.draft->language, "en");
@@ -125,10 +125,10 @@ TEST_F(Analysis, AnUnrepliedReviewGetsAnAnalysisADraftAndARoute) {
     EXPECT_EQ(inputs.at("review").at("text").as_string(), "Lovely head spa with Eva, so relaxing!");
     EXPECT_EQ(inputs.at("mode").as_string(), "positive");
     EXPECT_EQ(inputs.at("target_language").as_string(), "en");
-    EXPECT_EQ(inputs.at("voice").at("reply_name").as_string(), "Willow Moon Head Spa");
-    EXPECT_EQ(inputs.at("policy").at("auto_post_min_stars").as_int64(), 4);
-    EXPECT_THAT(std::string(inputs.at("voice").at("base_style").as_string()), testing::StartsWith("Warm and casual. "));
-    EXPECT_FALSE(inputs.contains("template_key")) << "a voice holds a copy of its template, not a reference";
+    EXPECT_EQ(inputs.at("business_name").as_string(), "LU DREAM SPA 路梦养生馆 - Chelsea");
+    EXPECT_EQ(inputs.at("reply").at("auto_reply_min_stars").as_int64(), 5);
+    EXPECT_THAT(std::string(inputs.at("content").at("base_style").as_string()), testing::StartsWith("Warm and casual. "));
+    EXPECT_FALSE(inputs.contains("template_key")) << "the settings hold a copy of their template, not a reference";
 
     // Nothing was posted: there is no way to, and the review still has no reply.
     EXPECT_FALSE(stored.has_reply);
@@ -150,13 +150,19 @@ TEST_F(Analysis, ADiscoveredLocationDoesNothingUntilAPersonSwitchesItOnAndNeedsN
         EXPECT_FALSE(listed.items[0].client_id);
         EXPECT_FALSE(listed.items[0].industry_key);
     }
-    EXPECT_TRUE(value<bool>(std::format("SELECT r.voice = d.voice AND r.localization = d.localization AND r.policy = d.policy "
-                                        "FROM reply_settings r CROSS JOIN kb_defaults d WHERE r.location_id = {}",
-                                        soho)))
-        << "its settings are the defaults from the start";
+    EXPECT_TRUE(value<bool>(std::format(
+        "SELECT (to_jsonb(c) - 'location_id' - 'created_at' - 'updated_at') = (to_jsonb(d) - 'id') "
+        "FROM content_settings c CROSS JOIN kb_content_defaults d WHERE c.location_id = {}",
+        soho)))
+        << "its content settings are the defaults from the start";
+    EXPECT_TRUE(value<bool>(std::format(
+        "SELECT (to_jsonb(r) - 'location_id' - 'created_at' - 'updated_at') = (to_jsonb(d) - 'id') "
+        "FROM reply_settings r CROSS JOIN kb_reply_defaults d WHERE r.location_id = {}",
+        soho)))
+        << "its reply settings are the defaults from the start";
 
     const auto full_syncs = std::format("jobs WHERE kind = 'reviews.full_sync' AND (payload->>'location_id')::bigint = {}", soho);
-    jobs::Sync sync(db(), clock_, gbp_, queue(), {});
+    jobs::Sync sync(db(), clock_, gbp_, places_, queue(), {});
     await(sync.poll_reviews());
     await(sync.full_sync(soho));
     EXPECT_EQ(count(full_syncs), 0);
@@ -186,10 +192,9 @@ TEST_F(Analysis, ADiscoveredLocationDoesNothingUntilAPersonSwitchesItOnAndNeedsN
     EXPECT_EQ(analyzed.draft->status, "draft");
 }
 
-// D-102 point 10: a voice without a reply_name names the business by the
-// location's title, whatever client it is grouped under.
-TEST_F(Analysis, AnEmptyReplyNameNamesTheBusinessByTheLocationsTitle) {
-    set_voice(spa_, R"({"reply_name": ""})");
+// D-107 point 5: the business is named by the location's title, whatever
+// client it is grouped under and whatever the pack's business is called.
+TEST_F(Analysis, TheLocationsTitleNamesTheBusiness) {
     const auto id = store(kSpa, "r1", "FIVE", "Lovely head spa!");
     process(id);
     ASSERT_FALSE(llm_.requests.empty());
@@ -225,7 +230,7 @@ TEST_F(Analysis, OnlyStarsAndTheReviewersWordsReachTheModel) {
     EXPECT_EQ(llm_.requests[0].extras.at("enable_thinking").as_bool(), false);
     EXPECT_EQ(llm_.requests[0].provider, "dashscope");
     EXPECT_DOUBLE_EQ(llm_.requests[0].temperature.value(), 0.0);
-    EXPECT_NEAR(llm_.requests[1].temperature.value(), 0.7, 1e-6) << "the writer's temperature is the voice's (D-074)";
+    EXPECT_NEAR(llm_.requests[1].temperature.value(), 0.7, 1e-6) << "the writer's temperature is a reply setting (D-074)";
 }
 
 TEST_F(Analysis, TheOriginalTextIsAnalyzedNotGooglesTranslation) {
@@ -243,7 +248,7 @@ TEST_F(Analysis, TheOriginalTextIsAnalyzedNotGooglesTranslation) {
     // Gangnam replies in the review's language (the owner's open answer, as a setting).
     const auto stored = review(id);
     EXPECT_EQ(stored.draft->language, "es");
-    EXPECT_EQ(stored.draft->route, "auto_post");
+    EXPECT_EQ(stored.draft->route, "auto_reply");
     EXPECT_THAT(llm_.requests[1].messages[0].content, HasSubstr("Write the reply in Spanish."));
     // The analyzer's language replaces the guess made when the review was stored.
     EXPECT_EQ(stored.language, "es");
@@ -272,7 +277,9 @@ TEST_F(Analysis, ARatingWithoutTextNeedsNoAnalyzerCall) {
     EXPECT_EQ(stored.analysis->sentiment, "none");
     EXPECT_FALSE(stored.analysis->model);
     EXPECT_EQ(stored.draft->mode, "rating_only");
-    EXPECT_EQ(stored.draft->route, "auto_post");
+    // Written all the same, for a person: auto reply is for reviews with text (D-110).
+    EXPECT_EQ(stored.draft->route, "approval_queue");
+    EXPECT_THAT(stored.draft->route_reasons, testing::ElementsAre("auto reply is for reviews with text"));
 }
 
 TEST_F(Analysis, RatingOnlyRepliesAreToldToDifferFromRecentOnes) {
@@ -311,7 +318,7 @@ TEST_F(Analysis, WhatTheModelMissesIsMissed) {
     process(id);  // the scripted model sees nothing wrong and writes a cheerful reply
     const auto stored = review(id);
     EXPECT_TRUE(stored.analysis->severity_flags.empty());
-    EXPECT_EQ(stored.draft->route, "auto_post");
+    EXPECT_EQ(stored.draft->route, "auto_reply");
 }
 
 TEST_F(Analysis, AReplyThatGivesInToAnAttackWaitsForAPerson) {
@@ -334,6 +341,7 @@ TEST_F(Analysis, AComplaintOrALowRatingGoesToTheApprovalQueue) {
         "severity_flags": [], "manipulation_suspected": false})");
     llm_.generator = FakeLlm::always(R"({"reply": "Thank you for your honest feedback. We're sorry the dim sum station sat empty during your visit, and our team will review it. We're glad you enjoyed the rest.",
         "language": "en", "script": "Latn", "manipulation_suspected": false, "notes_for_staff": ""})");
+    set_reply(buffet_, R"({"auto_reply_min_stars": 4})");  // so that the stars alone would not hold it back
     const auto complaint = store(kBuffet, "r1", "FOUR", "Good food but the dim sum station sat empty for a while.");
     process(complaint);
     EXPECT_EQ(review(complaint).draft->route, "approval_queue");
@@ -347,8 +355,9 @@ TEST_F(Analysis, AComplaintOrALowRatingGoesToTheApprovalQueue) {
 }
 
 TEST_F(Analysis, TheGeneratorIsAskedForTheReviewersChineseScriptAndItsReplyIsStoredAsWritten) {
-    // A Traditional review at the spa ("match the reviewer"): the analyzer says which script it is,
-    // and the generator is asked for it. The model slips into Simplified; nothing corrects that (D-056).
+    // A Traditional review at the spa, which sets no Chinese variant: the analyzer says which script it is, the
+    // generator is asked to match the review, and the draft records that script. The model slips into Simplified;
+    // nothing corrects that (D-056).
     const auto id = store(kSpa, "r1", "FIVE", "環境很舒服，技師手法很專業，頭皮清爽很多，推薦！");
     llm_.analyzer = FakeLlm::always(R"({"language": "zh", "script": "Hant", "sentiment": "positive", "contains_complaint": false,
         "topics": [], "items": [], "severity_flags": [], "manipulation_suspected": false})");
@@ -360,18 +369,25 @@ TEST_F(Analysis, TheGeneratorIsAskedForTheReviewersChineseScriptAndItsReplyIsSto
     EXPECT_EQ(stored.draft->language, "zh");
     EXPECT_EQ(stored.draft->script, "Hant");
     EXPECT_EQ(stored.draft->text, "谢谢您的五星好评！很开心您喜欢我们的环境和头疗体验，期待下次再为您服务。");
-    EXPECT_EQ(stored.draft->route, "auto_post");
-    EXPECT_THAT(llm_.requests[1].messages[0].content, HasSubstr("Traditional Chinese characters only, with natural Taiwan phrasing"));
+    EXPECT_EQ(stored.draft->route, "auto_reply");
+    // The spa sets no Chinese variant: the writer is told to follow the review, and the draft records the review's script.
+    EXPECT_THAT(llm_.requests[1].messages[0].content,
+                HasSubstr("Write the reply in Chinese, matching the script (Simplified or Traditional) and the regional phrasing the review "
+                          "uses. If the review is not written in Chinese, use Simplified Chinese characters.\n"));
 }
 
-TEST_F(Analysis, ALocationsSettingsAreItsVoiceAndItsPolicy) {
-    set_policy(spa_, R"({"auto_post_positive": false})");
-    set_voice(spa_, R"({"sign_off": "— The Chelsea team"})");
-    const auto id = store(kSpa, "r1", "FIVE", "Lovely head spa, so relaxing!");
+TEST_F(Analysis, ALocationsSettingsAreItsContentAndReplySettings) {
+    set_reply(spa_, R"({"auto_reply_min_stars": 5, "signature": "— The Chelsea team"})");
+    const auto id = store(kSpa, "r1", "FOUR", "Lovely head spa, so relaxing!");
     process(id);
     EXPECT_THAT(llm_.requests[1].messages[0].content, HasSubstr("Sign off with: \"— The Chelsea team\""));
     EXPECT_EQ(review(id).draft->route, "approval_queue");
-    EXPECT_THAT(review(id).draft->route_reasons, testing::ElementsAre("auto-post is off for positive reviews"));
+    EXPECT_THAT(review(id).draft->route_reasons, testing::ElementsAre("4 stars"));
+    // The other location's own minimum lets the same review through.
+    set_reply(buffet_, R"({"auto_reply_min_stars": 4})");
+    const auto other = store(kBuffet, "b1", "FOUR", "Lovely buffet, so fresh!");
+    process(other);
+    EXPECT_EQ(review(other).draft->route, "auto_reply");
 }
 
 // ---- idempotent and retry-safe ---------------------------------------------------
@@ -398,7 +414,7 @@ TEST_F(Analysis, AJobThatDiedAfterTheAnalysisOnlyWritesTheDraft) {
     EXPECT_EQ(llm_.calls("analyzer"), 1u) << "the stored analysis is used again";
     EXPECT_EQ(count("review_analyses"), 1);
     EXPECT_EQ(count("reply_drafts"), 1);
-    EXPECT_EQ(review(id).draft->route, "auto_post");
+    EXPECT_EQ(review(id).draft->route, "auto_reply");
 }
 
 TEST_F(Analysis, AModelThatIsDownIsRetriedAndThenRecorded) {
@@ -421,7 +437,7 @@ TEST_F(Analysis, AModelThatIsDownIsRetriedAndThenRecorded) {
     EXPECT_THAT(stored.draft->route_reasons, testing::ElementsAre("analysis failed", "generation failed"));
 }
 
-// D-058: with the model down nobody knows what the review says, so it waits for a person; it is never auto-posted.
+// D-058: with the model down nobody knows what the review says, so it waits for a person; it is never posted by auto reply.
 TEST_F(Analysis, AFailedAnalysisWaitsForAPerson) {
     const auto id = store(kBuffet, "r1", "FIVE", "Great sushi but we both got sick that night.");
     llm_.analyzer = [](const llm::ChatRequest&) { return FakeLlm::failure(llm::Error::Kind::unavailable); };
@@ -586,14 +602,16 @@ TEST_F(Analysis, ReplySettingsThatCannotBeReadFailTheJobInsteadOfBeingSkipped) {
         EXPECT_TRUE(llm_.requests.empty());
         EXPECT_EQ(count("review_analyses"), 0);
     };
-    const auto voice = settings_part(spa_, "voice");
-    set_voice(spa_, R"({"sign_off": 5})");
-    fails_with("the reply settings can't be read: voice: field 'sign_off' has the wrong type");
-    // A field that is missing is not read from the knowledge base's defaults.
-    exec(std::format("UPDATE reply_settings SET voice = voice - 'sign_off' WHERE location_id = {}", spa_));
-    fails_with("the reply settings can't be read: voice: missing field 'sign_off'");
-    exec(std::format("DELETE FROM reply_settings WHERE location_id = {}", spa_));
-    fails_with("the reply settings can't be read: the location has no reply settings");
+    // A limit that is missing from the one document of a row, the lengths, is not read from the knowledge base's defaults.
+    exec(std::format("UPDATE reply_settings SET length = (length - 'en') || jsonb_build_object('en', (length->'en') - 'positive') "
+                     "WHERE location_id = {}",
+                     spa_));
+    fails_with("can't be read: reply settings: ");
+    // And one that is not a length.
+    exec(std::format(R"(UPDATE reply_settings SET length = length || '{{"en": 5}}'::jsonb WHERE location_id = {})", spa_));
+    fails_with("length");
+    exec(std::format("DELETE FROM content_settings WHERE location_id = {}", spa_));
+    fails_with("can't be read: the location has no content settings");
 
     // "Analyze again" is not refused for it as for a location without an industry profile: the job it queues raises the fault.
     EXPECT_TRUE(as_test([&](pqxx::work& tx, audit::Writer& audit) { return repo::request_analysis(tx, audit, id); }).has_value());
@@ -624,7 +642,7 @@ TEST_F(Analysis, AFailedJobGetsAnotherChanceInTheNextHourOnly) {
 TEST_F(Analysis, ANewReviewIsAnalyzedAndDraftedByTheJobsAlone) {
     // The whole path as main wires it: a poll stores the review, which
     // queues the sweep, which queues the review's job.
-    jobs::Sync sync(db(), clock_, gbp_, queue(), {});
+    jobs::Sync sync(db(), clock_, gbp_, places_, queue(), {});
     jobs::Registry registry;
     jobs::install(registry, sync, nullptr);
     jobs::install(registry, *pipeline_);
@@ -640,7 +658,7 @@ TEST_F(Analysis, ANewReviewIsAnalyzedAndDraftedByTheJobsAlone) {
     const auto stored = review(id);
     ASSERT_TRUE(stored.analysis);
     ASSERT_TRUE(stored.draft);
-    EXPECT_EQ(stored.draft->route, "auto_post");
+    EXPECT_EQ(stored.draft->route, "auto_reply");
     EXPECT_EQ(count("jobs WHERE status = 'failed'"), 0);
     // Nothing reached Google: the fake holds the review as it was, without a reply.
     EXPECT_FALSE(gbp_.reviews[std::string(kSpa)].front().reviewReply);
@@ -788,10 +806,9 @@ TEST_F(Analysis, TheSeededTablesHoldWhatTheOfflineSuiteReadsFromTheFiles) {
     }
     // The fixture made each client its pack's made-up business through the repository; the suite builds it from the files.
     for (const auto& [key, location] : {std::pair{"wellness", spa_}, std::pair{"food_beverage", buffet_}}) {
-        const auto from_db = repo::reply_settings(tx, location).value();
+        const auto from_db = repo::stored_settings(tx, location).value();
         const auto from_files = files.client(key).settings;
-        EXPECT_EQ(boost::json::value_from(from_db.voice), boost::json::value_from(from_files.voice)) << key;
-        EXPECT_EQ(boost::json::value_from(from_db.localization), boost::json::value_from(from_files.localization)) << key;
-        EXPECT_EQ(boost::json::value_from(from_db.policy), boost::json::value_from(from_files.policy)) << key;
+        EXPECT_EQ(boost::json::value_from(from_db.content), boost::json::value_from(from_files.content)) << key;
+        EXPECT_EQ(boost::json::value_from(from_db.reply), boost::json::value_from(from_files.reply)) << key;
     }
 }

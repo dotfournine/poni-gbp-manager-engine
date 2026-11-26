@@ -91,6 +91,9 @@ services:
       # sending mailbox are connected on the dashboard's status page (D-079).
       PONI_GBP_OAUTH_CLIENT_ID: ${PONI_GBP_OAUTH_CLIENT_ID:-}
       PONI_GBP_OAUTH_CLIENT_SECRET: ${PONI_GBP_OAUTH_CLIENT_SECRET:-}
+      # A new location's time zone from Google Places (D-109); the engine refuses
+      # to start without it when the OAuth client above is set.
+      PONI_GOOGLE_PLACES_API_KEY: ${PONI_GOOGLE_PLACES_API_KEY:-}
       # Caddy is the only client, so the visitor's address is in X-Forwarded-For.
       PONI_TRUST_FORWARDED_FOR: "true"
       # Pub/Sub as the VM's service account; empty subscription = polling only.

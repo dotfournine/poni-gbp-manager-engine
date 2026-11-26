@@ -21,12 +21,12 @@ class Checks : public ::testing::Test {
 protected:
     CheckReport check(std::string_view client, std::string_view reply, std::string language = "en", std::string mode = "positive") {
         const auto setup = seed_.client(client);
-        return check_with(setup.settings.voice, reply, std::move(language), std::move(mode));
+        return check_with(setup.settings, reply, std::move(language), std::move(mode));
     }
 
-    static CheckReport check_with(const domain::Voice& voice, std::string_view reply,
+    static CheckReport check_with(const domain::ResolvedSettings& settings, std::string_view reply,
                                   std::string language = "en", std::string mode = "positive") {
-        const domain::CheckContext context{.voice = voice,
+        const domain::CheckContext context{.settings = settings,
                                            .target_language = std::move(language),
                                            .mode = std::move(mode)};
         return domain::run_reply_checks(reply, context);
@@ -122,10 +122,10 @@ TEST_F(Checks, PhoneNumbersFail) {
     EXPECT_THAT(ok.failed(), Not(Contains("no_phone"))) << detail(ok, "no_phone");
 }
 
-TEST_F(Checks, ContactDetailsPassWhenTheVoiceAllowsThem) {
-    auto voice = seed_.client(kSpa).settings.voice;
-    voice.contact_allowed = true;
-    const auto report = check_with(voice, "Thank you! Call us at 646 555 0100 or visit willowmoon.example to book again.");
+TEST_F(Checks, ContactDetailsPassWhenTheReplySettingsAllowThem) {
+    auto settings = seed_.client(kSpa).settings;
+    settings.reply.contact_allowed = true;
+    const auto report = check_with(settings, "Thank you! Call us at 646 555 0100 or visit willowmoon.example to book again.");
     EXPECT_THAT(report.failed(), Not(Contains("no_phone")));
     EXPECT_THAT(report.failed(), Not(Contains("no_url")));
 }

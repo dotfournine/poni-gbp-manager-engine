@@ -222,6 +222,67 @@ def test_reports_become_ready_failed_or_discarded_and_their_sends_name_them(db):
         db.execute("UPDATE reports SET status = 'ready' WHERE id = %s", (draft,))
 
 
+def test_the_settings_bundles_refuse_a_database_with_locations(db):
+    # 0014 (D-107): settings are not carried over, so a database with locations is rebuilt instead.
+    shipped = migrate.load_migrations(SHIPPED)
+    assert migrate.apply_migrations(db, shipped[:13]) == list(range(1, 14))
+    db.execute(
+        "INSERT INTO locations (gbp_location_id, gbp_account_id, title, raw, first_seen_at, last_seen_at, updated_at) "
+        "VALUES ('9001', '111', 'A Spa', '{}', now(), now(), now())"
+    )
+    with pytest.raises(migrate.MigrationError, match="Locations exist: rebuild this database"):
+        migrate.apply_migrations(db, shipped[:14])
+    assert [row[0] for row in recorded(db)][-1] == 13
+
+
+def test_the_settings_bundles_keep_a_lists_order_and_refuse_a_null_entry(db):
+    shipped = migrate.load_migrations(SHIPPED)
+    migrate.apply_migrations(db, shipped[:14])
+    location = one(
+        db,
+        "INSERT INTO locations (gbp_location_id, gbp_account_id, title, raw, first_seen_at, last_seen_at, updated_at) "
+        "VALUES ('9001', '111', 'A Spa', '{}', now(), now(), now()) RETURNING id",
+    )
+    columns = (
+        "location_id, business_facts, base_style, emoji_allowed, emoji_max, emoji_preferred, words_to_avoid, "
+        "style_notes, chinese_variant, english_variant, audience, created_at, updated_at"
+    )
+    insert = f"INSERT INTO content_settings ({columns}) VALUES (%s, '', '', false, 0, '{{}}', %s, '{{}}', NULL, NULL, '', now(), now())"
+    db.execute(insert, (location, ["b", "a", "c"]))
+    assert one(db, "SELECT words_to_avoid FROM content_settings") == ["b", "a", "c"]
+    db.execute("DELETE FROM content_settings")
+    with pytest.raises(psycopg.errors.CheckViolation):
+        db.execute(insert, (location, ["b", None]))
+
+
+def test_a_location_without_a_time_zone_refuses_the_migration_that_makes_it_required(db):
+    # 0016 (D-109): a location's zone is read from Google Places at discovery; none is filled in.
+    shipped = migrate.load_migrations(SHIPPED)
+    migrate.apply_migrations(db, shipped[:15])
+    db.execute(
+        "INSERT INTO locations (gbp_location_id, gbp_account_id, title, raw, first_seen_at, last_seen_at, updated_at) "
+        "VALUES ('9001', '111', 'A Spa', '{}', now(), now(), now())"
+    )
+    with pytest.raises(migrate.MigrationError, match="A location has no time zone: rebuild this database"):
+        migrate.apply_migrations(db, shipped[:16])
+    assert [row[0] for row in recorded(db)][-1] == 15
+
+
+def test_every_location_has_a_time_zone(db):
+    shipped = migrate.load_migrations(SHIPPED)
+    assert migrate.apply_migrations(db, shipped[:16])[-1] == 16
+    insert = (
+        "INSERT INTO locations (gbp_location_id, gbp_account_id, title, time_zone, raw, first_seen_at, last_seen_at, "
+        "updated_at) VALUES (%s, '111', 'A Spa', %s, '{}', now(), now(), now())"
+    )
+    db.execute(insert, ("9001", "America/New_York"))
+    assert one(db, "SELECT time_zone FROM locations") == "America/New_York"
+    with pytest.raises(psycopg.errors.NotNullViolation):
+        db.execute(insert, ("9002", None))
+    with pytest.raises(psycopg.errors.CheckViolation):
+        db.execute(insert, ("9003", " "))
+
+
 @pytest.mark.parametrize(
     "rows",
     [

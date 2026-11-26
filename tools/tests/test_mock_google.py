@@ -663,3 +663,91 @@ def test_an_added_person_survives_a_restart(tmp_path: Path) -> None:
     new_id = first.add_directory_user(new_hire())["id"]
     again = MockGoogle(path, REPOSITORY / "knowledge")
     assert again.directory_user(new_id).body["primaryEmail"] == "robin.newhire@example.com"
+
+
+PLACES = "/places.googleapis.com/v1/places"
+PLACES_HEADERS = {"X-Goog-Api-Key": "test-places-key", "X-Goog-FieldMask": "timeZone"}
+
+
+def place_id(google: Mock, title_start: str) -> str:
+    """The placeId the locations list gives the location whose title starts so."""
+    google.connect()
+    _, _, body = google.call("GET", f"/mybusinessbusinessinformation.googleapis.com/v1/accounts/{ACCOUNT}/locations")
+    return next(loc["metadata"]["placeId"] for loc in body["locations"] if loc["title"].startswith(title_start))
+
+
+def test_a_place_answers_its_time_zone_with_a_key_and_the_mask(google: Mock) -> None:
+    place = place_id(google, google.mock.state["locations"][0]["title"])
+    status, _, body = google.call("GET", f"{PLACES}/{place}", headers=PLACES_HEADERS, auth=False)
+    assert status == 200
+    assert body == {"timeZone": {"id": google.mock.state["locations"][0]["time_zone"], "version": "2025b"}}
+
+
+def test_a_place_wants_a_key_not_a_token(google: Mock) -> None:
+    place = place_id(google, google.mock.state["locations"][0]["title"])
+    for headers in ({"X-Goog-FieldMask": "timeZone"}, {"X-Goog-Api-Key": "", "X-Goog-FieldMask": "timeZone"}):
+        status, _, body = google.call("GET", f"{PLACES}/{place}", headers=headers)
+        assert status == 403 and body["error"]["status"] == "PERMISSION_DENIED", headers
+
+
+def test_a_place_wants_the_time_zone_mask_and_no_other(google: Mock) -> None:
+    place = place_id(google, google.mock.state["locations"][0]["title"])
+    for mask in (None, "", "timeZone,displayName", "*", "displayName"):
+        headers = {"X-Goog-Api-Key": "test-places-key"} | ({"X-Goog-FieldMask": mask} if mask is not None else {})
+        status, _, body = google.call("GET", f"{PLACES}/{place}", headers=headers, auth=False)
+        assert status == 400 and body["error"]["status"] == "INVALID_ARGUMENT", mask
+
+
+def test_an_unknown_place_is_not_found_and_no_answer_shows_the_key(google: Mock) -> None:
+    status, _, body = google.call("GET", f"{PLACES}/mock-place-000", headers=PLACES_HEADERS, auth=False)
+    assert status == 404 and body["error"]["status"] == "NOT_FOUND"
+    place = place_id(google, google.mock.state["locations"][0]["title"])
+    for headers in (PLACES_HEADERS, {"X-Goog-Api-Key": "test-places-key"}, {}):
+        _, answer_headers, answer = google.call("GET", f"{PLACES}/{place}", headers=headers, auth=False)
+        assert "test-places-key" not in json.dumps(answer) + json.dumps(answer_headers)
+    _, _, answer = google.call("GET", f"{PLACES}/mock-place-000", headers=PLACES_HEADERS, auth=False)
+    assert "test-places-key" not in json.dumps(answer)
+
+
+def test_the_log_shows_the_places_path_and_no_header(google: Mock, capsys) -> None:
+    place = place_id(google, google.mock.state["locations"][0]["title"])
+    google.call("GET", f"{PLACES}/{place}", headers=PLACES_HEADERS, auth=False)
+    printed = capsys.readouterr().out
+    assert f"GET {PLACES}/{place} -> 200" in printed
+    assert "test-places-key" not in printed and "timeZone" not in printed
+
+
+def test_the_made_up_businesses_are_in_their_own_time_zones(google: Mock) -> None:
+    zones = {(loc["address"]["locality"], loc["time_zone"]) for loc in google.mock.state["locations"]}
+    expected = {
+        "Fairview": "America/New_York",
+        "New York": "America/New_York",
+        "Queens": "America/New_York",
+        "Springfield": "America/Chicago",
+    }
+    assert zones <= set(expected.items())
+    for loc in google.mock.state["locations"]:
+        status, _, body = google.call("GET", f"{PLACES}/mock-place-{loc['id']}", headers=PLACES_HEADERS, auth=False)
+        assert status == 200 and body["timeZone"]["id"] == expected[loc["address"]["locality"]]
+
+
+def test_a_state_file_without_time_zones_gains_them_and_keeps_its_reviews(tmp_path: Path) -> None:
+    path = tmp_path / "state.json"
+    first = MockGoogle(path, REPOSITORY / "knowledge")
+    location = first.state["locations"][0]["id"]
+    first.post_review({"location_id": location, "reviewer": "Kept", "stars": 4, "comment": "Still here"})
+    zones = [loc["time_zone"] for loc in first.state["locations"]]
+    old = json.loads(path.read_text(encoding="utf-8"))
+    for loc in old["locations"]:
+        del loc["time_zone"]
+    path.write_text(json.dumps(old), encoding="utf-8")
+
+    again = MockGoogle(path, REPOSITORY / "knowledge")
+    assert [loc["time_zone"] for loc in again.state["locations"]] == zones
+    assert {k: v for k, v in again.state.items() if k != "locations"} == {
+        k: v for k, v in old.items() if k != "locations"
+    }
+    assert [{k: v for k, v in loc.items() if k != "time_zone"} for loc in again.state["locations"]] == old["locations"]
+    assert any(r["reviewer"] == "Kept" for r in again.state["reviews"])
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert all("time_zone" in loc for loc in saved["locations"]), "and it is saved"

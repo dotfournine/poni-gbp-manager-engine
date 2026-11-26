@@ -43,15 +43,15 @@ const std::string kPost = R"({"topic_type": "standard", "summary": "x", "languag
 const std::map<std::string, std::string> kRoutesWithBody = {
     {"POST /api/clients", "name"},
     {"PATCH /api/clients/{id}", "name"},
-    {"PATCH /api/locations/{id}", "review_poll_interval_s"},
+    {"PATCH /api/locations/{id}", "enabled"},
     {"POST /api/reviews/{id}/ignore", "reason"},
-    {"PUT /api/locations/{id}/reply-settings", "voice"},
+    {"PUT /api/locations/{id}/content-settings", "business_facts"},
+    {"PUT /api/locations/{id}/reply-settings", "reply_languages"},
     {"PATCH /api/ai/settings", "enabled"},
     {"PATCH /api/drafts/{id}", "text"},
     {"POST /api/drafts/{id}/approve", "text"},
     {"POST /api/drafts/{id}/reject", "reason"},
     {"POST /api/drafts/{id}/regenerate", "instructions"},
-    {"PATCH /api/locations/{id}/auto-posting", "enabled"},
     {"POST /api/locations/{id}/reports", "period_start"},
     {"POST /api/reports/{id}/send", "recipients"},
     {"POST /api/report-schedules", "location_id"},
@@ -80,8 +80,8 @@ const std::vector<std::string> kRoutesWithoutBody = {
     "POST /api/reviews/{id}/unignore",
     "POST /api/reviews/{id}/analyze",
     "POST /api/drafts/{id}/unschedule",
-    "POST /api/auto-posting/resume",
-    "POST /api/locations/{id}/auto-posting/resume",
+    "POST /api/system/auto-reply/resume",
+    "POST /api/locations/{id}/auto-reply/resume",
     "POST /api/locations/{id}/go-live-test",
     "POST /api/go-live-runs/{id}/cancel",
     "POST /api/local-posts/{id}/remove",
@@ -130,112 +130,112 @@ TEST_F(Bodies, EveryRouteWithABodyRefusesWhatItsSchemaDoesNotAllow) {
     EXPECT_EQ(count("jobs"), queued) << "and queues nothing";
 }
 
-TEST_F(Bodies, ARefusedAutoPostingBodySwitchesNothingOn) {
-    const auto target = spa_path("/auto-posting");
-    const auto on = [&] { return count(std::format("locations WHERE id = {} AND (auto_post_enabled OR auto_post_five_star)", spa_)); };
+TEST_F(Bodies, ARefusedAutoReplyBodySwitchesNothingOn) {
+    const auto target = reply_settings_path(spa_);
+    const auto on = [&] { return count(std::format("reply_settings WHERE location_id = {} AND auto_reply_enabled", spa_)); };
     const auto audited = count("audit_log");
+    // The stored reply settings, switched on, with `member` set to a JSON value.
+    const auto switched_on_with = [&](std::string_view member, std::string_view value) {
+        auto body = read(target).as_object();
+        body["auto_reply_enabled"] = true;
+        body[member] = boost::json::parse(value);
+        return put_current(target, boost::json::serialize(body));
+    };
 
-    // Each of these was taken until D-092, with the member it does not know or the null left out.
-    expect_refused(patch(target, R"({"enabled": true, "five_star": true, "not_in_the_spec": 1})"), "not_in_the_spec", "an unknown member");
-    expect_refused(patch(target, R"({"five_star": true, "four_star": null})"), "four_star", "null for a switch");
-    expect_refused(patch(target, R"({"five_star": true, "daily_cap": null})"), "daily_cap", "null for a number");
-    expect_refused(patch(target, R"({"five_star": true, "enabled": 1})"), "enabled", "a number for a switch");
-    expect_refused(patch(target, R"({"five_star": true, "enabled": "true"})"), "enabled", "a string for a switch");
+    expect_refused(switched_on_with("not_in_the_spec", "1"), "not_in_the_spec", "an unknown member");
+    expect_refused(switched_on_with("auto_reply_daily_cap", "null"), "auto_reply_daily_cap", "null for a number");
+    expect_refused(switched_on_with("auto_reply_enabled", "1"), "auto_reply_enabled", "a number for a switch");
+    expect_refused(switched_on_with("auto_reply_enabled", R"("true")"), "auto_reply_enabled", "a string for a switch");
+    expect_refused(switched_on_with("five_star", "true"), "five_star", "the per-star switch of before (D-110)");
+    expect_refused(switched_on_with("auto_reply_min_stars", "3"), "auto_reply_min_stars", "three stars");
     EXPECT_EQ(on(), 0);
     EXPECT_EQ(count("audit_log"), audited);
 
-    // The same switches without what the spec refuses are what a person sends.
-    const auto taken = patch(target, R"({"enabled": true, "five_star": true, "time_zone": "America/New_York"})");
+    // The same switch without what the spec refuses is what a person sends.
+    const auto taken = switched_on_with("auto_reply_min_stars", "4");
     ASSERT_EQ(taken.status, 200u) << taken.body;
     EXPECT_EQ(on(), 1);
 }
 
 TEST_F(Bodies, NullClearsWhatCanBeEmptyAndAMemberLeftOutStays) {
-    // A location's time zone.
-    const auto target = spa_path("/auto-posting");
-    ASSERT_EQ(patch(target, R"({"time_zone": "America/New_York"})").status, 200u);
-    EXPECT_EQ(json(patch(target, R"({"daily_cap": 7})")).at("time_zone").as_string(), "America/New_York");
-    EXPECT_TRUE(json(patch(target, R"({"time_zone": null})")).at("time_zone").is_null());
-
     // A location's industry and the day its analysis starts from.
-    ASSERT_EQ(patch(spa_path(), R"({"industry_key": "wellness", "analyze_from": "2026-06-01"})").status, 200u);
-    const auto kept = json(patch(spa_path(), R"({"audience": "x"})"));
+    ASSERT_EQ(patch_current(spa_path(), R"({"industry_key": "wellness", "analyze_from": "2026-06-01"})").status, 200u);
+    const auto kept = json(patch_current(spa_path(), R"({"posting_enabled": true})"));
     EXPECT_EQ(kept.at("industry_key").as_string(), "wellness");
     EXPECT_EQ(kept.at("analyze_from").as_string(), "2026-06-01");
-    const auto cleared = json(patch(spa_path(), R"({"industry_key": null, "analyze_from": null})"));
+    const auto cleared = json(patch_current(spa_path(), R"({"industry_key": null, "analyze_from": null})"));
     EXPECT_TRUE(cleared.at("industry_key").is_null());
     EXPECT_TRUE(cleared.at("analyze_from").is_null());
     // What can't be empty can't be cleared.
-    expect_refused(patch(spa_path(), R"({"audience": null})"), "audience", "a location's audience");
+    expect_refused(patch(spa_path(), R"({"audience": "x"})"), "audience", "who the customers are, a content setting now");
     expect_refused(patch(spa_path(), R"({"enabled": null})"), "enabled", "a location's switch");
     expect_refused(patch(client_path(), R"({"notes": null})"), "notes", "a client's notes");
     expect_refused(patch(client_path(), R"({"archived": null})"), "archived", "a client's archived");
     // A day the calendar lacks is no day.
-    EXPECT_EQ(patch(spa_path(), R"({"analyze_from": "2026-02-30"})").status, 400u);
-    EXPECT_EQ(patch(spa_path(), R"({"analyze_from": "June"})").status, 400u);
+    EXPECT_EQ(patch_current(spa_path(), R"({"analyze_from": "2026-02-30"})").status, 400u);
+    EXPECT_EQ(patch_current(spa_path(), R"({"analyze_from": "June"})").status, 400u);
     // A client has none of these any more (D-102).
     expect_refused(patch(client_path(), R"({"industry_key": "wellness"})"), "industry_key", "a client's industry");
     expect_refused(post("/api/clients", R"({"name": "Another", "analyze_from": null})"), "analyze_from", "a client's start day");
 
     // A location's client.
-    EXPECT_EQ(json(patch(spa_path(), R"({"review_poll_interval_s": 600})")).at("client_id").as_int64(), spa_client_);
-    EXPECT_TRUE(json(patch(spa_path(), R"({"client_id": null})")).at("client_id").is_null());
+    EXPECT_EQ(json(patch_current(spa_path(), R"({"posting_enabled": true})")).at("client_id").as_int64(), spa_client_);
+    EXPECT_TRUE(json(patch_current(spa_path(), R"({"client_id": null})")).at("client_id").is_null());
     expect_refused(patch(spa_path(), R"({"posting_enabled": null})"), "posting_enabled", "the kill switch");
+    // How often reviews are polled is the engine's setting, not the location's (D-112).
+    expect_refused(patch(spa_path(), R"({"review_poll_interval_s": 600})"), "review_poll_interval_s", "the old poll interval");
 }
 
 TEST_F(Bodies, AWholeNumberMayBeWrittenWithAFractionOfZero) {
-    const auto linked = patch(spa_path(), std::format(R"({{"client_id": {}.0, "review_poll_interval_s": 600.0}})", buffet_client_));
+    const auto linked = patch_current(spa_path(), std::format(R"({{"client_id": {}.0}})", buffet_client_));
     ASSERT_EQ(linked.status, 200u) << linked.body;
     EXPECT_EQ(json(linked).at("client_id").as_int64(), buffet_client_);
-    EXPECT_EQ(json(linked).at("review_poll_interval_s").as_int64(), 600);
-    expect_refused(patch(spa_path(), R"({"review_poll_interval_s": 600.5})"), "review_poll_interval_s", "a fraction");
+    expect_refused(patch(spa_path(), std::format(R"({{"client_id": {}.5}})", spa_client_)), "client_id", "a fraction");
     expect_refused(patch(spa_path(), R"({"client_id": "7"})"), "client_id", "a string");
 }
 
-TEST_F(Bodies, ReplySettingsTravelWholeAndTakeOnlyTheirOwnMembersAtEveryDepth) {
-    const auto stored = boost::json::serialize(read(settings_path(spa_)));
+TEST_F(Bodies, SettingsTravelWholeAndTakeOnlyTheirOwnMembersAtEveryDepth) {
+    const auto content_path = content_settings_path(spa_);
+    const auto reply_path = reply_settings_path(spa_);
+    const auto stored = boost::json::serialize(read(content_path)) + boost::json::serialize(read(reply_path));
     // What the engine itself stores is a body it takes.
-    const auto same = save_settings(spa_, settings_body(spa_));
-    ASSERT_EQ(same.status, 200u) << same.body;
-
-    // The stored settings with `member` of a part replaced, or with it left out.
-    const auto with = [&](std::string_view part, std::string_view member, std::string_view value) {
-        auto body = settings_body(spa_);
-        body[part].as_object()[member] = boost::json::parse(value);
-        return save_settings(spa_, body);
-    };
-    const auto without = [&](std::string_view part, std::string_view member) {
-        auto body = settings_body(spa_);
-        if (member.empty()) {
-            body.erase(part);
-        } else {
-            body[part].as_object().erase(member);
-        }
-        return save_settings(spa_, body);
-    };
-    // Every field is sent: a save is the whole of the settings (D-093).
-    expect_refused(without("policy", ""), "policy", "a part left out");
-    expect_refused(without("voice", "sign_off"), "voice.sign_off", "a field left out");
-    expect_refused(without("localization", "english_variant"), "localization.english_variant", "a preference left out");
-    expect_refused(without("policy", "auto_post_min_stars"), "policy.auto_post_min_stars", "a rule left out");
-    expect_refused(with("voice", "emoji", R"({"allowed": true})"), "voice.emoji.max", "half an emoji rule");
-    expect_refused(with("voice", "length", R"({"en": {"positive": {"min": 1, "max": 9}}})"), "voice.length.en.rating_only", "a kind of reply left out");
-    // No member the schema does not have, at any depth, and no null.
-    expect_refused(with("voice", "sign_of", R"("Thanks")"), "voice.sign_of", "a misspelled member");
-    expect_refused(with("voice", "emoji", R"({"allowed": true, "max": 1, "preferred": [], "size": 2})"), "voice.emoji.size", "inside the emoji rule");
-    expect_refused(with("voice", "sign_off", "null"), "voice.sign_off", "a null field");
-    expect_refused(with("localization", "script", R"("x")"), "localization.script", "localization");
-    expect_refused(with("policy", "auto_post", "true"), "policy.auto_post", "a rule it does not have");
-    expect_refused(with("policy", "auto_post_min_stars", "null"), "policy.auto_post_min_stars", "a null rule");
-    {
-        auto body = settings_body(spa_);
-        body["is_draft"] = false;
-        expect_refused(save_settings(spa_, body), "is_draft", "a member of the layers that are gone");
-        body = settings_body(spa_);
-        body["client_id"] = spa_client_;
-        expect_refused(save_settings(spa_, body), "client_id", "what the answer holds and the body does not");
+    for (const auto& path : {content_path, reply_path}) {
+        const auto same = put_current(path, boost::json::serialize(read(path)));
+        ASSERT_EQ(same.status, 200u) << path << ": " << same.body;
     }
-    EXPECT_EQ(boost::json::serialize(read(settings_path(spa_))), stored);
+
+    // The stored bundle with `member` replaced (a JSON value), or with it left out.
+    const auto with = [&](const std::string& path, std::string_view member, std::string_view value) {
+        auto body = read(path).as_object();
+        body[member] = boost::json::parse(value);
+        return put_current(path, boost::json::serialize(body));
+    };
+    const auto without = [&](const std::string& path, std::string_view member) {
+        auto body = read(path).as_object();
+        body.erase(member);
+        return put_current(path, boost::json::serialize(body));
+    };
+    // Every member is sent: a save is the whole of the bundle (D-107).
+    expect_refused(without(content_path, "audience"), "audience", "a member left out");
+    expect_refused(without(content_path, "english_variant"), "english_variant", "a variant left out");
+    expect_refused(without(reply_path, "signature"), "signature", "a member left out");
+    expect_refused(without(reply_path, "auto_reply_min_stars"), "auto_reply_min_stars", "a rule left out");
+    expect_refused(with(reply_path, "length", R"({"en": {"positive": {"min": 1, "max": 9}}})"), "length.en.rating_only",
+                   "a kind of reply left out");
+    // No member the schema does not have, at any depth, and no null.
+    expect_refused(with(reply_path, "signatur", R"("Thanks")"), "signatur", "a misspelled member");
+    expect_refused(with(reply_path, "length",
+                        R"({"en": {"rating_only": {"min": 1, "max": 9}, "positive": {"min": 1, "max": 9}, "complaint": {"min": 1, "max": 9},
+                                   "severity": {"min": 1, "max": 9, "size": 2}}})"),
+                   "length.en.severity.size", "inside the lengths");
+    expect_refused(with(reply_path, "signature", "null"), "signature", "a null member");
+    expect_refused(with(content_path, "emoji", R"({"allowed": true})"), "emoji", "the emoji rule of before");
+    expect_refused(with(content_path, "emoji_preferred", R"(["ok", null])"), "emoji_preferred", "a null entry");
+    expect_refused(with(reply_path, "auto_reply", "true"), "auto_reply", "a rule it does not have");
+    expect_refused(with(reply_path, "auto_reply_min_stars", "null"), "auto_reply_min_stars", "a null rule");
+    expect_refused(with(content_path, "location_title", R"("Willow")"), "location_title", "what the old answer held");
+    expect_refused(with(content_path, "client_id", std::to_string(spa_client_)), "client_id", "what the location holds");
+    EXPECT_EQ(boost::json::serialize(read(content_path)) + boost::json::serialize(read(reply_path)), stored);
 }
 
 TEST_F(Bodies, APostsContentTravelsWhole) {

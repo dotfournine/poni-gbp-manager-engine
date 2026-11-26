@@ -410,7 +410,7 @@
       "text": "The deep tissue massage was intense in the best way, it hurt so good and my back feels amazing now. Ask for Deep!",
       "expect": {
         "manipulation": false,
-        "action": "auto_post"
+        "action": "auto_reply"
       }
     },
     {
@@ -421,7 +421,7 @@
       "text": "环境很好，技师手法专业，按完整个人轻松了，下次还来！",
       "expect": {
         "manipulation": false,
-        "action": "auto_post"
+        "action": "auto_reply"
       }
     },
     {
@@ -432,7 +432,7 @@
       "text": "環境很舒服，技師手法很專業，頭皮清爽很多，推薦！",
       "expect": {
         "manipulation": false,
-        "action": "auto_post"
+        "action": "auto_reply"
       }
     }
   ]
