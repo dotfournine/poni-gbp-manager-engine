@@ -1,22 +1,22 @@
 // fixtures/reply_settings_golden.json was captured on 2026-11-20 with the
 // engine as it was before reply settings became one complete row per
-// location (D-093): made-up clients and locations with voice and policy
-// layers at every level, exactly as the engine stored them, and for each
-// location what the layers resolved to and the fingerprint of that. Giving
-// every location one row must change none of them. The file is never
-// regenerated: it holds everything it needs (the defaults, the industries,
-// the models), so a later version of the knowledge base does not touch it.
+// location: made-up clients and locations, and for each location the
+// settings it resolved to and the fingerprint of that. Its settings follow
+// the domain types: they were converted once to the content and reply
+// bundles of D-107, each case naming the location's title, which is how the
+// business is named now. Its fingerprints are recaptured only by a change
+// that alters a reply prompt on purpose, named in the decision record. It
+// holds everything it needs (the industries, the models), so a later version
+// of the knowledge base does not touch it.
 //
 // The test below: the captured settings still give the captured
 // fingerprints, so no prompt, model request or check limit changed. That a
 // code change which alters a prompt for unchanged settings fails a test
-// rests on this file (D-091 point 10). That the migration (0026, now part of
-// 0001_baseline) gave every location these settings was proved once, by a
-// test that left with the old migration files.
+// rests on this file (D-091 point 10).
 
 #include "ai_fixture.hpp"
 #include "domain/go_live.hpp"
-#include "domain/reply_settings.hpp"
+#include "domain/settings.hpp"
 
 #include <gtest/gtest.h>
 
@@ -50,10 +50,9 @@ domain::ModelSetup model_of(const boost::json::value& json, std::optional<double
 }
 
 // The fingerprint of a client's location with these settings, built as
-// repo::go_live_setup builds it: the business is named by the voice or,
-// where its reply_name is empty, by the name the file holds for it, and the
-// writer is asked with the voice's temperature.
-domain::Fingerprint fingerprint_of(const boost::json::value& golden, const boost::json::value& client,
+// repo::go_live_setup builds it: the business is named by the location's
+// title, and the writer is asked with the reply settings' temperature.
+domain::Fingerprint fingerprint_of(const boost::json::value& golden, const boost::json::value& client, std::string_view title,
                                    const domain::ResolvedSettings& settings) {
     const auto& told = golden.at("industries").at(client.at("industry_key").as_string());
     const domain::IndustryRules industry{.key = std::string(told.at("key").as_string()),
@@ -61,11 +60,11 @@ domain::Fingerprint fingerprint_of(const boost::json::value& golden, const boost
                                          .topics = boost::json::value_to<std::vector<domain::Topic>>(told.at("topics")),
                                          .item_types = boost::json::value_to<std::vector<domain::ItemType>>(told.at("item_types")),
                                          .severity_flags = boost::json::value_to<std::vector<domain::SeverityFlag>>(told.at("severity_flags"))};
-    return domain::fingerprint({.business_name = domain::business_name(settings.voice, client.at("name").as_string()),
+    return domain::fingerprint({.business_name = std::string(title),
                                 .industry = industry,
                                 .settings = settings,
                                 .analyzer = model_of(golden.at("analyzer"), golden.at("analyzer").at("temperature").to_number<double>()),
-                                .writer = model_of(golden.at("writer"), settings.voice.temperature)});
+                                .writer = model_of(golden.at("writer"), settings.reply.temperature)});
 }
 
 }  // namespace
@@ -76,7 +75,7 @@ TEST(ReplySettingsGolden, TheCapturedSettingsGiveTheCapturedFingerprints) {
     for (const auto& captured : golden.at("cases").as_array()) {
         const auto name = std::string(captured.at("name").as_string());
         const auto& resolved = captured.at("resolved");
-        const auto settings = domain::read_settings(resolved.at("voice"), resolved.at("localization"), resolved.at("policy"));
+        const auto settings = test::read_bundles(resolved.at("content"), resolved.at("reply"));
         ASSERT_TRUE(settings) << name << ": " << settings.error();
         // Complete settings are read as they are: nothing is added, dropped or reordered.
         EXPECT_EQ(boost::json::serialize(boost::json::value_from(*settings)), boost::json::serialize(resolved)) << name;
@@ -87,7 +86,8 @@ TEST(ReplySettingsGolden, TheCapturedSettingsGiveTheCapturedFingerprints) {
             EXPECT_TRUE(captured.at("fingerprint").is_null()) << name;
             continue;
         }
-        const auto now = fingerprint_of(golden, row_with_id(golden, "clients", location.at("client_id")), *settings);
+        const auto now = fingerprint_of(golden, row_with_id(golden, "clients", location.at("client_id")), captured.at("title").as_string(),
+                                        *settings);
         EXPECT_EQ(now.inputs, captured.at("fingerprint_inputs").as_object()) << name;
         EXPECT_EQ(now.hash, captured.at("fingerprint").as_string()) << name;
     }

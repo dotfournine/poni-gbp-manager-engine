@@ -130,23 +130,24 @@ protected:
         return json(response);
     }
 
-    // ---- a location's reply settings (D-093) ----
+    // ---- a location's content and reply settings (D-107) ----
 
-    static std::string settings_path(std::int64_t location) { return std::format("/api/locations/{}/reply-settings", location); }
-    // The body of a save that changes nothing: the three parts as the API gives them.
-    boost::json::object settings_body(std::int64_t location) {
-        const auto stored = read(settings_path(location));
-        return {{"voice", stored.at("voice")}, {"localization", stored.at("localization")}, {"policy", stored.at("policy")}};
+    static std::string content_settings_path(std::int64_t location) { return std::format("/api/locations/{}/content-settings", location); }
+    static std::string reply_settings_path(std::int64_t location) { return std::format("/api/locations/{}/reply-settings", location); }
+    // A save of what the location has with `members` laid on the bundle, as a person who changes a few fields
+    // of the form sends it: read, merged, then sent whole with the ETag that was read.
+    http::Response save_content_settings(std::int64_t location, std::string_view members) {
+        return save_bundle(content_settings_path(location), members);
     }
-    http::Response save_settings(std::int64_t location, const boost::json::object& body) {
-        return put(settings_path(location), boost::json::serialize(body));
+    http::Response save_reply_settings(std::int64_t location, std::string_view members) {
+        return save_bundle(reply_settings_path(location), members);
     }
-    // A save of what the location has with `members` laid on one part ("voice", "localization" or "policy"),
-    // as a person who changes a few fields of the form sends it.
-    http::Response save_settings(std::int64_t location, std::string_view part, std::string_view members) {
-        auto body = settings_body(location);
-        body[part] = merge_layer(body.at(part).as_object(), boost::json::parse(members).as_object());
-        return save_settings(location, body);
+
+    http::Response save_bundle(const std::string& path, std::string_view members) {
+        const auto response = get(path, browser_);
+        EXPECT_EQ(response.status, 200u) << path << ": " << response.body;
+        const auto body = merge_layer(json(response).as_object(), boost::json::parse(members).as_object());
+        return put(path, boost::json::serialize(body), if_match(header(response, "ETag")));
     }
 
     // A route of the router's own table that needs a session: its pattern ("/api/clients/{id}"), the path a test

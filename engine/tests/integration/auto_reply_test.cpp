@@ -122,6 +122,9 @@ TEST_F(AutoReply, AnAutoReplyRoutedDraftIsPostedExactlyOnceWithoutAPerson) {
     EXPECT_EQ(post(draft_id, "policy_version"), draft(draft_id, "policy_version"));
     EXPECT_EQ(value<std::string>("SELECT policy_snapshot->'auto_posting'->>'five_star' FROM reply_posts"), "true");
     EXPECT_EQ(value<std::string>("SELECT policy_snapshot->>'prompt_version' FROM reply_posts"), draft(draft_id, "prompt_version"));
+    // The snapshot's "policy" is the reply settings that decide whether and when a draft auto replies (D-107).
+    EXPECT_EQ(value<long>("SELECT count(*) FROM reply_posts, jsonb_object_keys(policy_snapshot->'policy')"), 7);
+    EXPECT_EQ(value<std::string>("SELECT policy_snapshot->'policy'->>'auto_reply_min_stars' FROM reply_posts"), "4");
 
     // Nothing makes it go out a second time.
     clock_.advance(3min);
@@ -163,7 +166,7 @@ TEST_F(AutoReply, ARatingOnlyReviewIsAutoRepliedToo) {
 
 TEST_F(AutoReply, WhatWasAutoRepliedIsListedWithTheTimeFromTheReviewToTheReply) {
     switch_on(spa_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
     clock_.advance(30min);
     run_jobs();
@@ -210,7 +213,7 @@ TEST_F(AutoReply, OnlyTheStarRatingsAPersonChoseAreAutoReplied) {
 TEST_F(AutoReply, ThreeStarsAndFewerAlwaysWaitForAPersonWhateverThePolicySays) {
     switch_on(spa_, true, true);
     // A policy that would route three stars to auto reply.
-    set_policy(spa_, R"({"auto_post_min_stars": 1})");
+    set_reply(spa_, R"({"auto_reply_min_stars": 1})");
     llm_.analyzer = test::FakeLlm::always(test::FakeLlm::analysis({.sentiment = "neutral", .summary = "An average visit."}));
     for (const auto* stars : {"THREE", "TWO", "ONE"}) {
         const auto draft_id = drafted(std::string("r-") + stars, kSpa, stars, "It was fine.");
@@ -239,7 +242,7 @@ TEST_F(AutoReply, ASeverityFlagNeverAutoReplies) {
 TEST_F(AutoReply, AnEscalationIsRaisedAtAnyHourOutsideThePostingWindowToo) {
     switch_on(buffet_, true, true);
     set_zone(buffet_, "America/New_York");
-    set_policy(buffet_, R"({"auto_post_window_start": "09:00", "auto_post_window_end": "21:00"})");
+    set_reply(buffet_, R"({"auto_reply_window_start": "09:00", "auto_reply_window_end": "21:00"})");
     // 03:00 in New York: the window is closed.
     clock_.set(utc(2026y / November / 10, 8h));
     llm_.analyzer = test::FakeLlm::always(test::kSevereAnswer);
@@ -333,7 +336,7 @@ TEST_F(AutoReply, ADraftWrittenWithAPersonsInstructionsNeverAutoReplies) {
 
 TEST_F(AutoReply, TheReplyGoesOutAfterItsRandomDelayAndNotBefore) {
     switch_on(spa_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 20, "auto_post_delay_max_minutes": 120})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 20, "auto_reply_delay_max_minutes": 120})");
     roll_ = 0.5;  // the middle of 20 to 120 minutes: 70
     const auto draft_id = drafted("r1");
     EXPECT_EQ(draft(draft_id, "status"), "scheduled");
@@ -355,7 +358,7 @@ TEST_F(AutoReply, TheReplyGoesOutAfterItsRandomDelayAndNotBefore) {
 TEST_F(AutoReply, AReplyDueOutsideThePostingWindowMovesIntoTheNextOne) {
     switch_on(spa_);
     set_zone(spa_, "America/New_York");
-    set_policy(spa_, R"({"auto_post_window_start": "09:00", "auto_post_window_end": "21:00"})");
+    set_reply(spa_, R"({"auto_reply_window_start": "09:00", "auto_reply_window_end": "21:00"})");
     // The test's clock starts at 12:00 UTC, which is 07:00 in New York.
     const auto draft_id = drafted("r1");
     EXPECT_EQ(draft(draft_id, "status"), "scheduled");
@@ -368,7 +371,7 @@ TEST_F(AutoReply, AReplyDueOutsideThePostingWindowMovesIntoTheNextOne) {
 
     // The other location has the same window and no time zone: it can't be timed, so a person decides.
     switch_on(buffet_);
-    set_policy(buffet_, R"({"auto_post_window_start": "09:00", "auto_post_window_end": "21:00"})");
+    set_reply(buffet_, R"({"auto_reply_window_start": "09:00", "auto_reply_window_end": "21:00"})");
     const auto untimed = drafted("b1", kBuffet);
     EXPECT_EQ(draft(untimed, "status"), "draft");
     EXPECT_THAT(draft(untimed, "status_reason"), HasSubstr("time zone"));
@@ -377,8 +380,8 @@ TEST_F(AutoReply, AReplyDueOutsideThePostingWindowMovesIntoTheNextOne) {
 TEST_F(AutoReply, AReplyThatWaitsForTheWindowGetsItsDelayAgainFromTheOpening) {
     switch_on(spa_);
     set_zone(spa_, "America/New_York");
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 60, "auto_post_delay_max_minutes": 60,
-                         "auto_post_window_start": "09:00", "auto_post_window_end": "21:00"})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 60, "auto_reply_delay_max_minutes": 60,
+                         "auto_reply_window_start": "09:00", "auto_reply_window_end": "21:00"})");
     clock_.set(utc(2026y / November / 11, 1h + 30min));  // 20:30 in New York; plus an hour is 21:30, outside
     const auto draft_id = drafted("r1");
     clock_.advance(60min);
@@ -396,7 +399,7 @@ TEST_F(AutoReply, AReplyThatWaitsForTheWindowGetsItsDelayAgainFromTheOpening) {
 TEST_F(AutoReply, TheWindowFollowsTheLocationsClockWhenItGoesForward) {
     switch_on(spa_);
     set_zone(spa_, "America/New_York");
-    set_policy(spa_, R"({"auto_post_window_start": "09:00", "auto_post_window_end": "21:00"})");
+    set_reply(spa_, R"({"auto_reply_window_start": "09:00", "auto_reply_window_end": "21:00"})");
     // 22:00 on 2027-03-13 in New York (EST). That night the clocks go forward,
     // so 09:00 the next morning is 13:00 UTC, not 14:00.
     clock_.set(utc(2027y / March / 14, 3h));
@@ -413,7 +416,7 @@ TEST_F(AutoReply, TheWindowFollowsTheLocationsClockWhenItGoesForward) {
 TEST_F(AutoReply, TheWindowFollowsTheLocationsClockWhenItGoesBack) {
     switch_on(spa_);
     set_zone(spa_, "America/New_York");
-    set_policy(spa_, R"({"auto_post_window_start": "09:00", "auto_post_window_end": "21:00"})");
+    set_reply(spa_, R"({"auto_reply_window_start": "09:00", "auto_reply_window_end": "21:00"})");
     // 22:00 on 2027-11-06 in New York (EDT). That night the clocks go back,
     // so 09:00 the next morning is 14:00 UTC, not 13:00.
     clock_.set(utc(2027y / November / 7, 2h));
@@ -429,7 +432,7 @@ TEST_F(AutoReply, TheWindowFollowsTheLocationsClockWhenItGoesBack) {
 TEST_F(AutoReply, AJobThatRunsLateDoesNotPostOutsideTheWindow) {
     switch_on(spa_);
     set_zone(spa_, "America/New_York");
-    set_policy(spa_, R"({"auto_post_window_start": "09:00", "auto_post_window_end": "21:00"})");
+    set_reply(spa_, R"({"auto_reply_window_start": "09:00", "auto_reply_window_end": "21:00"})");
     clock_.set(utc(2026y / November / 10, 20h));  // 15:00 in New York: inside, due at once
     const auto draft_id = drafted("r1");
     EXPECT_EQ(draft(draft_id, "status"), "scheduled");
@@ -458,7 +461,7 @@ TEST_F(AutoReply, AJobThatRunsLateDoesNotPostOutsideTheWindow) {
 
 TEST_F(AutoReply, ASwitchFlippedOffAfterSchedulingStopsThePost) {
     switch_on(spa_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto by_location_switch = drafted("r1");
     const auto by_star = drafted("r2");
     const auto by_posting_switch = drafted("r3");
@@ -502,7 +505,7 @@ TEST_F(AutoReply, ASwitchFlippedOffAfterSchedulingStopsThePost) {
 
 TEST_F(AutoReply, AReviewEditedOnGoogleBeforeThePostIsNotRepliedTo) {
     switch_on(spa_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
     // The mirror has not seen the edit; the job's own read finds it.
     gbp_.put(make_review(gbp_.account_id, kSpa, "r1", "ONE", "Edit: they double-charged my card.", "2026-11-09T10:00:00Z",
@@ -521,7 +524,7 @@ TEST_F(AutoReply, AReviewEditedOnGoogleBeforeThePostIsNotRepliedTo) {
 
 TEST_F(AutoReply, AReplyFromOutsideOrARemovedReviewStopsThePost) {
     switch_on(spa_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto replied = drafted("r1");
     const auto removed = drafted("r2");
     gbp_.put(make_review(gbp_.account_id, kSpa, "r1", "FIVE", "Lovely head spa with Eva, so relaxing!", "2026-11-09T10:00:00Z",
@@ -537,7 +540,7 @@ TEST_F(AutoReply, AReplyFromOutsideOrARemovedReviewStopsThePost) {
 
 TEST_F(AutoReply, AReplyFromOutsideSeenByTheSyncCancelsAScheduledDraft) {
     switch_on(spa_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
     review(kSpa, "r1", "FIVE", "Lovely head spa with Eva, so relaxing!", "Thanks! - the owner");
     EXPECT_EQ(draft(draft_id, "status"), "cancelled");
@@ -548,7 +551,7 @@ TEST_F(AutoReply, AReplyFromOutsideSeenByTheSyncCancelsAScheduledDraft) {
 
 TEST_F(AutoReply, APersonCanTakeAScheduledReplyBack) {
     switch_on(spa_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
     {
         const auto taken = as_staff([&](pqxx::work& tx, audit::Writer& audit) {
@@ -570,7 +573,7 @@ TEST_F(AutoReply, APersonCanTakeAScheduledReplyBack) {
 
 TEST_F(AutoReply, AScheduledReplyCannotBeApprovedOnTopOfItsSchedule) {
     switch_on(spa_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
     const auto approved = approve(draft_id);
     ASSERT_FALSE(approved);
@@ -583,7 +586,7 @@ TEST_F(AutoReply, AScheduledReplyCannotBeApprovedOnTopOfItsSchedule) {
 
 TEST_F(AutoReply, MarkingTheReviewAsNeedingNoReplyCancelsItsScheduledDraft) {
     switch_on(spa_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
     const auto review_id = std::stol(draft(draft_id, "review_id"));
     {
@@ -599,10 +602,10 @@ TEST_F(AutoReply, MarkingTheReviewAsNeedingNoReplyCancelsItsScheduledDraft) {
 
 TEST_F(AutoReply, AVoiceThatChangedSinceTheDraftWasCheckedIsCheckedAgainBeforeThePost) {
     switch_on(spa_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
     // The reply the model wrote is a little over 100 characters; staff now cap positive replies at 20.
-    set_voice(spa_, R"({"length": {"en": {"positive": {"min": 1, "max": 20}}}})");
+    set_reply(spa_, R"({"length": {"en": {"positive": {"min": 1, "max": 20}}}})");
     clock_.advance(30min);
     run_jobs();
     EXPECT_TRUE(gbp_.puts.empty());
@@ -612,7 +615,7 @@ TEST_F(AutoReply, AVoiceThatChangedSinceTheDraftWasCheckedIsCheckedAgainBeforeTh
 
 TEST_F(AutoReply, AnAnalysisNewerThanTheDraftStopsThePost) {
     switch_on(spa_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
     // Staff ask for the review to be analyzed again; the scheduled draft is not replaced.
     await(pipeline_->process(std::stol(draft(draft_id, "review_id")), true, false));
@@ -726,7 +729,7 @@ TEST_F(AutoReply, TheDailyCapSendsTheNextDraftToTheApprovalQueue) {
 
 TEST_F(AutoReply, TheCapIsReadAgainImmediatelyBeforeThePut) {
     switch_on(spa_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto first = drafted("r1");
     const auto second = drafted("r2");
     // A person lowers the cap while both are scheduled.
@@ -744,7 +747,7 @@ TEST_F(AutoReply, TheCapIsReadAgainImmediatelyBeforeThePut) {
 TEST_F(AutoReply, ChecksThatKeepFailingPauseTheLocationUntilAPersonResumesIt) {
     switch_on(spa_);
     switch_on(buffet_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto before = drafted("r0");
     EXPECT_EQ(draft(before, "status"), "scheduled");
 
@@ -985,7 +988,7 @@ TEST_F(AutoReply, TheSettingsAreCheckedBeforeAnythingIsStored) {
     EXPECT_EQ(update(9999, {.daily_cap = 3}).error().kind, repo::Failure::Kind::not_found);
 
     // A posting window needs the time zone before auto reply can be on.
-    set_policy(spa_, R"({"auto_post_window_start": "09:00", "auto_post_window_end": "21:00"})");
+    set_reply(spa_, R"({"auto_reply_window_start": "09:00", "auto_reply_window_end": "21:00"})");
     EXPECT_THAT(update(spa_, {.enabled = true, .five_star = true}).error().message, HasSubstr("time zone"));
     const auto on = update(spa_, {.enabled = true, .five_star = true, .time_zone = "America/New_York"});
     ASSERT_TRUE(on) << on.error().message;
@@ -1031,7 +1034,7 @@ TEST_F(AutoReply, TheOverviewShowsEveryLocationsSwitchesAndPause) {
 
 TEST_F(AutoReply, TwoDraftsDecidedTogetherCannotBothTakeTheLastPlaceUnderTheCap) {
     switch_on(spa_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto first = drafted("r1");
     const auto second = drafted("r2");
     exec(std::format("UPDATE locations SET auto_reply_daily_cap = 1 WHERE id = {}", spa_));
@@ -1049,7 +1052,7 @@ TEST_F(AutoReply, TwoDraftsDecidedTogetherCannotBothTakeTheLastPlaceUnderTheCap)
 
 TEST_F(AutoReply, AnalyzingAgainNeverReArmsAnAutoReply) {
     switch_on(spa_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto first = drafted("r1");
     const auto review_id = std::stol(draft(first, "review_id"));
     {
@@ -1094,11 +1097,11 @@ TEST_F(AutoReply, AfterAnUnconfirmedPostAnalyzingAgainDoesNotPostASecondTime) {
 
 TEST_F(AutoReply, AReplyPolicyChangedAfterSchedulingStopsThePost) {
     switch_on(spa_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
     ASSERT_EQ(draft(draft_id, "status"), "scheduled");
     // Staff decide that positive reviews at this location wait for a person after all.
-    set_policy(spa_, R"({"auto_post_positive": false})");
+    set_reply(spa_, R"({"auto_reply_positive": false})");
     clock_.advance(30min);
     run_jobs();
     EXPECT_TRUE(gbp_.puts.empty());
@@ -1111,7 +1114,7 @@ TEST_F(AutoReply, AReplyPolicyChangedAfterSchedulingStopsThePost) {
 // and a post that was scheduled stops at the claim, which reads the switch.
 TEST_F(AutoReply, SwitchingTheLocationOffSwitchesAutoReplyOffAndStopsAScheduledPost) {
     switch_on(spa_, true, true);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
     ASSERT_EQ(draft(draft_id, "status"), "scheduled");
 

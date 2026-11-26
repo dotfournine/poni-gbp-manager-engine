@@ -47,13 +47,14 @@ HelpReview review(std::int64_t id, int stars, std::string text, std::vector<Topi
 PostHelpInput input_with(std::vector<HelpReview> reviews) {
     const auto rules = buffet();
     PostHelpInput input;
-    input.business_name = "Gangnam AYCE Buffet";
-    input.location_title = "Gangnam AYCE Buffet - Flushing";
+    // The business is named by its title (D-107).
+    input.location_title = "Gangnam AYCE Buffet";
+    input.business_name = input.location_title;
     input.industry_label = rules.label;
     for (const auto& topic : rules.topics) input.topic_labels[topic.id] = topic.label;
     input.audience = "Families and students from the neighbourhood";
     input.today = day_in_words(sys_days{2026y / November / 19});
-    input.settings.voice.base_style = "Warm and plain";
+    input.settings.content.base_style = "Warm and plain";
     input.counts = count_post_help(reviews, &rules);
     input.reviews = reviews_for_model(reviews, &rules);
     return input;
@@ -127,11 +128,12 @@ TEST(PostPrompts, WhatStrangersWroteIsInTheDataBlockOnly) {
         const auto& system = messages[0].content;
         const auto& user = messages[1].content;
         EXPECT_THAT(user, HasSubstr("<location_data nonce=\"abc123\">"));
-        for (const auto* secret : {"SECRET-REVIEW-WORDS", "SECRET-ITEM", "SECRET-SEARCH-PHRASE", "SECRET-POST-TITLE", "SECRET-POST-TEXT",
-                                   "Gangnam AYCE Buffet - Flushing"}) {
+        for (const auto* secret : {"SECRET-REVIEW-WORDS", "SECRET-ITEM", "SECRET-SEARCH-PHRASE", "SECRET-POST-TITLE", "SECRET-POST-TEXT"}) {
             EXPECT_THAT(user, HasSubstr(secret));
             EXPECT_THAT(system, Not(HasSubstr(secret)));
         }
+        // The title is data, and it is also how the instructions name the business (D-107).
+        EXPECT_THAT(user, HasSubstr("\"Gangnam AYCE Buffet\""));
         EXPECT_THAT(user, Not(HasSubstr("SECRET-STAFF-NAME"))) << "a staff member a reviewer named is not given to the model";
         EXPECT_THAT(user, HasSubstr(R"("topics":[{"topic":"Food quality and taste","polarity":"positive"}])")) << "a topic by its label";
         EXPECT_THAT(user, HasSubstr("\"profile_views\":300"));

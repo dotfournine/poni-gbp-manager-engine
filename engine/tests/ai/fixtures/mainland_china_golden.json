@@ -1,6 +1,6 @@
 {
- "_comment": "Captured on 2026-11-20 from the engine as it was after the simplification (prompts.cpp byte for byte as before it): one made-up location whose replies are Chinese with Mainland China phrasing, in both scripts, which no case of reply_settings_golden.json renders. Its fingerprint's inputs hold the hashes of those writer prompts. Never regenerate this file: a code change that breaks the test changed a prompt for settings that did not change.",
- "business_name": "Made-up Garden Spa",
+ "_comment": "Captured on 2026-11-20 from the engine as it was after the simplification (prompts.cpp byte for byte as before it): one made-up location whose replies are Chinese with Mainland China phrasing, in both scripts, which no case of reply_settings_golden.json renders. Its fingerprint's inputs hold the hashes of those writer prompts. Never regenerate this file: a code change that breaks the test changed a prompt for settings that did not change. Converted once to the settings bundles of D-107 (order 08): it is the zh-CN golden now, so its replies are asked for in Simplified characters only and its fingerprint was recaptured.",
+ "title": "Made-up Garden Spa",
  "industry": {
   "key": "wellness",
   "label": "Wellness",
@@ -137,18 +137,12 @@
   }
  },
  "settings": {
-  "voice": {
-   "reply_name": "",
-   "business_facts": [],
-   "sign_off": "",
-   "owner_name": "",
-   "emoji": {
-    "allowed": false,
-    "max": 0,
-    "preferred": []
-   },
-   "promos_allowed": false,
-   "contact_allowed": false,
+  "content": {
+   "business_facts": "",
+   "base_style": "",
+   "emoji_allowed": false,
+   "emoji_max": 0,
+   "emoji_preferred": [],
    "words_to_avoid": [
     "sorry for any inconvenience",
     "valued customer",
@@ -156,6 +150,20 @@
     "per our policy",
     "unfortunately you"
    ],
+   "style_notes": [],
+   "chinese_variant": "zh-CN",
+   "english_variant": "en-US",
+   "audience": ""
+  },
+  "reply": {
+   "reply_languages": [
+    "en",
+    "zh",
+    "es"
+   ],
+   "fallback_language": "en",
+   "signature": "",
+   "sign_off_name": "",
    "length": {
     "en": {
      "rating_only": {
@@ -212,30 +220,17 @@
      }
     }
    },
-   "style_notes": [],
    "example_replies": [],
+   "promos_allowed": false,
+   "contact_allowed": false,
    "temperature": 0.7,
-   "base_style": ""
-  },
-  "localization": {
-   "reply_languages": [
-    "en",
-    "zh",
-    "es"
-   ],
-   "chinese_script": "match",
-   "chinese_region": "mainland",
-   "english_variant": "us",
-   "fallback_language": "en"
-  },
-  "policy": {
-   "auto_post_positive": true,
-   "auto_post_rating_only": true,
-   "auto_post_min_stars": 4,
-   "auto_post_delay_min_minutes": 0,
-   "auto_post_delay_max_minutes": 0,
-   "auto_post_window_start": "",
-   "auto_post_window_end": ""
+   "auto_reply_positive": true,
+   "auto_reply_rating_only": true,
+   "auto_reply_min_stars": 4,
+   "auto_reply_delay_min_minutes": 0,
+   "auto_reply_delay_max_minutes": 0,
+   "auto_reply_window_start": "",
+   "auto_reply_window_end": ""
   }
  },
  "fingerprint_inputs": {
@@ -256,12 +251,7 @@
    "writer:complaint:zh-Hans": "1b8d3a3c4c16f8f3",
    "writer:severity:zh-Hans": "05e920f1d6223bfb",
    "writer:rating_only:zh-Hans": "fc961043e5060b7c",
-   "writer:rating_only_low:zh-Hans": "44b5bcc9d69fe311",
-   "writer:positive:zh-Hant": "dc303afede9ca2b6",
-   "writer:complaint:zh-Hant": "e298ab9f92efcb5b",
-   "writer:severity:zh-Hant": "7154227ec302822a",
-   "writer:rating_only:zh-Hant": "11c8fb7dc56954f4",
-   "writer:rating_only_low:zh-Hant": "3f6ec476d1e83b55"
+   "writer:rating_only_low:zh-Hans": "44b5bcc9d69fe311"
   },
   "analyzer": {
    "provider": "dashscope",
@@ -343,5 +333,5 @@
    "contact_allowed": false
   }
  },
- "fingerprint": "f9d3d55be297e17e"
+ "fingerprint": "785738a779f14f9c"
 }

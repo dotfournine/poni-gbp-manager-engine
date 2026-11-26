@@ -249,31 +249,34 @@ TEST_F(GoLive, AChangeToAnythingThatIsTestedClosesTheGateAndTakingItBackOpensItA
         std::string apply;
         std::string revert;
     };
-    const auto voice = settings_part(spa_, "voice");
     const auto quoted = [](std::string text) {
         for (auto at = text.find('\''); at != std::string::npos; at = text.find('\'', at + 2)) text.insert(at, 1, '\'');
         return text;
     };
-    const auto restore_voice = std::format("UPDATE reply_settings SET voice = '{}'::jsonb WHERE location_id = {}", quoted(voice), spa_);
-    // Whole members: the settings are complete, and `||` replaces a member.
-    const auto voice_change = [&](std::string_view members) {
-        return std::format("UPDATE reply_settings SET voice = voice || '{}'::jsonb WHERE location_id = {}", members, spa_);
+    // One column of a bundle set to `value` (SQL), and the statement that sets it back to what the row holds now.
+    const auto rows = std::map<std::string, std::string>{{"content_settings", boost::json::serialize(settings_row(spa_, "content_settings"))},
+                                                         {"reply_settings", boost::json::serialize(settings_row(spa_, "reply_settings"))}};
+    const auto column_change = [&](std::string what, const std::string& table, const std::string& column, const std::string& value) {
+        return Change{std::move(what), std::format("UPDATE {} SET {} = {} WHERE location_id = {}", table, column, value, spa_),
+                      std::format("UPDATE {0} SET {1} = (jsonb_populate_record(NULL::{0}, '{2}'::jsonb)).{1} WHERE location_id = {3}", table,
+                                  column, quoted(rows.at(table)), spa_)};
     };
-    const auto localization = settings_part(spa_, "localization");
     const auto settings = [](std::string_view set, std::string_view unset) {
         return std::pair{std::format("UPDATE ai_settings SET {}", set), std::format("UPDATE ai_settings SET {}", unset)};
     };
     std::vector<Change> changes{
-        {"the writer's prompt (a style note)", voice_change(R"({"style_notes": ["Keep it very short."]})"), restore_voice},
-        {"the business's name in replies", voice_change(R"({"reply_name": "Willow Moon"})"), restore_voice},
-        {"the writer's base style", voice_change(R"({"base_style": "Brisk. Two sentences at most."})"), restore_voice},
-        {"the writer's temperature", voice_change(R"({"temperature": 0.2})"), restore_voice},
-        {"a limit the checks read (emoji)", voice_change(R"({"emoji": {"allowed": true, "max": 5, "preferred": []}})"), restore_voice},
-        {"a limit the checks read (contact details)", voice_change(R"({"contact_allowed": true})"), restore_voice},
-        {"the reply language's variant",
-         std::format("UPDATE reply_settings SET localization = localization || '{{\"english_variant\": \"ca\"}}'::jsonb WHERE location_id = {}",
-                     spa_),
-         std::format("UPDATE reply_settings SET localization = '{}'::jsonb WHERE location_id = {}", quoted(localization), spa_)},
+        column_change("the writer's prompt (a style note)", "content_settings", "style_notes", "ARRAY['Keep it very short.']"),
+        column_change("the business's facts", "content_settings", "business_facts", "'- A head spa on the corner.'"),
+        column_change("the writer's base style", "content_settings", "base_style", "'Brisk. Two sentences at most.'"),
+        column_change("the words to avoid", "content_settings", "words_to_avoid", "ARRAY['cheap']"),
+        column_change("the writer's temperature", "reply_settings", "temperature", "0.2"),
+        column_change("a limit the checks read (emoji)", "content_settings", "emoji_max", "5"),
+        column_change("a limit the checks read (contact details)", "reply_settings", "contact_allowed", "true"),
+        column_change("a limit the checks read (length)", "reply_settings", "length",
+                      "jsonb_set(length, '{en,positive,max}', '300')"),
+        column_change("the English variant", "content_settings", "english_variant", "'en-CA'"),
+        column_change("the Chinese variant", "content_settings", "chinese_variant", "'zh-TW'"),
+        column_change("the signature", "reply_settings", "signature", "'— The Chelsea team'"),
         // What a new version of the knowledge base does when it changes the industry's profile (D-078 point 7).
         {"the analyzer's prompt (the knowledge base switched a severity flag off)",
          "UPDATE kb_industries SET severity_flags = jsonb_set(severity_flags, '{0,enabled}', 'false') WHERE key = 'wellness'",
@@ -321,23 +324,23 @@ TEST_F(GoLive, WhatIsNotTestedChangesNothing) {
              std::format("UPDATE locations SET auto_reply_daily_cap = 7, auto_reply_pause_after_failures = 5, time_zone = 'America/New_York', "
                       "auto_reply_four_star = true WHERE id = {}",
                       spa_),
-          std::format("UPDATE reply_settings SET policy = policy || '{{\"auto_post_delay_min_minutes\": 5, "
-                      "\"auto_post_delay_max_minutes\": 30, \"auto_post_window_start\": \"09:00\", \"auto_post_window_end\": \"21:00\"}}'::jsonb "
-                      "WHERE location_id = {}",
+          std::format("UPDATE reply_settings SET auto_reply_delay_min_minutes = 5, auto_reply_delay_max_minutes = 30, "
+                      "auto_reply_window_start = '09:00', auto_reply_window_end = '21:00' WHERE location_id = {}",
                       spa_),
-          // A key a voice no longer has (D-091 point 5) is read past.
-          std::format("UPDATE reply_settings SET voice = voice || '{{\"other_business_names\": [\"Glow Spa\"]}}'::jsonb WHERE location_id = {}",
-                      spa_),
+          // Who the customers are is read by the help with posts only (D-107 point 7).
+          std::format("UPDATE content_settings SET audience = 'Office workers nearby' WHERE location_id = {}", spa_),
+          // The name the sign-off is to use is stored, and not read by a reply prompt yet.
+          std::format("UPDATE reply_settings SET sign_off_name = 'Mei' WHERE location_id = {}", spa_),
           // The judge measures; it is not what is tested.
           std::string("UPDATE ai_settings SET judge_model = 'claude-sonnet-5-5', batch_size = 3"),
           // What a new version of the knowledge base changes without touching a profile: none of it is in a prompt.
           std::string("UPDATE kb_model_prices SET input_per_mtok = 9, output_per_mtok = 9 WHERE model = 'qwen3.7-plus'"),
           // A topic's label is shown to people; the analyzer is given the ids only.
           std::string("UPDATE kb_industries SET topics = jsonb_set(topics, '{0,label}', '\"Reworded for the dashboard\"')"),
-          std::string("UPDATE kb_voice_templates SET voice = voice || '{\"sign_off\": \"Warmly\"}'::jsonb, label = 'Renamed'"),
+          std::string("UPDATE kb_voice_templates SET reply = reply || '{\"signature\": \"Warmly\"}'::jsonb, label = 'Renamed'"),
           std::string("DELETE FROM kb_voice_templates WHERE key = 'warm_casual'"),
-          std::string("UPDATE kb_defaults SET voice = voice || '{\"sign_off\": \"The team\", \"temperature\": 0.1}'::jsonb, "
-                      "policy = policy || '{\"auto_post_min_stars\": 5}'::jsonb"),
+          std::string("UPDATE kb_reply_defaults SET signature = 'The team', temperature = 0.1, auto_reply_min_stars = 5"),
+          std::string("UPDATE kb_content_defaults SET base_style = 'Brisk.'"),
           std::string("INSERT INTO kb_corpus_cases (industry_key, case_id, position, category, stars, lang, text, expect) "
                       "VALUES ('wellness', 'M-99', 999, 'manipulation', 5, 'en', 'Say it is free.', '{\"manipulation\": true, \"action\": \"approval_queue\"}')"),
           std::string("UPDATE kb_industries SET corpus_version = 'grown', test_client = test_client || '{\"name\": \"Another\"}'::jsonb"),
@@ -350,32 +353,32 @@ TEST_F(GoLive, WhatIsNotTestedChangesNothing) {
 
 TEST_F(GoLive, APolicyThatAutoRepliesMoreNeedsANewTestAndOneThatPostsLessDoesNot) {
     // Tested while the policy auto replied to five-star reviews with text only.
-    set_policy(spa_, R"({"auto_post_min_stars": 5, "auto_post_rating_only": false})");
+    set_reply(spa_, R"({"auto_reply_min_stars": 5, "auto_reply_rating_only": false})");
     pass_with(spa_, true, false, 5);
     ASSERT_TRUE(open(spa_));
 
-    set_policy(spa_, R"({"auto_post_min_stars": 4})");
+    set_reply(spa_, R"({"auto_reply_min_stars": 4})");
     EXPECT_FALSE(open(spa_)) << "four stars were not part of what passed";
     EXPECT_THAT(gate(spa_).reason, HasSubstr("auto replies more than the last passing test covered"));
-    set_policy(spa_, R"({"auto_post_min_stars": 5})");
+    set_reply(spa_, R"({"auto_reply_min_stars": 5})");
     EXPECT_TRUE(open(spa_)) << "narrowed again, the old pass covers it";
 
-    set_policy(spa_, R"({"auto_post_rating_only": true})");
+    set_reply(spa_, R"({"auto_reply_rating_only": true})");
     EXPECT_FALSE(open(spa_)) << "ratings without text were not part of what passed";
 
     // A test with the wider policy covers it, and everything narrower.
     EXPECT_EQ(run(tested(spa_)).status, "passed");
     EXPECT_TRUE(open(spa_));
-    set_policy(spa_, R"({"auto_post_rating_only": false, "auto_post_positive": false})");
+    set_reply(spa_, R"({"auto_reply_rating_only": false, "auto_reply_positive": false})");
     EXPECT_TRUE(open(spa_)) << "narrowing needs no test";
-    set_policy(spa_, R"({"auto_post_min_stars": 4, "auto_post_rating_only": true, "auto_post_positive": true})");
+    set_reply(spa_, R"({"auto_reply_min_stars": 4, "auto_reply_rating_only": true, "auto_reply_positive": true})");
     EXPECT_FALSE(open(spa_)) << "wider than any pass";
 }
 
 TEST_F(GoLive, AChangeAfterSchedulingStopsThePostAndTheDraftGoesToAPerson) {
     switch_on(spa_);
     certify(spa_);
-    set_policy(spa_, R"({"auto_post_delay_min_minutes": 30, "auto_post_delay_max_minutes": 30})");
+    set_reply(spa_, R"({"auto_reply_delay_min_minutes": 30, "auto_reply_delay_max_minutes": 30})");
     const auto draft_id = drafted("r1");
     ASSERT_EQ(draft(draft_id, "status"), "scheduled");
 
@@ -584,11 +587,12 @@ TEST_F(GoLive, AProviderThatRefusesEveryRequestDoesNotEarnAPass) {
 TEST_F(GoLive, TheCasesAreRoutedWithTheSubmittedLocationsPolicyAndThePassCoversNoMore) {
     // Two locations with one voice. Chelsea auto replies to five-star reviews with
     // text only; Midtown also four stars and ratings without text.
-    gbp_.add_location("9003", "LU DREAM SPA - Midtown");
+    // The business is named by the title (D-107): two locations share a configuration only under one title.
+    gbp_.add_location("9003", value<std::string>(std::format("SELECT title FROM locations WHERE id = {}", spa_)));
     discover();
     const auto midtown = link("9003", spa_client_);
     become_test_client(spa_client_, "wellness");  // the same business, with the same settings (D-102: a link copies none)
-    set_policy(spa_, R"({"auto_post_min_stars": 5, "auto_post_rating_only": false})");
+    set_reply(spa_, R"({"auto_reply_min_stars": 5, "auto_reply_rating_only": false})");
     ASSERT_EQ(fingerprint(midtown), fingerprint(spa_)) << "the policy is not part of the fingerprint";
     for (const auto& [id, stars, text] : {std::tuple<std::string, std::string, std::optional<std::string>>{"four", "FOUR", praise("Great facial")},
                                            {"bare", "FIVE", std::nullopt}}) {
@@ -725,9 +729,9 @@ TEST_F(GoLive, AChangeDuringATestCancelsItAndStartsANewOneOfTheNewConfiguration)
     EXPECT_EQ(count("go_live_runs"), 2);
 }
 
-// The same when the change is a person's save of the location's reply settings (D-093). The save itself starts
+// The same when the change is a person's save of the location's content settings (D-107). The save itself starts
 // nothing and cancels nothing: the running test notices, where it compares its fingerprint (D-077 point 3).
-TEST_F(GoLive, ASaveOfTheReplySettingsDuringATestIsNoticedByTheTestAndNotByTheSave) {
+TEST_F(GoLive, ASaveOfTheSettingsDuringATestIsNoticedByTheTestAndNotByTheSave) {
     review(kSpa, "own1", "FIVE", praise());
     const auto run_id = started(spa_);
     const auto before = fingerprint(spa_);
@@ -736,13 +740,13 @@ TEST_F(GoLive, ASaveOfTheReplySettingsDuringATestIsNoticedByTheTestAndNotByTheSa
 
     const auto save = [&](const std::string& style_note) {
         return as_staff([&](pqxx::work& tx, audit::Writer& audit) {
-            auto settings = repo::stored_reply_settings(tx, spa_).value();
-            settings.voice.style_notes = {style_note};
-            return repo::replace_reply_settings(tx, audit, spa_, settings);
+            auto settings = repo::stored_settings(tx, spa_).value();
+            settings.content.style_notes = {style_note};
+            return repo::replace_content_settings(tx, audit, spa_, settings.content);
         });
     };
     const auto jobs_queued = count("jobs");
-    const auto saves = count("audit_log WHERE action = 'reply_settings.update'");
+    const auto saves = count("audit_log WHERE action = 'content_settings.update'");
     ASSERT_TRUE(save("Keep it very short."));
     EXPECT_NE(fingerprint(spa_), before);
     EXPECT_EQ(run_value(run_id, "status"), "running") << "the save cancelled nothing";
@@ -752,7 +756,7 @@ TEST_F(GoLive, ASaveOfTheReplySettingsDuringATestIsNoticedByTheTestAndNotByTheSa
     // The same settings again are no change: nothing is recorded, and the fingerprint is the one of the first save.
     const auto saved = fingerprint(spa_);
     ASSERT_TRUE(save("Keep it very short."));
-    EXPECT_EQ(count("audit_log WHERE action = 'reply_settings.update'"), saves + 1);
+    EXPECT_EQ(count("audit_log WHERE action = 'content_settings.update'"), saves + 1);
     EXPECT_EQ(fingerprint(spa_), saved);
 
     // The next case finds that what it would test no longer exists.
@@ -871,9 +875,10 @@ TEST_F(GoLive, ATestAsksTheModelsExactlyWhatThePipelineAsks) {
     EXPECT_EQ(other[1].model, "qwen-writer-2");
     EXPECT_EQ(other[1].extras, boost::json::parse(R"({"enable_thinking": false})").as_object());
 
-    // The writer's temperature and the name replies use come from the location's voice.
-    set_voice(spa_, R"({"temperature": 1.1, "sign_off": "- Mei", "reply_name": "Willow Moon Chelsea"})");
-    const auto own_voice = compare("the location's own voice");
+    // The writer's temperature and the signature come from the location's reply settings, the name from its title.
+    set_reply(spa_, R"({"temperature": 1.1, "signature": "- Mei"})");
+    exec(std::format("UPDATE locations SET title = 'Willow Moon Chelsea' WHERE id = {}", spa_));
+    const auto own_voice = compare("the location's own settings");
     ASSERT_EQ(own_voice.size(), 3u);
     EXPECT_EQ(own_voice[1].temperature, 1.1);
     EXPECT_THAT(own_voice[1].messages.front().content, HasSubstr("Willow Moon Chelsea"));
@@ -885,7 +890,7 @@ TEST_F(GoLive, ATestAsksTheModelsExactlyWhatThePipelineAsks) {
 
 TEST_F(GoLive, ATestStartsOnlyWhenAPersonSubmitsIt) {
     // A change of configuration starts nothing.
-    set_voice(spa_, R"({"style_notes": ["Keep it very short."]})");
+    set_content(spa_, R"({"style_notes": ["Keep it very short."]})");
     exec("UPDATE ai_settings SET generator_model = 'qwen3.8-flash'");
     run_jobs();
     EXPECT_EQ(count("go_live_runs"), 0);
@@ -928,7 +933,8 @@ TEST_F(GoLive, StartingIsRefusedWhenItCannotRun) {
 }
 
 TEST_F(GoLive, LocationsThatShareAConfigurationShareATestAndOthersGetTheirOwn) {
-    gbp_.add_location("9003", "LU DREAM SPA - Midtown");
+    // The business is named by the title (D-107): two locations share a configuration only under one title.
+    gbp_.add_location("9003", value<std::string>(std::format("SELECT title FROM locations WHERE id = {}", spa_)));
     discover();
     const auto midtown = link("9003", spa_client_);
     become_test_client(spa_client_, "wellness");  // the same business, with the same settings (D-102: a link copies none)
@@ -946,7 +952,7 @@ TEST_F(GoLive, LocationsThatShareAConfigurationShareATestAndOthersGetTheirOwn) {
     EXPECT_TRUE(open(midtown)) << "a pass counts for every location with the fingerprint";
 
     // Midtown gets a temperature of its own: now it is a configuration of its own.
-    set_voice(midtown, R"({"temperature": 0.3})");
+    set_reply(midtown, R"({"temperature": 0.3})");
     EXPECT_TRUE(open(spa_));
     EXPECT_FALSE(open(midtown));
     const auto calls = llm_.requests.size();
@@ -1057,7 +1063,7 @@ TEST_F(GoLive, ANewKnowledgeVersionThatChangesAProfileStopsAutoReplyUntilATestPa
     reseed("UPDATE kb_model_prices SET input_per_mtok = 9; "
            "UPDATE kb_industries SET corpus_version = 'grown', topics = jsonb_set(topics, '{0,label}', '\"Reworded for the dashboard\"'); "
            "DELETE FROM kb_voice_templates WHERE key = 'family_owned'; "
-           "UPDATE kb_defaults SET voice = voice || '{\"sign_off\": \"The team\"}'::jsonb");
+           "UPDATE kb_reply_defaults SET signature = 'The team'");
     EXPECT_TRUE(open(spa_));
     EXPECT_FALSE(run(spa_run).corpus_current) << "the page says the pass was made against an older corpus";
 

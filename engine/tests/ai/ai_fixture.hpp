@@ -9,7 +9,7 @@
 #include "domain/corpus.hpp"
 #include "domain/industry.hpp"
 #include "domain/models.hpp"
-#include "domain/reply_settings.hpp"
+#include "domain/settings.hpp"
 
 #include <boost/json/parse.hpp>
 #include <boost/json/value.hpp>
@@ -47,7 +47,7 @@ inline boost::json::value load_json_fixture(const std::string& name) {
 // knowledge/industries/<key>/test_client.json says what the business is as a
 // person would set it up in the form: start from the defaults, take a voice
 // template, then set a few fields. The engine stores and reads complete
-// settings only (D-093), so the laying of one on the other is done here.
+// settings only (D-107), so the laying of one on the other is done here.
 
 // `base` with every non-null member of `over` laid on top. Objects merge
 // member by member; lists and plain values are replaced whole.
@@ -64,30 +64,39 @@ inline boost::json::object merge_layer(boost::json::object base, const boost::js
     return base;
 }
 
-// What taking a voice template does to a voice, as the dashboard's form does
-// it: the template's values replace the voice's, and the writer's base style
-// becomes the template's label and description.
-inline boost::json::object apply_template(boost::json::object voice, std::string_view label, std::string_view description,
-                                          const boost::json::object& template_voice) {
-    voice = merge_layer(std::move(voice), template_voice);
-    voice["base_style"] = std::format("{}. {}", label, description);
-    return voice;
+// What taking a voice template does to the content settings, as the
+// dashboard's form does it: the template's values replace the bundle's, and
+// the writer's base style becomes the template's label and description.
+inline boost::json::object apply_template(boost::json::object content, std::string_view label, std::string_view description,
+                                          const boost::json::object& template_content) {
+    content = merge_layer(std::move(content), template_content);
+    content["base_style"] = std::format("{}. {}", label, description);
+    return content;
 }
 
-// The business's complete settings: the defaults ({"voice", "localization",
-// "policy"}), the template it names laid over the voice, then what it sets.
+// Two stored bundles ({"content", "reply"}) as the engine's structs read them; what is wrong otherwise.
+inline std::expected<domain::ResolvedSettings, std::string> read_bundles(const boost::json::value& content, const boost::json::value& reply) {
+    return core::from_json<domain::ResolvedSettings>(boost::json::object{{"content", content}, {"reply", reply}});
+}
+
+// The business's complete settings: the defaults ({"content", "reply"}), the
+// template it names laid over each bundle, then what it sets.
 inline domain::ResolvedSettings business_settings(const boost::json::object& defaults,
                                                   const std::optional<model::KnowledgeVoiceTemplate>& taken,
                                                   const boost::json::object& business) {
-    auto voice = defaults.at("voice").as_object();
-    if (taken) voice = apply_template(std::move(voice), taken->label, taken->description, taken->voice.as_object());
-    voice = merge_layer(std::move(voice), business.at("voice").as_object());
-    const auto settings =
-        domain::read_settings(boost::json::value(std::move(voice)),
-                              boost::json::value(merge_layer(defaults.at("localization").as_object(), business.at("localization").as_object())),
-                              boost::json::value(merge_layer(defaults.at("policy").as_object(), business.at("policy").as_object())));
+    auto content = defaults.at("content").as_object();
+    auto reply = defaults.at("reply").as_object();
+    if (taken) {
+        content = apply_template(std::move(content), taken->label, taken->description, taken->content.as_object());
+        reply = merge_layer(std::move(reply), taken->reply.as_object());
+    }
+    content = merge_layer(std::move(content), business.at("content").as_object());
+    reply = merge_layer(std::move(reply), business.at("reply").as_object());
+    const auto settings = read_bundles(content, reply);
     if (!settings) throw std::runtime_error("a pack's test client is not complete: " + settings.error());
-    if (const auto problem = domain::check_settings(*settings)) throw std::runtime_error("a pack's test client is not valid: " + *problem);
+    for (const auto& problem : {domain::check_content_settings(settings->content), domain::check_reply_settings(settings->reply)}) {
+        if (problem) throw std::runtime_error("a pack's test client is not valid: " + *problem);
+    }
     return *settings;
 }
 
@@ -96,7 +105,7 @@ struct ClientSetup {
     std::string name;
     domain::IndustryRules industry;
     domain::ResolvedSettings settings;
-    // The voice's reply_name: how the business is named in replies.
+    // How the business is named in replies: its title, the pack's name (D-107).
     std::string business_name;
 };
 
@@ -153,7 +162,7 @@ public:
 
     // The defaults alone: what the first location of a client starts with.
     std::expected<domain::ResolvedSettings, std::string> default_settings() const {
-        return domain::read_settings(defaults_.at("voice"), defaults_.at("localization"), defaults_.at("policy"));
+        return read_bundles(defaults_.at("content"), defaults_.at("reply"));
     }
 
     model::KnowledgeVoiceTemplate voice_template(std::string_view key) const {
@@ -169,7 +178,7 @@ public:
                           .industry = industry(industry_key),
                           .settings = business_settings(defaults_.as_object(), taken, business),
                           .business_name = {}};
-        setup.business_name = setup.settings.voice.reply_name;
+        setup.business_name = setup.name;
         return setup;
     }
 
