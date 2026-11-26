@@ -93,7 +93,7 @@ TEST_F(Push, APushRuleIsForEscalationsAndSystemProblemsOnAnEngineThatCanPush) {
     EXPECT_EQ(make_rule("system_problem", "push", {"x@xvisionmediaus.com"}, false).error().code, "push_not_configured");
     // The database holds the same rule.
     EXPECT_THROW(exec("INSERT INTO notification_rules (event_type, channel, recipients, created_at, updated_at) "
-                      "VALUES ('approval_needed', 'push', '[]', now(), now())"),
+                      "VALUES ('approval_needed', 'push', '{}', now(), now())"),
                  pqxx::check_violation);
 }
 

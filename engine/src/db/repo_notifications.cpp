@@ -118,7 +118,7 @@ bool valid_email(std::string_view address) {
 int emit(pqxx::transaction_base& tx, const NotificationEvent& event, core::TimePoint now) {
     const auto now_text = to_timestamptz(now);
     // A location's own rule and the rule for every location both apply.
-    const auto rules = tx.exec("SELECT id, channel, recipients::text FROM notification_rules "
+    const auto rules = tx.exec("SELECT id, channel, array_to_json(recipients)::text FROM notification_rules "
                                "WHERE event_type = $1 AND enabled AND (location_id IS NULL OR location_id = $2) ORDER BY id",
                                pqxx::params{event.type, event.location_id});
     int created = 0;
@@ -233,9 +233,10 @@ Result<model::NotificationRule> create_rule(pqxx::transaction_base& tx, audit::W
     }
     const auto now = to_timestamptz(audit.now());
     const auto rows = tx.exec(
-        "INSERT INTO notification_rules (event_type, location_id, channel, recipients, enabled, created_at, updated_at) "
-        "VALUES ($1, $2, $6, $3::jsonb, $4, $5::timestamptz, $5::timestamptz) "
-        "ON CONFLICT (event_type, channel, coalesce(location_id, 0)) DO NOTHING RETURNING id",
+        std::format("INSERT INTO notification_rules (event_type, location_id, channel, recipients, enabled, created_at, updated_at) "
+                    "VALUES ($1, $2, $6, {}, $4, $5::timestamptz, $5::timestamptz) "
+                    "ON CONFLICT (event_type, channel, coalesce(location_id, 0)) DO NOTHING RETURNING id",
+                    db::text_array("$3")),
         pqxx::params{rule.event_type, location_id, db::json_list(*recipients), rule.enabled.value_or(true), now, channel});
     if (rows.empty()) {
         return conflict("rule_exists", "A rule for this event type, channel and location already exists; change that one.");
@@ -261,7 +262,8 @@ Result<model::NotificationRule> update_rule(pqxx::transaction_base& tx, audit::W
         audit.nothing_changed();
         return before;
     }
-    tx.exec("UPDATE notification_rules SET recipients = $2::jsonb, enabled = $3, updated_at = $4::timestamptz WHERE id = $1",
+    tx.exec(std::format("UPDATE notification_rules SET recipients = {}, enabled = $3, updated_at = $4::timestamptz WHERE id = $1",
+                        db::text_array("$2")),
             pqxx::params{id, db::json_list(recipients), enabled, to_timestamptz(audit.now())})
         .no_rows();
     auto after = *get_rule(tx, id);
@@ -310,7 +312,7 @@ std::optional<model::NotificationDelivery> get_delivery(pqxx::transaction_base& 
 
 std::vector<std::string> report_recipients(pqxx::transaction_base& tx, std::int64_t location_id) {
     std::vector<std::string> out;
-    for (const auto& row : tx.exec("SELECT a.address FROM notification_rules n, jsonb_array_elements_text(n.recipients) a(address) "
+    for (const auto& row : tx.exec("SELECT a.address FROM notification_rules n, unnest(n.recipients) a(address) "
                                    "WHERE n.event_type = $1 AND n.channel = $2 AND n.enabled AND n.location_id = $3",
                                    pqxx::params{kEventLocationReport, kEmailChannel, location_id})) {
         out.push_back(row[0].as<std::string>());

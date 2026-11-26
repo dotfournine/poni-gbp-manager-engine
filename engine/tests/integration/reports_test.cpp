@@ -793,10 +793,10 @@ TEST_F(Reports, ARuleForALocationsReportsMustNameALocation) {
               "location_not_found");
     // The database holds the same rule, whatever the code does.
     EXPECT_THROW(exec("INSERT INTO notification_rules (event_type, recipients, created_at, updated_at) "
-                      "VALUES ('location_report', '[\"x@example.com\"]', now(), now())"),
+                      "VALUES ('location_report', ARRAY['x@example.com'], now(), now())"),
                  pqxx::check_violation);
     EXPECT_THROW(exec("INSERT INTO notification_rules (event_type, location_id, recipients, created_at, updated_at) "
-                      "VALUES ('client_report', 1, '[\"x@example.com\"]', now(), now())"),
+                      "VALUES ('client_report', 1, ARRAY['x@example.com'], now(), now())"),
                  pqxx::check_violation);
 }
 
