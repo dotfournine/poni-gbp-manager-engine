@@ -275,7 +275,8 @@ std::optional<ReportMail> store_built_report(pqxx::transaction_base& tx, std::in
     if (rows.empty() || rows[0][0].as<std::string>() != "pending") return std::nullopt;
     // Checked here, so that `done` is written before any email and in the one run that made the report ready:
     // a schedule's send happens at most once, and nothing is checked again between `done` and the send.
-    auto mail = prepare_report_send(tx, report_id, std::nullopt, link_base);
+    // To its own schedule's recipients, as that schedule holds them now (D-111).
+    auto mail = prepare_report_send(tx, report_id, std::nullopt, link_base, SendFor::schedule);
     if (!mail) return std::nullopt;  // pending: a person can send it, and the 409 they would get says why
     tx.exec("UPDATE reports SET auto_send_status = 'done' WHERE id = $1", pqxx::params{report_id}).no_rows();
     return std::move(*mail);
@@ -288,8 +289,38 @@ void fail_report(pqxx::transaction_base& tx, std::int64_t report_id, const std::
 
 // ---- sending -------------------------------------------------------------------------
 
+namespace {
+
+// The addresses the query gives, sorted here, by bytes (the database's collation would not sort the punctuation
+// of an address the same everywhere), each once.
+std::vector<std::string> sorted_addresses(pqxx::transaction_base& tx, pqxx::zview query, const pqxx::params& params) {
+    std::vector<std::string> out;
+    for (const auto& row : tx.exec(query, params)) out.push_back(row[0].as<std::string>());
+    std::ranges::sort(out);
+    const auto repeats = std::ranges::unique(out);
+    out.erase(repeats.begin(), repeats.end());
+    return out;
+}
+
+// The recipients of the schedule that made the report. The schedule must be of the report's own location as
+// well as the report's: if the two ever diverged, the send finds nobody rather than another location's list.
+std::vector<std::string> schedule_recipients(pqxx::transaction_base& tx, std::int64_t report_id) {
+    return sorted_addresses(tx,
+                            "SELECT a.address FROM reports p "
+                            "JOIN report_schedules s ON s.id = p.schedule_id AND s.location_id = p.location_id, "
+                            "unnest(s.recipients) a(address) WHERE p.id = $1",
+                            pqxx::params{report_id});
+}
+
+}  // namespace
+
+std::vector<std::string> report_recipients(pqxx::transaction_base& tx, std::int64_t location_id) {
+    return sorted_addresses(tx, "SELECT a.address FROM report_schedules s, unnest(s.recipients) a(address) WHERE s.location_id = $1",
+                            pqxx::params{location_id});
+}
+
 Result<ReportMail> prepare_report_send(pqxx::transaction_base& tx, std::int64_t report_id,
-                                       const std::optional<std::vector<std::string>>& only, std::string_view link_base) {
+                                       const std::optional<std::vector<std::string>>& only, std::string_view link_base, SendFor who) {
     if (only && only->empty()) return invalid("\"recipients\" must name at least one address; leave it out to send to all.");
     const auto rows = tx.exec("SELECT p.status, p.location_id, l.enabled, p.page_object, p.data::text "
                               "FROM reports p JOIN locations l ON l.id = p.location_id WHERE p.id = $1 FOR UPDATE OF p",
@@ -311,15 +342,18 @@ Result<ReportMail> prepare_report_send(pqxx::transaction_base& tx, std::int64_t 
     if (link_base.empty()) {
         return no_public_bucket("the report has no page to link to");
     }
-    // Still the location's `location_report` rules: a schedule's own recipients are stored and not read here yet.
-    auto recipients = report_recipients(tx, location_id);
-    if (recipients.empty()) return conflict("no_recipients", "This location has no recipients for its reports. Add them first.");
+    const bool by_person = who == SendFor::person;
+    auto recipients = by_person ? report_recipients(tx, location_id) : schedule_recipients(tx, report_id);
+    if (recipients.empty()) {
+        return conflict("no_recipients", by_person ? "This location's report schedules name no recipient. Add one to a schedule first."
+                                                   : "The schedule that made this report names no recipient.");
+    }
     if (only) {
         std::vector<std::string> wanted;
         for (const auto& raw : *only) {
             auto address = normal_address(raw);
             if (!std::ranges::binary_search(recipients, address)) {
-                return invalid(std::format("\"{}\" is not a recipient of this location's reports.", address));
+                return invalid(std::format("\"{}\" is not a recipient of this location's report schedules.", address));
             }
             wanted.push_back(std::move(address));
         }
