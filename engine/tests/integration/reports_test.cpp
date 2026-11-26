@@ -289,7 +289,7 @@ TEST_F(Reports, NamedStaffAreListedApartFromTheItems) {
 
     const auto id = generate(chelsea_);
     const auto d = data(id);
-    EXPECT_EQ(d.at("version").as_int64(), 3);
+    EXPECT_EQ(d.at("version").as_int64(), 4);
     // The therapists are not items; the treatment is.
     ASSERT_EQ(d.at("items_praised").as_array().size(), 1u);
     EXPECT_EQ(d.at("items_praised").at(0).at("label").as_string(), "Head spa");
