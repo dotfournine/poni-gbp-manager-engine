@@ -47,14 +47,12 @@ model::AutoReplyLocation complete(pqxx::transaction_base& tx, model::AutoReplyLo
         a.timing_problem = "The location's reply settings can't be read.";
         return a;
     }
-    const auto zone = tx.query_value<OptString>("SELECT time_zone FROM locations WHERE id = $1", pqxx::params{a.location_id});
+    const auto zone = tx.query_value<std::string>("SELECT time_zone FROM locations WHERE id = $1", pqxx::params{a.location_id});
     const auto timing = domain::posting_timing(settings->reply);
     if (!timing) {
         a.timing_problem = std::format("The reply policy's timing can't be used: {}.", timing.error());
-    } else if (timing->window && !zone) {
-        a.timing_problem = "The reply policy has a posting window, which needs the location's time zone.";
-    } else if (timing->window && !domain::known_time_zone(*zone)) {
-        a.timing_problem = std::format("The time zone '{}' is not known on this server.", *zone);
+    } else if (timing->window && !domain::known_time_zone(zone)) {
+        a.timing_problem = std::format("The time zone '{}' is not known on this server.", zone);
     }
     return a;
 }

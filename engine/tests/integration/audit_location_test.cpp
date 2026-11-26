@@ -17,7 +17,6 @@ protected:
         ApiTest::SetUp();
         browser_ = sign_in();
         spa_and_buffet();
-        exec("UPDATE locations SET time_zone = 'America/New_York'");
         user_ = value<std::int64_t>("SELECT id FROM users WHERE email = 'staff@xvisionmediaus.com'");
     }
 

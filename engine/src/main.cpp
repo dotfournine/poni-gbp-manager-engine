@@ -263,8 +263,11 @@ int run(const core::Config& config) {
         log::warn("no model provider is configured (PONI_LLM_<NAME>_BASE_URL and PONI_LLM_<NAME>_API_KEY): reviews are not analyzed");
     }
 
+    // A newly discovered location's time zone (D-109), with a key and no token.
+    google::HttpPlaceTimeZones places(http_client, limiter, config.google_places_api_key, config.google_mock());
+
     // ---- jobs ------------------------------------------------------------------
-    jobs::Sync sync(database, clock, gbp_reader, queue,
+    jobs::Sync sync(database, clock, gbp_reader, places, queue,
                     {.discovery_interval = config.location_discovery_interval,
                      .poll_tick = config.review_poll_tick,
                      .review_poll_interval = config.review_poll_interval,

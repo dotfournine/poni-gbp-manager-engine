@@ -44,7 +44,7 @@ protected:
         notifier_.emplace(db(), clock_, jobs::NotifierOptions{.public_url = "http://localhost:5173", .lifetimes = {}});
         notifier_->add_channel(channel_);
         notifier_->set_push(push_);
-        sync_.emplace(db(), clock_, gbp_, queue(), jobs::SyncOptions{});
+        sync_.emplace(db(), clock_, gbp_, places_, queue(), jobs::SyncOptions{});
         jobs::install(registry_, *sync_, nullptr);
         jobs::install(registry_, *pipeline_);
         jobs::install(registry_, *poster_);

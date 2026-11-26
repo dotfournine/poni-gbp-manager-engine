@@ -63,6 +63,18 @@ TEST(PostingSchedule, ATimeOutsideMovesToTheNextOpening) {
     EXPECT_EQ(moved(utc(2026y / November / 11, 4h + 30min), kDaytime, kLosAngeles), utc(2026y / November / 11, 4h + 30min));
 }
 
+// A zone without daylight saving: the window is the same hours in UTC all year, on the nights New York changes too.
+TEST(PostingSchedule, AWindowInAZoneWithoutDaylightSavingKeepsItsHoursAllYear) {
+    constexpr std::string_view tokyo = "Asia/Tokyo";  // UTC+9: 09:00 to 21:00 is 00:00 to 12:00 UTC
+    for (const auto day : {2027y / January / 15, 2027y / March / 14, 2027y / July / 1, 2027y / November / 7}) {
+        EXPECT_TRUE(in_window(utc(day, 0h), kDaytime, tokyo).value()) << "09:00 in Tokyo";
+        EXPECT_TRUE(in_window(utc(day, 11h + 59min), kDaytime, tokyo).value()) << "20:59 in Tokyo";
+        EXPECT_FALSE(in_window(utc(day, 12h), kDaytime, tokyo).value()) << "21:00 in Tokyo";
+        // 22:00 in Tokyo waits for 09:00 the next day.
+        EXPECT_EQ(moved(utc(day, 13h), kDaytime, tokyo), utc(year_month_day{sys_days{day} + days{1}}, 0h));
+    }
+}
+
 TEST(PostingSchedule, AWindowMayCrossMidnight) {
     const PostingWindow evening{18 * 60, 2 * 60};  // 18:00 to 02:00
     // 01:00 in New York is inside; 03:00 is not, and waits for 18:00.

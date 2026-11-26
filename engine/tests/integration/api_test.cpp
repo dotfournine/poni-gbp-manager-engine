@@ -373,6 +373,7 @@ TEST_F(Api, ALocationIsSwitchedOnAndOffByAPerson) {
     const auto spa = location_id("9001");
     const auto target = "/api/locations/" + std::to_string(spa);
     EXPECT_FALSE(read(target).at("enabled").as_bool()) << "off at discovery";
+    EXPECT_EQ(read(target).at("time_zone").as_string(), "America/New_York") << "read from Google Places at discovery (D-109)";
     EXPECT_EQ(read("/api/locations?enabled=false").at("total").as_int64(), 2);
     EXPECT_EQ(get("/api/locations?enabled=yes", browser_).status, 400u);
 
@@ -383,7 +384,7 @@ TEST_F(Api, ALocationIsSwitchedOnAndOffByAPerson) {
     EXPECT_TRUE(json(on).at("client_id").is_null());
     EXPECT_EQ(read("/api/locations?enabled=true").at("total").as_int64(), 1);
     EXPECT_EQ(read("/api/audit-log?action=location.enable").at("items").at(0).at("actor").as_string(), "staff@xvisionmediaus.com");
-    jobs::Sync sync(db(), clock_, gbp_, queue(), {});
+    jobs::Sync sync(db(), clock_, gbp_, places_, queue(), {});
     await(sync.poll_reviews());
     EXPECT_EQ(count(std::format("jobs WHERE kind = 'reviews.full_sync' AND (payload->>'location_id')::bigint = {}", spa)), 1);
     ASSERT_EQ(patch_current(target, R"({"enabled": true})").status, 200u);
@@ -491,7 +492,7 @@ TEST_F(Api, ALocationsEtagIsNotChangedByADiscoveryOrAReviewPoll) {
 
     // Its full sync, then a poll a while later: each writes the row, and neither changes the tag.
     gbp_.put(make_review(gbp_.account_id, "9001", "p1", "FIVE", "Lovely", "2026-11-09T10:00:00Z", "2026-11-09T10:00:00Z"));
-    jobs::Sync sync(db(), clock_, gbp_, queue(), {});
+    jobs::Sync sync(db(), clock_, gbp_, places_, queue(), {});
     await(sync.full_sync(spa));
     const auto synced = read(target);
     EXPECT_FALSE(synced.at("reviews_full_synced_at").is_null()) << "the full sync wrote the row";

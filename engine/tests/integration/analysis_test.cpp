@@ -162,7 +162,7 @@ TEST_F(Analysis, ADiscoveredLocationDoesNothingUntilAPersonSwitchesItOnAndNeedsN
         << "its reply settings are the defaults from the start";
 
     const auto full_syncs = std::format("jobs WHERE kind = 'reviews.full_sync' AND (payload->>'location_id')::bigint = {}", soho);
-    jobs::Sync sync(db(), clock_, gbp_, queue(), {});
+    jobs::Sync sync(db(), clock_, gbp_, places_, queue(), {});
     await(sync.poll_reviews());
     await(sync.full_sync(soho));
     EXPECT_EQ(count(full_syncs), 0);
@@ -642,7 +642,7 @@ TEST_F(Analysis, AFailedJobGetsAnotherChanceInTheNextHourOnly) {
 TEST_F(Analysis, ANewReviewIsAnalyzedAndDraftedByTheJobsAlone) {
     // The whole path as main wires it: a poll stores the review, which
     // queues the sweep, which queues the review's job.
-    jobs::Sync sync(db(), clock_, gbp_, queue(), {});
+    jobs::Sync sync(db(), clock_, gbp_, places_, queue(), {});
     jobs::Registry registry;
     jobs::install(registry, sync, nullptr);
     jobs::install(registry, *pipeline_);

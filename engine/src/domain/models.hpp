@@ -121,8 +121,8 @@ struct Location {
     std::optional<std::string> local_posts_synced_at;
     std::optional<std::string> local_posts_sync_error;
     std::optional<std::string> local_posts_sync_error_at;
-    // The one time zone of the location, for every purpose (D-071, D-098); nothing until a person entered it.
-    std::optional<std::string> time_zone;
+    // The one time zone of the location, for every purpose, read from Google Places at discovery and never changed (D-109).
+    std::string time_zone;
 };
 BOOST_DESCRIBE_STRUCT(Location, (),
                       (id, gbp_location_id, gbp_account_id, client_id, client_name, enabled, industry_key, analyze_from,

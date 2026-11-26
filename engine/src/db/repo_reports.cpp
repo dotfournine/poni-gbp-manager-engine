@@ -100,7 +100,7 @@ Result<model::Report> create_report(pqxx::transaction_base& tx, audit::Writer& a
     if (location.empty()) return not_found("location");
     if (!location[0][0].as<bool>()) return invalid("The location is switched off, so it gets no report.");
     auto time_zone = report.time_zone;
-    if (time_zone.empty()) time_zone = location[0][1].as<OptString>().value_or("UTC");
+    if (time_zone.empty()) time_zone = location[0][1].as<std::string>();
     if (!domain::known_time_zone(time_zone)) return invalid(std::format("Unknown time zone '{}'.", time_zone));
     if (report.period.start > report.period.end) return invalid("The period ends before it starts.");
     if ((report.period.end - report.period.start).count() >= kMaxPeriodDays) {

@@ -606,13 +606,14 @@ TEST_F(RepliesApi, ALocationShowsItsTimeZoneInTheListAndWhenRead) {
         }
         return "not listed";
     };
-    EXPECT_TRUE(read("/api/locations/" + std::to_string(spa_)).at("time_zone").is_null()) << "Google gives none";
-    EXPECT_TRUE(zone_in_list(spa_).is_null());
-
-    // No route sets it; it is one value, shown in both places.
-    exec(std::format("UPDATE locations SET time_zone = 'America/New_York' WHERE id = {}", spa_));
+    // Discovery read it from Google Places (D-109).
     EXPECT_EQ(read("/api/locations/" + std::to_string(spa_)).at("time_zone").as_string(), "America/New_York");
     EXPECT_EQ(zone_in_list(spa_).as_string(), "America/New_York");
+
+    // No route sets it; it is one value, shown in both places.
+    exec(std::format("UPDATE locations SET time_zone = 'Asia/Tokyo' WHERE id = {}", spa_));
+    EXPECT_EQ(read("/api/locations/" + std::to_string(spa_)).at("time_zone").as_string(), "Asia/Tokyo");
+    EXPECT_EQ(zone_in_list(spa_).as_string(), "Asia/Tokyo");
     EXPECT_EQ(patch("/api/locations/" + std::to_string(spa_), R"({"time_zone": "Europe/Paris"})").status, 400u)
         << "the location's own update does not take it";
     EXPECT_EQ(patch("/api/locations/" + std::to_string(spa_) + "/auto-posting", R"({"time_zone": "Europe/Paris"})").status, 404u)
@@ -862,7 +863,10 @@ TEST_F(RepliesApi, ThePolicyCarriesTheDelayAndTheWindow) {
     ASSERT_EQ(saved.status, 200u) << saved.body;
     EXPECT_EQ(json(saved).at("auto_reply_delay_max_minutes").as_int64(), 120);
     EXPECT_EQ(json(saved).at("auto_reply_window_end").as_string(), "21:00");
-    EXPECT_THAT(std::string(auto_reply_of(spa_).at("timing_problem").as_string()), HasSubstr("time zone"));
+    EXPECT_TRUE(auto_reply_of(spa_).at("timing_problem").is_null()) << "the zone discovery read is one this server knows";
+    exec(std::format("UPDATE locations SET time_zone = 'Nowhere/Land' WHERE id = {}", spa_));
+    EXPECT_THAT(std::string(auto_reply_of(spa_).at("timing_problem").as_string()), HasSubstr("not known on this server"));
+    exec(std::format("UPDATE locations SET time_zone = 'America/New_York' WHERE id = {}", spa_));
 
     const auto message = [&](std::string_view rules) { return error_message(save_reply_settings(spa_, rules)); };
     EXPECT_THAT(message(R"({"auto_reply_delay_min_minutes": 200, "auto_reply_delay_max_minutes": 100})"), HasSubstr("minimum is greater"));

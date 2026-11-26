@@ -38,8 +38,7 @@ protected:
         chelsea_ = link("9001", spa_client_);
         uptown_ = link("9003", spa_client_);
         buffet_ = link("9002", buffet_client_);
-        become_test_clients();
-        exec("UPDATE locations SET time_zone = 'America/New_York'");
+        become_test_clients();  // each location has America/New_York, read from Google Places at discovery
 
         start();
         notifier_.emplace(db(), clock_, jobs::NotifierOptions{.public_url = "http://localhost:5173"});

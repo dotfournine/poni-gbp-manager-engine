@@ -4,6 +4,8 @@
 #include "core/log.hpp"
 #include "db/repo_auth.hpp"
 #include "db/repo_catalog.hpp"
+#include "domain/posting_schedule.hpp"
+#include "http/client.hpp"
 #include "jobs/analysis.hpp"
 #include "jobs/scheduler.hpp"
 
@@ -61,6 +63,11 @@ asio::awaitable<void> Sync::discover_locations() {
         }
     }
 
+    // A new location's zone, read before anything is applied (D-109): a
+    // failure applies nothing, as a partial listing does.
+    std::vector<repo::SeenLocation> deferred;
+    if (!error) error = co_await resolve_time_zones(seen, deferred);
+
     const auto now = clock_.now();
     if (error) {
         co_await db_.tx([error = *error, now](pqxx::work& tx) {
@@ -70,18 +77,95 @@ asio::awaitable<void> Sync::discover_locations() {
         co_return;
     }
 
+    // What the status page shows while a location waits for Google Maps; everything else is applied.
+    const auto waiting_count = deferred.size();
+    std::string waiting;
+    for (const auto& location : deferred) {
+        waiting += std::format("{}{}", waiting.empty() ? "" : ", ", location.location.title.value_or(location.location.name));
+    }
+    if (!waiting.empty()) waiting += " is not on Google Maps yet, so its time zone is not known; it is added once it is";
+
     const auto account_count = accounts->size();
-    const auto outcome = co_await db_.tx([seen = std::move(seen), now, account_count](pqxx::work& tx) {
-        const auto result = repo::apply_discovery(tx, seen, now);
-        repo::mark_integration_ok(tx, repo::kDiscoveryStatus, now,
-                                  {{"accounts", account_count}, {"locations", result.seen}});
-        return result;
-    });
+    const auto outcome =
+        co_await db_.tx([seen = std::move(seen), deferred = std::move(deferred), waiting, now, account_count](pqxx::work& tx) {
+            const auto result = repo::apply_discovery(tx, seen, deferred, now);
+            if (waiting.empty()) {
+                repo::mark_integration_ok(tx, repo::kDiscoveryStatus, now, {{"accounts", account_count}, {"locations", result.seen}});
+            } else {
+                repo::mark_integration_error(tx, repo::kDiscoveryStatus, waiting, now);
+            }
+            return result;
+        });
     log::info("locations discovered", {{"accounts", account_count},
                                        {"locations", outcome.seen},
                                        {"new", outcome.created},
                                        {"restored", outcome.restored},
-                                       {"lost", outcome.lost}});
+                                       {"lost", outcome.lost},
+                                       {"waiting_for_maps", waiting_count}});
+}
+
+asio::awaitable<std::optional<std::string>> Sync::resolve_time_zones(std::vector<repo::SeenLocation>& seen,
+                                                                     std::vector<repo::SeenLocation>& deferred) {
+    std::vector<std::string> ids;
+    for (const auto& item : seen) {
+        if (const auto id = gbp::strip_prefix(item.location.name, "locations/")) ids.push_back(*id);
+    }
+    const auto known = co_await db_.tx([ids](pqxx::work& tx) { return repo::known_location_ids(tx, ids); });
+
+    // Every new location's place id is checked first, so no call is made for a listing that cannot be applied.
+    std::vector<repo::SeenLocation> listed;
+    std::vector<std::size_t> wanted;  // the new ones in `listed`
+    for (auto& item : seen) {
+        const auto id = gbp::strip_prefix(item.location.name, "locations/");
+        if (!id || known.contains(*id)) {
+            listed.push_back(std::move(item));
+            continue;
+        }
+        const auto title = item.location.title.value_or(*id);
+        const auto place_id = item.location.metadata.value_or(gbp::LocationMetadata{}).placeId;
+        if (!place_id || place_id->empty()) {
+            // Not on Google Maps yet (D-109 point 6): left out, not counted as seen.
+            deferred.push_back(std::move(item));
+            continue;
+        }
+        if (!http::is_place_id(*place_id)) {
+            log::warn("a new location's place id is not one the engine sends", {{"gbp_location_id", *id}});
+            co_return std::format("Google gave \"{}\" a place id the engine does not send to Google Places, so its time zone "
+                                  "is not known; no location was updated.",
+                                  title);
+        }
+        wanted.push_back(listed.size());
+        listed.push_back(std::move(item));
+    }
+    seen = std::move(listed);
+
+    // One at a time, and none after the first failure.
+    for (const auto index : wanted) {
+        auto& item = seen[index];
+        const auto id = gbp::strip_prefix(item.location.name, "locations/").value_or("");
+        const auto title = item.location.title.value_or(id);
+        const auto place_id = item.location.metadata.value_or(gbp::LocationMetadata{}).placeId.value_or("");
+        if (const auto found = zones_.find(place_id); found != zones_.end()) {
+            item.time_zone = found->second;
+            continue;
+        }
+        const auto zone = co_await google::guarded(places_.time_zone(place_id));
+        if (!zone) {
+            // The connector's message names Google's status and its status word, never the key, the address or Google's text.
+            log::warn("a new location's time zone could not be read",
+                      {{"gbp_location_id", id}, {"http_status", zone.error().http_status}, {"error", zone.error().message}});
+            co_return std::format("The time zone of \"{}\" could not be read from Google Places ({}); no location was updated.", title,
+                                  zone.error().message);
+        }
+        if (!domain::known_time_zone(*zone)) {
+            log::warn("Google Places gave a time zone this server does not know", {{"gbp_location_id", id}});
+            co_return std::format("Google Places gave \"{}\" the time zone '{}', which this server does not know; no location was updated.",
+                                  title, *zone);
+        }
+        zones_.emplace(place_id, *zone);
+        item.time_zone = *zone;
+    }
+    co_return std::nullopt;
 }
 
 asio::awaitable<void> Sync::poll_reviews() {

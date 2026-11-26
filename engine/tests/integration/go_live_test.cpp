@@ -321,7 +321,7 @@ TEST_F(GoLive, WhatIsNotTestedChangesNothing) {
     certify(spa_);
     const auto original = fingerprint(spa_);
     for (const auto& change : std::vector<std::string>{
-             std::format("UPDATE locations SET time_zone = 'America/New_York' WHERE id = {}", spa_),
+             std::format("UPDATE locations SET time_zone = 'Asia/Tokyo' WHERE id = {}", spa_),
           std::format("UPDATE reply_settings SET auto_reply_daily_cap = 7, auto_reply_pause_after_failures = 5 "
                       "WHERE location_id = {}",
                       spa_),

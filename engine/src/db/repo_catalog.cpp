@@ -308,13 +308,43 @@ void request_discovery(pqxx::transaction_base& tx, audit::Writer& audit) {
     audit.record({.action = "location.discovery_requested", .object_type = "location"});
 }
 
-DiscoveryOutcome apply_discovery(pqxx::transaction_base& tx, const std::vector<SeenLocation>& seen, core::TimePoint now) {
+std::set<std::string> known_location_ids(pqxx::transaction_base& tx, const std::vector<std::string>& ids) {
+    std::set<std::string> known;
+    for (const auto& row : tx.exec("SELECT gbp_location_id FROM locations "
+                                   "WHERE gbp_location_id IN (SELECT jsonb_array_elements_text($1::jsonb))",
+                                   pqxx::params{db::json_list(ids)})) {
+        known.insert(row[0].as<std::string>());
+    }
+    return known;
+}
+
+DiscoveryOutcome apply_discovery(pqxx::transaction_base& tx, const std::vector<SeenLocation>& seen,
+                                 const std::vector<SeenLocation>& deferred, core::TimePoint now) {
     audit::Writer log{tx, audit::Actor::system("location-discovery"), now};
     const auto now_text = to_timestamptz(now);
     DiscoveryOutcome outcome;
     std::vector<std::string> seen_ids;
 
-    for (const auto& [account_id, location] : seen) {
+    // Once per location, not once per run: a location may wait for Maps for days.
+    for (const auto& [account_id, location, zone] : deferred) {
+        const auto location_id = gbp::strip_prefix(location.name, "locations/");
+        if (!location_id) continue;
+        const bool recorded = tx.query_value<bool>(
+            "SELECT EXISTS (SELECT 1 FROM audit_log WHERE action = 'location.discovery_deferred' AND object_type = 'google_location' "
+            "AND object_id = $1)",
+            pqxx::params{*location_id});
+        if (recorded) continue;
+        // It is no row yet, so the entry names no location (audit_log_location_check leaves the type out).
+        log.record({.action = "location.discovery_deferred",
+                    .object_type = "google_location",
+                    .object_id = *location_id,
+                    .after = {{"gbp_location_id", *location_id},
+                              {"gbp_account_id", account_id},
+                              {"title", location.title.value_or(*location_id)},
+                              {"reason", "not on Google Maps yet: no place id"}}});
+    }
+
+    for (const auto& [account_id, location, time_zone] : seen) {
         const auto location_id = gbp::strip_prefix(location.name, "locations/");
         if (!location_id) continue;
         seen_ids.push_back(*location_id);
@@ -350,11 +380,12 @@ DiscoveryOutcome apply_discovery(pqxx::transaction_base& tx, const std::vector<S
                 R"sql(
                 INSERT INTO locations (gbp_location_id, gbp_account_id, title, store_code, primary_category, address,
                                        locality, administrative_area, postal_code, region_code, phone, website_uri,
-                                       place_id, maps_uri, raw, first_seen_at, last_seen_at, updated_at)
+                                       place_id, maps_uri, raw, first_seen_at, last_seen_at, updated_at, time_zone)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::jsonb,
-                        $16::timestamptz, $16::timestamptz, $16::timestamptz)
+                        $16::timestamptz, $16::timestamptz, $16::timestamptz, $17)
                 RETURNING id)sql",
-                fields);
+                // Only the insert writes the zone: a known location keeps the one it was discovered with (D-109 point 7).
+                pqxx::params{fields, time_zone});
             // Every location has its content and reply settings from the start, enabled or not (D-102, D-107).
             write_default_settings(tx, id, now);
             log.record("location.discovered", "location", id,
