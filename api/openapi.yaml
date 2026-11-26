@@ -779,7 +779,7 @@ paths:
       description: |
         Switches the location on or off (`enabled`), sets its industry, the
         day its analysis starts from, groups it under a
-        client or clears that, changes how often its reviews are polled, or
+        client or clears that, or
         flips its posting switch. Everything else about a location comes
         from Google and can't be changed here.
 
