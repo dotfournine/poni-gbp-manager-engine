@@ -1380,6 +1380,7 @@ std::vector<std::string> other_place_addresses() {
         "https://places.googleapis.com/v1/places/..",
         "https://places.googleapis.com/v1/places/a%2Fb",
         "https://places.googleapis.com/v1/places/ChIJ%2Dx",
+        "https://places.googleapis.com/v1/places/" + std::string(1025, 'a'),
         "https://places.googleapis.com:443/v1/places/ChIJ-made_up-0123",
         "https://user@places.googleapis.com/v1/places/ChIJ-made_up-0123",
         "http://places.googleapis.com/v1/places/ChIJ-made_up-0123",
@@ -1394,6 +1395,15 @@ TEST(OutboundPlaces, TheOneRequestIsAGetOfAPlacesTimeZone) {
     EXPECT_FALSE(http::why_refused(place_request(http::ClientMethod::get, kPlaceUrl)));
     EXPECT_TRUE(http::is_place_time_zone_request(place_request(http::ClientMethod::get, kPlaceUrl)));
     EXPECT_TRUE(http::is_places_host(boost::urls::url(kPlaceUrl)));
+    // A place id may be longer than GBP's ids (Google documents no maximum); 1,024 characters is the cap.
+    for (const std::size_t length : {200u, 1024u}) {
+        const auto address = "https://places.googleapis.com/v1/places/" + std::string(length, 'a');
+        EXPECT_FALSE(http::why_refused(place_request(http::ClientMethod::get, address))) << length;
+    }
+    EXPECT_TRUE(http::is_place_id(std::string(1024, 'a')));
+    EXPECT_FALSE(http::is_place_id(std::string(1025, 'a')));
+    EXPECT_FALSE(http::is_place_id(""));
+    EXPECT_FALSE(http::is_plain_id(std::string(200, 'a'))) << "GBP's own ids keep their cap";
     // The header's name in any case, as HTTP takes it.
     auto lower = request_to(http::ClientMethod::get, kPlaceUrl);
     lower.headers.emplace_back("x-goog-fieldmask", "timeZone");

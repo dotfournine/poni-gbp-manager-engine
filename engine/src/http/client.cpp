@@ -157,6 +157,12 @@ bool is_plain_id(std::string_view id) {
            std::ranges::all_of(id, [](unsigned char c) { return is_letter_or_digit(c) || c == '-' || c == '_'; });
 }
 
+// Google documents no maximum length for a place id; the cap only keeps an address bounded.
+bool is_place_id(std::string_view id) {
+    return !id.empty() && id.size() <= 1024 &&
+           std::ranges::all_of(id, [](unsigned char c) { return is_letter_or_digit(c) || c == '-' || c == '_'; });
+}
+
 namespace {
 
 // Whether `url` is https://<host>/<shape> and nothing else. An empty entry
@@ -165,9 +171,10 @@ namespace {
 // there is no port, user or fragment, nothing is percent-encoded, and what
 // was checked is what is sent. `query`: the query the address must end in,
 // as the caller built it from parts it has checked; without one the address
-// has no query at all.
+// has no query at all. `is_id`: what an id segment may be.
 template <std::size_t N>
-bool has_shape(const boost::urls::url& url, std::string_view host, const std::array<std::string_view, N>& shape, std::string_view query = {}) {
+bool has_shape(const boost::urls::url& url, std::string_view host, const std::array<std::string_view, N>& shape, std::string_view query = {},
+               bool (*is_id)(std::string_view) = is_plain_id) {
     if (url.scheme_id() != boost::urls::scheme::https || url.host() != host) return false;
     const auto segments = url.segments();
     if (segments.size() != shape.size()) return false;
@@ -175,7 +182,7 @@ bool has_shape(const boost::urls::url& url, std::string_view host, const std::ar
     std::size_t i = 0;
     for (const auto& segment : segments) {
         const auto expected = shape[i++];
-        if (expected.empty() ? !is_plain_id(segment) : segment != expected) return false;
+        if (expected.empty() ? !is_id(segment) : segment != expected) return false;
         built.segments().push_back(segment);
     }
     std::string written(built.buffer());
@@ -351,7 +358,7 @@ namespace {
 // nor a field mask travels in the address (both are headers).
 bool is_place_url(const boost::urls::url& url) {
     static constexpr std::array<std::string_view, 3> shape{"v1", "places", ""};
-    return has_shape(url, kPlacesHost, shape);
+    return has_shape(url, kPlacesHost, shape, {}, is_place_id);
 }
 
 }  // namespace

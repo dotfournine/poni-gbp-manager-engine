@@ -9,6 +9,7 @@
 
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 using namespace poni;
 using google::ApiError;
@@ -35,7 +36,7 @@ protected:
         EXPECT_THAT(error.message, Not(HasSubstr(std::string(kPlaceId))));
     }
 
-    google::HttpPlaceTimeZones places_{http_, limiter_, std::string(kKey)};
+    google::HttpPlaceTimeZones places_{http_, limiter_, std::string(kKey), false};
 };
 
 TEST_F(Places, TheZoneComesFromOneGetWithTheKeyAndTheMaskInHeaders) {
@@ -98,8 +99,9 @@ TEST_F(Places, AnAnswerWithoutAZoneIsAnInvalidResponse) {
     }
 }
 
-TEST_F(Places, APlaceIdThatIsNotPlainIsAnsweredWithoutARequest) {
-    for (const auto* id : {"a/b", "..", "x%2F", "", "a b", "a?b"}) {
+TEST_F(Places, APlaceIdTheRuleWouldRefuseIsAnsweredWithoutARequest) {
+    const std::vector<std::string> ids{"a/b", "..", "x%2F", "", "a b", "a?b", std::string(1025, 'a')};
+    for (const auto& id : ids) {
         const auto zone = ask(places_, id);
         ASSERT_FALSE(zone) << id;
         EXPECT_EQ(zone.error().kind, ApiError::Kind::invalid_response) << id;
@@ -109,8 +111,18 @@ TEST_F(Places, APlaceIdThatIsNotPlainIsAnsweredWithoutARequest) {
     EXPECT_TRUE(http_.refused.empty()) << "nothing reached the outbound rule";
 }
 
+TEST_F(Places, APlaceIdLongerThanGbpsIdsIsSent) {
+    // Google documents no maximum length for a place id; GBP's ids stop at 128.
+    const std::string id = "ChIJ" + std::string(196, 'x');
+    http_.reply(200, R"({"timeZone": {"id": "America/Chicago"}})");
+    const auto zone = ask(places_, id);
+    ASSERT_TRUE(zone) << zone.error().message;
+    ASSERT_EQ(http_.requests.size(), 1u);
+    EXPECT_EQ(http_.requests[0].url.buffer(), "https://places.googleapis.com/v1/places/" + id);
+}
+
 TEST_F(Places, WithoutAKeyNothingIsSentUnlessTheMockIsOn) {
-    google::HttpPlaceTimeZones without_key(http_, limiter_, "");
+    google::HttpPlaceTimeZones without_key(http_, limiter_, "", false);
     const auto zone = ask(without_key);
     ASSERT_FALSE(zone);
     EXPECT_EQ(zone.error().kind, ApiError::Kind::not_configured);
@@ -134,7 +146,7 @@ TEST_F(Places, WithoutAKeyNothingIsSentUnlessTheMockIsOn) {
 TEST_F(Places, TheLimiterSlotIsTakenBeforeTheRequest) {
     // A limiter that does not know the Places API refuses the slot: so the connector asks for that one, first.
     core::RateLimiter unconfigured{io_.get_executor(), clock_};
-    google::HttpPlaceTimeZones places(http_, unconfigured, std::string(kKey));
+    google::HttpPlaceTimeZones places(http_, unconfigured, std::string(kKey), false);
     EXPECT_THROW(ask(places), std::logic_error);
     EXPECT_TRUE(http_.requests.empty());
 }

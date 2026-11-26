@@ -36,7 +36,7 @@ public:
     // `api_key`: PONI_GOOGLE_PLACES_API_KEY. `google_mock`: whether
     // PONI_GOOGLE_MOCK_URL is set; the mock takes any key, so an empty one is
     // sent as a fixed stand-in there, and nothing is sent without one otherwise.
-    HttpPlaceTimeZones(http::Client& http, core::RateLimiter& limiter, std::string api_key, bool google_mock = false);
+    HttpPlaceTimeZones(http::Client& http, core::RateLimiter& limiter, std::string api_key, bool google_mock);
 
     boost::asio::awaitable<Result<std::string>> time_zone(std::string place_id) override;
 

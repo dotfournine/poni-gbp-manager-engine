@@ -143,6 +143,11 @@ bool is_places_host(const boost::urls::url& url);
 // them. The ids the four write addresses take.
 bool is_plain_id(std::string_view id);
 
+// A place id of Google Places: 1 to 1,024 letters, digits, '-' and '_'.
+// The characters of is_plain_id, without its cap of 128: Google documents
+// no maximum length for a place id.
+bool is_place_id(std::string_view id);
+
 // True when the address names one of Apple's two push hosts in any case,
 // with a trailing dot, a port or another scheme.
 bool is_apns_host(const boost::urls::url& url);
@@ -211,7 +216,7 @@ struct ClientResponse {
 
 // True for the only request the client sends Google Places, a place's time
 // zone (D-109): a GET of https://places.googleapis.com/v1/places/{id}, the id
-// as is_plain_id says, no query, and the header X-Goog-FieldMask exactly once
+// as is_place_id says, no query, and the header X-Goog-FieldMask exactly once
 // and exactly "timeZone". The key travels in X-Goog-Api-Key, never in the address.
 bool is_place_time_zone_request(const ClientRequest& request);
 

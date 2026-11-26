@@ -66,7 +66,7 @@ HttpPlaceTimeZones::HttpPlaceTimeZones(http::Client& http, core::RateLimiter& li
 
 asio::awaitable<Result<std::string>> HttpPlaceTimeZones::time_zone(std::string place_id) {
     // The outbound rule would refuse it by throwing, and the caller records only what is returned.
-    if (!http::is_plain_id(place_id)) {
+    if (!http::is_place_id(place_id)) {
         co_return std::unexpected(ApiError{ApiError::Kind::invalid_response, 0, "Google gave this location a place id the engine does not send on."});
     }
     if (api_key_.empty()) co_return std::unexpected(ApiError{ApiError::Kind::not_configured, 0, "No Google Places key is configured."});
