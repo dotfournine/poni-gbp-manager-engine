@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <chrono>
 #include <format>
+#include <utility>
 
 namespace poni::repo {
 
@@ -87,9 +88,12 @@ Result<domain::ReportSchedule> checked(ScheduleInput& input, const std::string& 
     if (!minute) return invalid("\"time\" must be a time of day, HH:MM.");
     if (input.frequency != domain::kWeekly) input.weekday.reset();
     if (input.frequency != domain::kMonthly) input.month_day.reset();
+    // A day that fits no int becomes 0, which domain::schedule_problem refuses in its own words: every range and its
+    // message stay there, and no value is narrowed into one that passes.
+    const auto day = [](std::optional<std::int64_t> value) { return value && std::in_range<int>(*value) ? static_cast<int>(*value) : 0; };
     domain::ReportSchedule out{.frequency = input.frequency,
-                               .weekday = static_cast<int>(input.weekday.value_or(0)),
-                               .month_day = static_cast<int>(input.month_day.value_or(0)),
+                               .weekday = day(input.weekday),
+                               .month_day = day(input.month_day),
                                .minute_of_day = *minute,
                                .time_zone = zone};
     if (auto problem = domain::schedule_problem(out)) return invalid(std::move(*problem) + ".");
@@ -278,7 +282,7 @@ std::optional<ReportMail> store_built_report(pqxx::transaction_base& tx, std::in
     // To its own schedule's recipients, as that schedule holds them now, and only while it is still on and still
     // sends by itself: a person who switched either off while the report built is obeyed (D-111).
     auto mail = prepare_report_send(tx, report_id, std::nullopt, link_base, SendFor::schedule);
-    if (!mail) return std::nullopt;  // pending: a person can send it, and the 409 they would get says why
+    if (!mail) return std::nullopt;  // pending: a person can send it to the location's schedules' recipients; nothing records why the schedule did not
     tx.exec("UPDATE reports SET auto_send_status = 'done' WHERE id = $1", pqxx::params{report_id}).no_rows();
     return std::move(*mail);
 }

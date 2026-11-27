@@ -516,7 +516,7 @@ try {
   expectStatus("PATCH /api/knowledge", await call("PATCH", "/api/knowledge", { body: {} }), 405, "method_not_allowed");
 
   // A location's content, reply and report settings (D-107, D-111): three complete bundles, each sent whole with If-Match (D-108).
-  // Here each is read, saved back as it is, saved with a change, and put back. Every location has both from its
+  // Here each is read, saved back as it is, saved with a change, and put back. Every location has all three from its
   // discovery (D-102), and only the seeded location's are saved: between the change and the putting back, a real
   // location's replies would be drafted under the check's words, and a go-live test running there would be
   // cancelled and started again (D-077).
@@ -768,7 +768,7 @@ try {
       }
       check(`GET /api/reports?location_id=${locationId}`, "/api/reports", "GET", await call("GET", `/api/reports?location_id=${locationId}`));
       // Only while sending is off, as in the bare engine: then both are a declared 409 and no email leaves (D-104).
-      // With sending on, a rule of this location would get the report: the check sends no email.
+      // With sending on, the recipients of this location's schedules would get the report: the check sends no email.
       if (switches.json?.email_sending_enabled === false) {
         for (const [name, body] of [[`POST ${path}/send`, undefined], [`POST ${path}/send (some recipients)`, { recipients: ["contract-check@example.com"] }]]) {
           const sent = await call("POST", `${path}/send`, { body });
@@ -805,6 +805,9 @@ try {
     const noWeekday = await call("POST", schedulesPath, { body: { ...monthly, frequency: "weekly", month_day: null } });
     check(`POST ${schedulesPath} (no weekday)`, "/api/locations/{id}/report-settings/schedules", "POST", noWeekday);
     expectStatus(`POST ${schedulesPath} (no weekday)`, noWeekday, 400, "invalid_request");
+    const outOfRange = await call("POST", schedulesPath, { body: { ...monthly, frequency: "weekly", weekday: 4294967297, month_day: null } });
+    check(`POST ${schedulesPath} (weekday out of range)`, "/api/locations/{id}/report-settings/schedules", "POST", outOfRange);
+    expectStatus(`POST ${schedulesPath} (weekday out of range)`, outOfRange, 400, "invalid_request");
     const nobody = await call("POST", schedulesPath, { body: { ...monthly, recipients: [] } });
     check(`POST ${schedulesPath} (on, without recipients)`, "/api/locations/{id}/report-settings/schedules", "POST", nobody);
     expectStatus(`POST ${schedulesPath} (on, without recipients)`, nobody, 400, "invalid_request");

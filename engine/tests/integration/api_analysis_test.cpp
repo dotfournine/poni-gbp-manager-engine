@@ -166,9 +166,12 @@ TEST_F(AnalysisApi, AnIndustrysCorpusCanBeRead) {
 // The tables are static: an update is a new set of files, seeded by poni-tools. No route changes them.
 TEST_F(AnalysisApi, NoRouteWritesTheKnowledgeBase) {
     const auto before = value<std::string>(
-        "SELECT md5(coalesce((SELECT string_agg(i::text, '') FROM kb_industries i), '') || (SELECT c::text FROM kb_common c) || "
+        "SELECT md5(coalesce((SELECT string_agg(i::text, '') FROM kb_industries i), '') || "
+        "coalesce((SELECT string_agg(k::text, '' ORDER BY k.industry_key, k.case_id) FROM kb_corpus_cases k), '') || "
+        "(SELECT c::text FROM kb_common c) || "
         "coalesce((SELECT string_agg(t::text, '') FROM kb_voice_templates t), '') || (SELECT d::text FROM kb_defaults d) || "
         "(SELECT d::text FROM kb_content_defaults d) || (SELECT d::text FROM kb_reply_defaults d) || "
+        "(SELECT d::text FROM kb_report_defaults d) || "
         "coalesce((SELECT string_agg(p::text, '') FROM kb_model_prices p), '') || (SELECT m::text FROM kb_meta m))");
     for (const auto* target : {"/api/knowledge", "/api/knowledge/industries/food_beverage", "/api/knowledge/industries/food_beverage/corpus",
                                "/api/industry-profiles/1", "/api/voice-templates/1"}) {
@@ -190,9 +193,12 @@ TEST_F(AnalysisApi, NoRouteWritesTheKnowledgeBase) {
     ASSERT_EQ(save_reply_settings(spa_, R"({"signature": "The team"})").status, 200u);
     another_location("9003", "LU DREAM SPA - Midtown");
     EXPECT_EQ(value<std::string>(
-                  "SELECT md5(coalesce((SELECT string_agg(i::text, '') FROM kb_industries i), '') || (SELECT c::text FROM kb_common c) || "
+                  "SELECT md5(coalesce((SELECT string_agg(i::text, '') FROM kb_industries i), '') || "
+                  "coalesce((SELECT string_agg(k::text, '' ORDER BY k.industry_key, k.case_id) FROM kb_corpus_cases k), '') || "
+                  "(SELECT c::text FROM kb_common c) || "
                   "coalesce((SELECT string_agg(t::text, '') FROM kb_voice_templates t), '') || (SELECT d::text FROM kb_defaults d) || "
                   "(SELECT d::text FROM kb_content_defaults d) || (SELECT d::text FROM kb_reply_defaults d) || "
+                  "(SELECT d::text FROM kb_report_defaults d) || "
                   "coalesce((SELECT string_agg(p::text, '') FROM kb_model_prices p), '') || (SELECT m::text FROM kb_meta m))"),
               before);
 }

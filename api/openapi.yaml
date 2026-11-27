@@ -4018,10 +4018,7 @@ components:
         cannot be sent after the bucket was taken away, because its page
         has no address, and a report with a page cannot be discarded,
         because the page cannot be moved. `no_recipients`: no report
-        schedule of the location names an address (D-111), or, for a
-        schedule's own send, the schedule that made the report names none,
-        is gone, or was switched off or had its `auto_send` switched off
-        while the report was built.
+        schedule of the location names an address (D-111).
       content:
         application/json:
           schema:
@@ -7771,7 +7768,9 @@ components:
             The sections a report has, each once, at least one. `summary`:
             the model's summary of the figures. `at_a_glance`: the headline
             tiles (new reviews, the period's and the overall rating, reviews
-            answered, the time to answer, profile views). `reviews`: the
+            answered, the time to answer, and profile views when
+            `visibility` is included too and Google's numbers could be
+            read). `reviews`: the
             reviews by star rating, how reviewers felt, the trend and the
             serious issues reviewers raised. `topics`: what reviewers praised
             and complained about, by topic and by item. `employee_recognition`:
@@ -7884,8 +7883,10 @@ components:
             or whose `auto_send` was switched off, while its report builds
             sends nothing, and neither does a schedule deleted meanwhile.
             Whenever a report is not sent by itself, it stays `pending` for a
-            person to send. No reason is stored: a person's send says why it
-            is refused.
+            person to send. No reason is stored. A person's send may succeed
+            where the schedule's own did not, because it goes to the
+            recipients of all the location's schedules (`Report.recipients`);
+            when a person's send is refused, its answer says why.
         recipients:
           type: array
           maxItems: 20
